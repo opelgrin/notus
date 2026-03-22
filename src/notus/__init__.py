@@ -1,4 +1,4 @@
-"""GCM — A spectral-transform General Circulation Model in JAX.
+"""Notus — A spectral-transform General Circulation Model in JAX.
 
 This package provides a from-scratch implementation of a spectral-transform
 atmospheric model, suitable for idealized simulations (e.g. Held-Suarez)
@@ -13,16 +13,16 @@ Core components
 - State: :class:`ShallowWaterState`, :class:`PrimitiveEquationState`
 """
 
-from gcm.constants import EARTH, PlanetaryConstants
-from gcm.grid import GaussianGrid
-from gcm.operators import (
+from notus.constants import EARTH, PlanetaryConstants
+from notus.grid import GaussianGrid
+from notus.operators import (
     hyperdiffusion,
     inverse_laplacian,
     laplacian,
     zonal_derivative,
 )
-from gcm.state import PrimitiveEquationState, ShallowWaterState
-from gcm.transforms import SpectralTransform
+from notus.state import PrimitiveEquationState, ShallowWaterState
+from notus.transforms import SpectralTransform
 
 
 __all__ = [

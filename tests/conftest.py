@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from gcm import EARTH, GaussianGrid, SpectralTransform
+from notus import EARTH, GaussianGrid, SpectralTransform
 
 
 @pytest.fixture

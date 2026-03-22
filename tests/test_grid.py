@@ -6,7 +6,7 @@ import math
 
 import jax.numpy as jnp
 
-from gcm import GaussianGrid
+from notus import GaussianGrid
 
 
 class TestGaussianGridConstruction:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from gcm import SpectralTransform
+from notus import SpectralTransform
 
 
 # Enable float64 for precision in transforms.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from gcm import SpectralTransform, inverse_laplacian, laplacian
+from notus import SpectralTransform, inverse_laplacian, laplacian
 
 
 jax.config.update("jax_enable_x64", True)

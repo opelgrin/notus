@@ -1,7 +1,7 @@
 [project]
-name = "GCM-Python"
+name = "notus"
 dynamic = ["version"]
-description = "A textbook, physics-based GCM written in Python."
+description = "A spectral-transform General Circulation Model in JAX."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -27,7 +27,7 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gcm"]
+packages = ["src/notus"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
@@ -42,7 +42,7 @@ exclude = [
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-src = ["src", "gcm", "scripts", "tests"]
+src = ["src", "notus", "scripts", "tests"]
 # exclude = ["notebooks/**"]
 fix = true
 unsafe-fixes = false
@@ -115,7 +115,7 @@ allowed-confusables = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["gcm"]
+known-first-party = ["notus"]
 combine-as-imports = true
 lines-after-imports = 2
 
@@ -124,7 +124,7 @@ convention = "numpy"
 
 [tool.mypy]
 python_version = "3.13"
-packages = ["gcm"]
+packages = ["notus"]
 mypy_path = "src"
 exclude = [
     "tests/",

@@ -28,8 +28,8 @@ import functools
 import jax
 import jax.numpy as jnp
 
-from gcm.grid import GaussianGrid
-from gcm.spherical_harmonics import compute_legendre_polynomials
+from notus.grid import GaussianGrid
+from notus.spherical_harmonics import compute_legendre_polynomials
 
 
 class SpectralTransform:
