@@ -19,6 +19,10 @@ from notus.operators import (
     hyperdiffusion,
     inverse_laplacian,
     laplacian,
+    meridional_derivative,
+    spectral_curl,
+    spectral_divergence,
+    uv_from_vordiv,
     zonal_derivative,
 )
 from notus.state import PrimitiveEquationState, ShallowWaterState
@@ -35,5 +39,9 @@ __all__ = [
     "hyperdiffusion",
     "inverse_laplacian",
     "laplacian",
+    "meridional_derivative",
+    "spectral_curl",
+    "spectral_divergence",
+    "uv_from_vordiv",
     "zonal_derivative",
 ]

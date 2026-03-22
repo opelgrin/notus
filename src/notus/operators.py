@@ -166,6 +166,144 @@ def zonal_derivative(
     return 1j * m_values * coeffs
 
 
+def meridional_derivative(
+    coeffs: jnp.ndarray,
+    truncation: int,
+) -> jnp.ndarray:
+    """Compute cos(φ)·∂f/∂φ in spectral space via Legendre recurrence.
+
+    Uses the identity:
+
+        [cos(φ)·∂f/∂φ]ₙᵐ = (n+1)·ε(n,m)·f̂_{n-1}^m − n·ε(n+1,m)·f̂_{n+1}^m
+
+    where ε(n,m) = √((n²−m²)/(4n²−1)).
+
+    The result includes the cos(φ) factor, which avoids polar singularities.
+
+    Parameters
+    ----------
+    coeffs : jnp.ndarray
+        Spectral coefficients, shape ``(n_spectral,)``.
+    truncation : int
+        Triangular truncation.
+    """
+    idx_lower, idx_upper, c_lower, c_upper = _meridional_coupling(truncation)
+    return c_lower * coeffs[idx_lower] + c_upper * coeffs[idx_upper]
+
+
+def uv_from_vordiv(
+    vorticity: jnp.ndarray,
+    divergence: jnp.ndarray,
+    truncation: int,
+    radius: float,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Reconstruct cosine-weighted winds from spectral vorticity and divergence.
+
+    Computes U = u·cos(φ) and V = v·cos(φ) in spectral space via:
+
+        ψ = ∇⁻²ζ,  χ = ∇⁻²δ
+        U = (1/a)·[−cos(φ)·∂ψ/∂φ + ∂χ/∂λ]
+        V = (1/a)·[ ∂ψ/∂λ + cos(φ)·∂χ/∂φ]
+
+    Parameters
+    ----------
+    vorticity : jnp.ndarray
+        Spectral vorticity ζ, shape ``(n_spectral,)``.
+    divergence : jnp.ndarray
+        Spectral divergence δ, shape ``(n_spectral,)``.
+    truncation : int
+        Triangular truncation.
+    radius : float
+        Planet radius [m].
+
+    Returns
+    -------
+    tuple[jnp.ndarray, jnp.ndarray]
+        (U_spectral, V_spectral), each shape ``(n_spectral,)``.
+    """
+    psi = inverse_laplacian(vorticity, truncation, radius)
+    chi = inverse_laplacian(divergence, truncation, radius)
+
+    dpsi_dlam = zonal_derivative(psi, truncation)
+    dchi_dlam = zonal_derivative(chi, truncation)
+    cosphi_dpsi_dphi = meridional_derivative(psi, truncation)
+    cosphi_dchi_dphi = meridional_derivative(chi, truncation)
+
+    inv_a = 1.0 / radius
+    u_spec = inv_a * (-cosphi_dpsi_dphi + dchi_dlam)
+    v_spec = inv_a * (dpsi_dlam + cosphi_dchi_dphi)
+    return u_spec, v_spec
+
+
+def spectral_divergence(
+    a_hat: jnp.ndarray,
+    b_hat: jnp.ndarray,
+    truncation: int,
+    radius: float,
+) -> jnp.ndarray:
+    """Compute divergence in spectral space from scaled flux components.
+
+    Given spectral coefficients of A = F_λ/cos(φ) and B = F_φ/cos(φ),
+    computes the spectral divergence of the vector field (F_λ, F_φ):
+
+        div(F) = (1/a)·[im·Â + cos(φ)·∂B̂/∂φ]
+
+    This form is used because the nonlinear products in the dynamical core
+    naturally produce the 1/cos(φ)-scaled quantities after dividing by cos²(φ)
+    on the grid.
+
+    Parameters
+    ----------
+    a_hat : jnp.ndarray
+        Spectral coefficients of zonal flux / cos(φ), shape ``(n_spectral,)``.
+    b_hat : jnp.ndarray
+        Spectral coefficients of meridional flux / cos(φ), shape ``(n_spectral,)``.
+    truncation : int
+        Triangular truncation.
+    radius : float
+        Planet radius [m].
+    """
+    inv_a = 1.0 / radius
+    return inv_a * (
+        zonal_derivative(a_hat, truncation) + meridional_derivative(b_hat, truncation)
+    )
+
+
+def spectral_curl(
+    a_hat: jnp.ndarray,
+    b_hat: jnp.ndarray,
+    truncation: int,
+    radius: float,
+) -> jnp.ndarray:
+    """Compute vertical component of curl in spectral space from scaled flux components.
+
+    Given spectral coefficients of A = F_λ/cos(φ) and B = F_φ/cos(φ),
+    computes the vertical component of the curl:
+
+        curl_z(F) = (1/a)·[−im·B̂ + cos(φ)·∂Â/∂φ]
+
+    Parameters
+    ----------
+    a_hat : jnp.ndarray
+        Spectral coefficients of zonal flux / cos(φ), shape ``(n_spectral,)``.
+    b_hat : jnp.ndarray
+        Spectral coefficients of meridional flux / cos(φ), shape ``(n_spectral,)``.
+    truncation : int
+        Triangular truncation.
+    radius : float
+        Planet radius [m].
+    """
+    inv_a = 1.0 / radius
+    return inv_a * (
+        -zonal_derivative(b_hat, truncation) + meridional_derivative(a_hat, truncation)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Private helpers (cached)
+# ---------------------------------------------------------------------------
+
+
 @functools.lru_cache(maxsize=16)
 def _laplacian_eigenvalues(truncation: int, radius: float) -> jnp.ndarray:
     """Pre-compute -n(n+1)/a² for all spectral indices."""
@@ -182,3 +320,80 @@ def _m_index_array(truncation: int) -> jnp.ndarray:
     """Array of zonal wavenumber m for each spectral index."""
     vals = [m for m in range(truncation + 1) for _n in range(m, truncation + 1)]
     return jnp.array(vals, dtype=jnp.float64)
+
+
+@functools.lru_cache(maxsize=16)
+def _n_index_array(truncation: int) -> jnp.ndarray:
+    """Array of total wavenumber n for each spectral index."""
+    vals = [n for m in range(truncation + 1) for n in range(m, truncation + 1)]
+    return jnp.array(vals, dtype=jnp.float64)
+
+
+def _spectral_index(truncation: int, m: int, n: int) -> int:
+    """Linear index into lower-triangular spectral storage."""
+    return m * (truncation + 1) - m * (m - 1) // 2 + (n - m)
+
+
+@functools.lru_cache(maxsize=16)
+def _meridional_coupling(
+    truncation: int,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Pre-compute index arrays and coefficients for the meridional derivative.
+
+    The recurrence:
+        [cos(φ)·∂f/∂φ]ₙᵐ = (n+1)·ε(n,m)·f_{n-1}^m − n·ε(n+1,m)·f_{n+1}^m
+
+    where ε(n,m) = √((n²−m²)/(4n²−1)).
+
+    Returns
+    -------
+    tuple of (idx_lower, idx_upper, coeff_lower, coeff_upper)
+        idx_lower[i]  : flat index of (m, n-1), self-referencing if n == m
+        idx_upper[i]  : flat index of (m, n+1), self-referencing if n == T
+        coeff_lower[i]: (n+1)·ε(n,m), zero if n == m
+        coeff_upper[i]: −n·ε(n+1,m), zero if n == T
+    """
+    t = truncation
+
+    idx_lower = []
+    idx_upper = []
+    c_lower = []
+    c_upper = []
+
+    for m in range(t + 1):
+        for n in range(m, t + 1):
+            i = _spectral_index(t, m, n)
+
+            # Lower coupling: f_{n-1}^m with coefficient (n+1)*eps(n,m)
+            if n > m:
+                eps_n = _epsilon(n, m)
+                idx_lower.append(_spectral_index(t, m, n - 1))
+                c_lower.append((n + 1) * eps_n)
+            else:
+                # n == m: no n-1 neighbor, contribute zero
+                idx_lower.append(i)
+                c_lower.append(0.0)
+
+            # Upper coupling: f_{n+1}^m with coefficient -n*eps(n+1,m)
+            if n < t:
+                eps_np1 = _epsilon(n + 1, m)
+                idx_upper.append(_spectral_index(t, m, n + 1))
+                c_upper.append(-n * eps_np1)
+            else:
+                # n == T: no n+1 neighbor, contribute zero
+                idx_upper.append(i)
+                c_upper.append(0.0)
+
+    return (
+        jnp.array(idx_lower, dtype=jnp.int32),
+        jnp.array(idx_upper, dtype=jnp.int32),
+        jnp.array(c_lower),
+        jnp.array(c_upper),
+    )
+
+
+def _epsilon(n: int, m: int) -> float:
+    """Coupling coefficient ε(n,m) = √((n²−m²)/(4n²−1))."""
+    if n == 0:
+        return 0.0
+    return ((n * n - m * m) / (4.0 * n * n - 1.0)) ** 0.5

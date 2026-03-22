@@ -94,7 +94,7 @@ allowed-confusables = [
     "π", "κ", "ν", "σ", "τ",
     "²", "³", "⁴", "⁻", "ⁱ",  # Superscripts for equations
     "ₙ", "ₘ", "ₛ", "ₖ", "ᵐ",  # Subscripts
-    "→", "·", "∂", "∇", "∫",  # Math operators
+    "→", "·", "∂", "∇", "∫", "−", "√",  # Math operators
     "≤", "≥",
 ]
 
