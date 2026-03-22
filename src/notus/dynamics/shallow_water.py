@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from notus.constants import PlanetaryConstants
 from notus.operators import (
+    hyperdiffusion,
     laplacian,
     spectral_curl,
     spectral_divergence,
@@ -31,11 +32,13 @@ def shallow_water_tendencies(
     state: ShallowWaterState,
     transform: SpectralTransform,
     planet: PlanetaryConstants,
+    diffusion_order: int = 2,
+    diffusion_timescale: float = 2.0 * 3600.0,
 ) -> ShallowWaterState:
     """Compute explicit tendencies for the shallow water equations.
 
     All nonlinear products are evaluated on the grid, then transformed to
-    spectral space.  The returned tendencies are in spectral space.
+    spectral space.  Includes biharmonic hyperdiffusion for stability.
 
     Parameters
     ----------
@@ -45,6 +48,11 @@ def shallow_water_tendencies(
         Pre-computed spectral transform.
     planet : PlanetaryConstants
         Planetary constants (radius, rotation_rate).
+    diffusion_order : int
+        Order of hyperdiffusion (2 = del-4 biharmonic). Set to 0 to disable.
+    diffusion_timescale : float
+        E-folding damping time for the smallest resolved scale [s].
+        Default: 2 hours.
 
     Returns
     -------
@@ -99,18 +107,26 @@ def shallow_water_tendencies(
     ke_spec = transform.grid_to_spectral(kinetic_energy)
 
     # --- Step 5: Assemble spectral tendencies ---
-    # Vorticity tendency: dζ/dt = -curl(ζ_a · v⃗)
-    # spectral_curl gives the curl; the vorticity equation has a minus sign
-    vort_tend = -spectral_curl(flux_a_spec, flux_b_spec, t, a)
+    # The spectral tendency formulas (Hoskins & Simmons 1975):
+    #   dζ/dt = (1/a)·[-im·B̃ + D_μ(Ã)] = spectral_curl(A, B)
+    #   dδ/dt = (1/a)·[im·Ã + D_μ(B̃)] - ∇²(Φ+E) = spectral_div(A,B) - ∇²(Φ+E)
+    #   dΦ/dt = -(1/a)·[im·C + D_μ(D)] = -spectral_div(C, D)
+    vort_tend = spectral_curl(flux_a_spec, flux_b_spec, t, a)
 
-    # Divergence tendency: dδ/dt = -div(ζ_a · v⃗_perp) - ∇²(Φ + E)
-    # The cross-product term is the divergence of the rotated flux
-    div_tend = -spectral_divergence(flux_a_spec, flux_b_spec, t, a) - laplacian(
+    div_tend = spectral_divergence(flux_a_spec, flux_b_spec, t, a) - laplacian(
         state.geopotential + ke_spec, t, a
     )
 
-    # Geopotential tendency: dΦ/dt = -div(Φ · v⃗)
     phi_tend = -spectral_divergence(phi_flux_a_spec, phi_flux_b_spec, t, a)
+
+    # --- Step 6: Hyperdiffusion for numerical stability ---
+    if diffusion_order > 0:
+        vort_tend += hyperdiffusion(
+            state.vorticity, t, a, diffusion_order, diffusion_timescale
+        )
+        div_tend += hyperdiffusion(
+            state.divergence, t, a, diffusion_order, diffusion_timescale
+        )
 
     return ShallowWaterState(
         vorticity=vort_tend,

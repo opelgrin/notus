@@ -241,23 +241,23 @@ def spectral_divergence(
     truncation: int,
     radius: float,
 ) -> jnp.ndarray:
-    """Compute divergence in spectral space from scaled flux components.
+    """Compute spectral divergence from cos²(φ)-scaled flux components.
 
-    Given spectral coefficients of A = F_λ/cos(φ) and B = F_φ/cos(φ),
-    computes the spectral divergence of the vector field (F_λ, F_φ):
+    Given spectral transforms of A = F_u·cos(φ)/cos²(φ) and
+    B = F_v·cos(φ)/cos²(φ) where (F_u, F_v) are cosine-weighted fluxes,
+    computes the spectral divergence via integration by parts:
 
-        div(F) = (1/a)·[im·Â + cos(φ)·∂B̂/∂φ]
+        [∇·F]ₙᵐ = (1/a)·[im·Â + D_μ(B̂)]
 
-    This form is used because the nonlinear products in the dynamical core
-    naturally produce the 1/cos(φ)-scaled quantities after dividing by cos²(φ)
-    on the grid.
+    where D_μ is the μ-derivative recurrence (integration by parts):
+        D_μ(f̂)ₙ = −(n+1)·ε(n,m)·f̂_{n−1} + n·ε(n+1,m)·f̂_{n+1}
 
     Parameters
     ----------
     a_hat : jnp.ndarray
-        Spectral coefficients of zonal flux / cos(φ), shape ``(n_spectral,)``.
+        Spectral coefficients of zonal flux / cos²(φ), shape ``(n_spectral,)``.
     b_hat : jnp.ndarray
-        Spectral coefficients of meridional flux / cos(φ), shape ``(n_spectral,)``.
+        Spectral coefficients of meridional flux / cos²(φ), shape ``(n_spectral,)``.
     truncation : int
         Triangular truncation.
     radius : float
@@ -265,7 +265,7 @@ def spectral_divergence(
     """
     inv_a = 1.0 / radius
     return inv_a * (
-        zonal_derivative(a_hat, truncation) + meridional_derivative(b_hat, truncation)
+        zonal_derivative(a_hat, truncation) + _mu_derivative(b_hat, truncation)
     )
 
 
@@ -275,19 +275,19 @@ def spectral_curl(
     truncation: int,
     radius: float,
 ) -> jnp.ndarray:
-    """Compute vertical component of curl in spectral space from scaled flux components.
+    """Compute spectral curl (vertical component) from cos²(φ)-scaled flux components.
 
-    Given spectral coefficients of A = F_λ/cos(φ) and B = F_φ/cos(φ),
-    computes the vertical component of the curl:
+    Given spectral transforms of A = F_u·cos(φ)/cos²(φ) and
+    B = F_v·cos(φ)/cos²(φ), computes the vertical curl:
 
-        curl_z(F) = (1/a)·[−im·B̂ + cos(φ)·∂Â/∂φ]
+        [curl_z(F)]ₙᵐ = (1/a)·[−im·B̂ + D_μ(Â)]
 
     Parameters
     ----------
     a_hat : jnp.ndarray
-        Spectral coefficients of zonal flux / cos(φ), shape ``(n_spectral,)``.
+        Spectral coefficients of zonal flux / cos²(φ), shape ``(n_spectral,)``.
     b_hat : jnp.ndarray
-        Spectral coefficients of meridional flux / cos(φ), shape ``(n_spectral,)``.
+        Spectral coefficients of meridional flux / cos²(φ), shape ``(n_spectral,)``.
     truncation : int
         Triangular truncation.
     radius : float
@@ -295,7 +295,7 @@ def spectral_curl(
     """
     inv_a = 1.0 / radius
     return inv_a * (
-        -zonal_derivative(b_hat, truncation) + meridional_derivative(a_hat, truncation)
+        -zonal_derivative(b_hat, truncation) + _mu_derivative(a_hat, truncation)
     )
 
 
@@ -340,18 +340,24 @@ def _meridional_coupling(
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Pre-compute index arrays and coefficients for the meridional derivative.
 
-    The recurrence:
-        [cos(φ)·∂f/∂φ]ₙᵐ = (n+1)·ε(n,m)·f_{n-1}^m − n·ε(n+1,m)·f_{n+1}^m
+    The spectral recurrence (gathering by output index n):
+
+        [cos(φ)·∂f/∂φ]ₙᵐ = (n+2)·ε(n+1,m)·f_{n+1}^m − (n−1)·ε(n,m)·f_{n−1}^m
 
     where ε(n,m) = √((n²−m²)/(4n²−1)).
+
+    This comes from expanding f = Σ f̂ₖᵐ P̄ₖᵐ and using:
+        (1−μ²)·dP̄ₖᵐ/dμ = (k+1)·ε(k,m)·P̄_{k−1}^m − k·ε(k+1,m)·P̄_{k+1}^m
+
+    then collecting all contributions to P̄ₙᵐ.
 
     Returns
     -------
     tuple of (idx_lower, idx_upper, coeff_lower, coeff_upper)
-        idx_lower[i]  : flat index of (m, n-1), self-referencing if n == m
+        idx_lower[i]  : flat index of (m, n−1), self-referencing if n == m
         idx_upper[i]  : flat index of (m, n+1), self-referencing if n == T
-        coeff_lower[i]: (n+1)·ε(n,m), zero if n == m
-        coeff_upper[i]: −n·ε(n+1,m), zero if n == T
+        coeff_lower[i]: −(n−1)·ε(n,m), zero if n == m
+        coeff_upper[i]: (n+2)·ε(n+1,m), zero if n == T
     """
     t = truncation
 
@@ -364,23 +370,80 @@ def _meridional_coupling(
         for n in range(m, t + 1):
             i = _spectral_index(t, m, n)
 
-            # Lower coupling: f_{n-1}^m with coefficient (n+1)*eps(n,m)
+            # Lower coupling: reads f_{n-1}^m, coefficient -(n-1)*eps(n,m)
             if n > m:
-                eps_n = _epsilon(n, m)
                 idx_lower.append(_spectral_index(t, m, n - 1))
-                c_lower.append((n + 1) * eps_n)
+                c_lower.append(-(n - 1) * _epsilon(n, m))
             else:
-                # n == m: no n-1 neighbor, contribute zero
                 idx_lower.append(i)
                 c_lower.append(0.0)
 
-            # Upper coupling: f_{n+1}^m with coefficient -n*eps(n+1,m)
+            # Upper coupling: reads f_{n+1}^m, coefficient (n+2)*eps(n+1,m)
             if n < t:
-                eps_np1 = _epsilon(n + 1, m)
                 idx_upper.append(_spectral_index(t, m, n + 1))
-                c_upper.append(-n * eps_np1)
+                c_upper.append((n + 2) * _epsilon(n + 1, m))
             else:
-                # n == T: no n+1 neighbor, contribute zero
+                idx_upper.append(i)
+                c_upper.append(0.0)
+
+    return (
+        jnp.array(idx_lower, dtype=jnp.int32),
+        jnp.array(idx_upper, dtype=jnp.int32),
+        jnp.array(c_lower),
+        jnp.array(c_upper),
+    )
+
+
+def _mu_derivative(
+    coeffs: jnp.ndarray,
+    truncation: int,
+) -> jnp.ndarray:
+    """Compute d/dμ in spectral space via integration-by-parts recurrence.
+
+    This is NOT the same as meridional_derivative (which computes cos²φ · d/dμ).
+    This operator arises when computing the spectral representation of d(G)/dμ
+    via Gaussian quadrature and integration by parts:
+
+        [dG/dμ]ₙᵐ = −(n+1)·ε(n,m)·Ĝ_{n−1}^m + n·ε(n+1,m)·Ĝ_{n+1}^m
+
+    Used internally by spectral_divergence and spectral_curl.
+    """
+    idx_lower, idx_upper, c_lower, c_upper = _mu_derivative_coupling(truncation)
+    return c_lower * coeffs[idx_lower] + c_upper * coeffs[idx_upper]
+
+
+@functools.lru_cache(maxsize=16)
+def _mu_derivative_coupling(
+    truncation: int,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Pre-compute coupling arrays for the μ-derivative recurrence.
+
+    [dG/dμ]ₙᵐ = −(n+1)·ε(n,m)·Ĝ_{n−1} + n·ε(n+1,m)·Ĝ_{n+1}
+    """
+    t = truncation
+
+    idx_lower = []
+    idx_upper = []
+    c_lower = []
+    c_upper = []
+
+    for m in range(t + 1):
+        for n in range(m, t + 1):
+            i = _spectral_index(t, m, n)
+
+            # Lower: reads f_{n-1}, coefficient = -(n+1)*eps(n,m)
+            if n > m:
+                idx_lower.append(_spectral_index(t, m, n - 1))
+                c_lower.append(-(n + 1) * _epsilon(n, m))
+            else:
+                idx_lower.append(i)
+                c_lower.append(0.0)
+
+            # Upper: reads f_{n+1}, coefficient = n*eps(n+1,m)
+            if n < t:
+                idx_upper.append(_spectral_index(t, m, n + 1))
+                c_upper.append(n * _epsilon(n + 1, m))
+            else:
                 idx_upper.append(i)
                 c_upper.append(0.0)
 

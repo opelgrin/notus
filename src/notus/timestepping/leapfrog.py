@@ -22,7 +22,6 @@ from __future__ import annotations
 import dataclasses
 
 import jax
-import jax.numpy as jnp
 
 from notus.state import ShallowWaterState
 
@@ -104,28 +103,35 @@ def leapfrog_step(
         Updated state: previous = filtered x^n, current = filtered x^{n+1}.
     """
 
-    def _raw_step(
-        x_prev: jnp.ndarray,
-        x_curr: jnp.ndarray,
-        tend: jnp.ndarray,
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        # Leapfrog update
-        x_new = x_prev + 2.0 * dt * tend
+    nu_half = robert_coeff / 2.0
 
-        # RAW filter
-        d = x_prev - 2.0 * x_curr + x_new
-        nu_half = robert_coeff / 2.0
-        x_curr_filtered = x_curr + nu_half * williams_coeff * d
-        x_new_filtered = x_new - nu_half * (1.0 - williams_coeff) * d
+    # Leapfrog update: x_new = x_prev + 2·dt·tendency
+    x_new = jax.tree.map(
+        lambda xp, tend: xp + 2.0 * dt * tend,
+        state.previous,
+        tendency,
+    )
 
-        return x_curr_filtered, x_new_filtered
-
-    # Apply to all fields via tree_map
-    filtered_curr, filtered_new = jax.tree.map(
-        _raw_step,
+    # RAW filter increment: D = x_prev - 2·x_curr + x_new
+    d = jax.tree.map(
+        lambda xp, xc, xn: xp - 2.0 * xc + xn,
         state.previous,
         state.current,
-        tendency,
+        x_new,
+    )
+
+    # Filtered current: x_curr + (ν·α/2)·D
+    filtered_curr = jax.tree.map(
+        lambda xc, dd: xc + nu_half * williams_coeff * dd,
+        state.current,
+        d,
+    )
+
+    # Filtered new: x_new - (ν·(1-α)/2)·D
+    filtered_new = jax.tree.map(
+        lambda xn, dd: xn - nu_half * (1.0 - williams_coeff) * dd,
+        x_new,
+        d,
     )
 
     return LeapfrogState(current=filtered_new, previous=filtered_curr)
