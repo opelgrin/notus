@@ -1,0 +1,124 @@
+[project]
+name = "GCM-Python"
+dynamic = ["version"]
+description = "A textbook, physics-based GCM written in Python."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+]
+[dependency-groups]
+dev = [
+
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gcm"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".coverage",
+    ".github/",
+    "benchmarks/",
+    "CLAUDE.md",
+    "docs/",
+    "tests/",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "gcm", "scripts", "tests"]
+# exclude = ["notebooks/**"]
+fix = true
+unsafe-fixes = false
+preview = true
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "UP",       # pyupgrade
+    "B",        # flake8-bugbear
+    "SIM",      # flake8-simplify
+    "RUF",      # ruff-specific
+    "N",        # pep8-naming
+    "S",        # bandit security
+    "A",        # flake8-builtins
+    "C4",       # flake8-comprehensions
+    "C90",      # mccabe complexity
+    "DTZ",      # flake8-datetimez
+    "T10",      # flake8-debugger
+    "ISC",      # implicit string concat
+    "PIE",      # flake8-pie
+    "PT",       # flake8-pytest-style
+    "RSE",      # flake8-raise
+    "RET",      # flake8-return
+    "SLF",      # flake8-self
+    "ERA",      # eradicate (commented-out code)
+    "PL",       # pylint (PLR, PLC, PLE, PLW)
+    "PERF",     # perflint
+    "FURB",     # refurb
+    "FLY",      # flynt
+    "NPY",      # numpy deprecations
+    "INP",      # flake8-no-pep420
+    "T20",      # flake8-print
+    "TID",      # flake8-tidy-imports
+    "SLOT",     # flake8-slots
+    "LOG",      # flake8-logging
+]
+fixable = ["ALL"]
+extend-ignore = [
+    "UP047",    # PEP 695 type parameter syntax (optional style)
+    "PLR0913",  # Too many arguments to function call
+    "PLR0917",  # Too many positional arguments
+    "PLR0914",  # Too many local variables
+]
+"tests/**" = [
+    "S101",    # Use of assert detected
+    "D102",    # Missing docstring in public method — short test methods are self-documenting
+    "D103",    # Missing docstring in public function (test functions)
+    "DOC201",  # Fixtures return via pytest injection — Returns section is noise
+    "D401",    # Imperative mood in docstring (fixtures use descriptive phrasing)
+    "PLR2004", # Magic value in comparison (common in test assertions)
+    "PLR6301", # Method could be static — pytest fixtures require instance methods
+    "PLR0904", # Too many public methods — comprehensive test classes are expected
+    "SLF001",  # Private member access — tests intentionally exercise private helpers
+    "PLC2701", # Private import from external module — tests intentionally access private helpers
+    "PLC0415", # Import not at top level — sometimes needed inside test methods
+    "E402",    # Module-level import after pytest.importorskip guard
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["gcm"]
+combine-as-imports = true
+lines-after-imports = 2
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.mypy]
+python_version = "3.13"
+packages = ["gcm"]
+exclude = [
+    "tests/",
+]
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unused_configs = true
+no_implicit_reexport = true
+disallow_any_generics = true
+disallow_any_unimported = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+show_error_codes = true
