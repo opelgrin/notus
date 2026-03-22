@@ -46,6 +46,17 @@ my_planet = PlanetaryConstants(
 )
 ```
 
+## Roadmap
+
+- [x] **Phase 1 — Foundations**: Gaussian grid, spherical harmonic transforms, spectral operators
+- [ ] **Phase 2 — Shallow water**: 2D shallow water equations on the sphere (validates the spectral machinery + time stepping). Williamson et al. (1992) standard test cases.
+- [ ] **Phase 3 — Primitive equations**: extend to 3D with sigma vertical coordinate, hydrostatic equation, semi-implicit gravity wave treatment
+- [ ] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20, validate against published zonal-mean diagnostics
+- [ ] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment
+- [ ] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, simple convection scheme (Betts-Miller or similar)
+- [ ] **Phase 7 — Seasonal cycle**: orbital parameters (obliquity, eccentricity), shortwave/longwave radiation, diurnal and annual cycles
+- [ ] **Phase 8 — Surface coupling**: slab ocean, simple land surface, boundary layer parameterization
+
 ## Tests
 
 ```bash
