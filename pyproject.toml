@@ -6,10 +6,17 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "jax>=0.9.2",
+    "jaxlib>=0.9.2",
+    "xarray>=2024.0",
+    "netcdf4>=1.7",
 ]
 [dependency-groups]
 dev = [
-
+    "pytest>=8.0",
+    "matplotlib>=3.9",
+    "cartopy>=0.23",
+    "ruff>=0.15.7",
+    "mypy>=1.19.1",
 ]
 
 [build-system]
@@ -82,18 +89,28 @@ extend-ignore = [
     "PLR0917",  # Too many positional arguments
     "PLR0914",  # Too many local variables
 ]
+allowed-confusables = [
+    "φ", "λ", "μ", "ζ", "δ", "ψ", "χ", "Ω", "Σ", "Δ",  # Greek letters for math
+    "π", "κ", "ν", "σ", "τ",
+    "²", "³", "⁴", "⁻", "ⁱ",  # Superscripts for equations
+    "ₙ", "ₘ", "ₛ", "ₖ", "ᵐ",  # Subscripts
+    "→", "·", "∂", "∇", "∫",  # Math operators
+    "≤", "≥",
+]
+
+[tool.ruff.lint.per-file-ignores]
 "tests/**" = [
     "S101",    # Use of assert detected
-    "D102",    # Missing docstring in public method — short test methods are self-documenting
+    "D102",    # Missing docstring in public method
     "D103",    # Missing docstring in public function (test functions)
-    "DOC201",  # Fixtures return via pytest injection — Returns section is noise
-    "D401",    # Imperative mood in docstring (fixtures use descriptive phrasing)
+    "DOC201",  # Fixtures return via pytest injection
+    "D401",    # Imperative mood in docstring
     "PLR2004", # Magic value in comparison (common in test assertions)
-    "PLR6301", # Method could be static — pytest fixtures require instance methods
-    "PLR0904", # Too many public methods — comprehensive test classes are expected
-    "SLF001",  # Private member access — tests intentionally exercise private helpers
-    "PLC2701", # Private import from external module — tests intentionally access private helpers
-    "PLC0415", # Import not at top level — sometimes needed inside test methods
+    "PLR6301", # Method could be static
+    "PLR0904", # Too many public methods
+    "SLF001",  # Private member access
+    "PLC2701", # Private import from external module
+    "PLC0415", # Import not at top level
     "E402",    # Module-level import after pytest.importorskip guard
 ]
 
@@ -108,6 +125,7 @@ convention = "numpy"
 [tool.mypy]
 python_version = "3.13"
 packages = ["gcm"]
+mypy_path = "src"
 exclude = [
     "tests/",
 ]
@@ -115,7 +133,9 @@ strict = true
 warn_unreachable = true
 warn_unused_ignores = true
 warn_redundant_casts = true
-warn_return_any = true
+# JAX stubs return Any for most array operations; disabling this avoids
+# hundreds of false positives while keeping all other strict checks active.
+warn_return_any = false
 warn_unused_configs = true
 no_implicit_reexport = true
 disallow_any_generics = true
@@ -123,3 +143,11 @@ disallow_any_unimported = true
 disallow_incomplete_defs = true
 disallow_untyped_defs = true
 show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["cartopy", "cartopy.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["netCDF4", "netCDF4.*"]
+ignore_missing_imports = true
