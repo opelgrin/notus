@@ -15,6 +15,11 @@ Core components
 
 from notus.constants import EARTH, PlanetaryConstants
 from notus.grid import GaussianGrid
+from notus.initial_conditions import (
+    JWConfig,
+    jablonowski_williamson_perturbation,
+    jablonowski_williamson_steady_state,
+)
 from notus.operators import (
     hyperdiffusion,
     inverse_laplacian,
@@ -40,6 +45,7 @@ from notus.vertical import (
 __all__ = [
     "EARTH",
     "GaussianGrid",
+    "JWConfig",
     "PlanetaryConstants",
     "PrimitiveEquationState",
     "ShallowWaterState",
@@ -48,6 +54,8 @@ __all__ = [
     "geopotential",
     "hyperdiffusion",
     "inverse_laplacian",
+    "jablonowski_williamson_perturbation",
+    "jablonowski_williamson_steady_state",
     "laplacian",
     "meridional_derivative",
     "omega_over_pressure",
