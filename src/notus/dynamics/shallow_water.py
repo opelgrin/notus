@@ -6,8 +6,8 @@ grid, then transformed to spectral space for tendency assembly.
 
 The equations:
 
-    dζ/dt = -curl(ζ_a · v⃗)                   (vorticity)
-    dδ/dt = div_component(ζ_a · v⃗) - ∇²(Φ+E) (divergence)
+    dζ/dt = -div(ζ_a · v⃗)                    (vorticity)
+    dδ/dt = +curl(ζ_a · v⃗) - ∇²(Φ+E)        (divergence)
     dΦ/dt = -div(Φ · v⃗)                       (continuity)
 
 where ζ_a = ζ + f is absolute vorticity, Φ = g·h is geopotential,
@@ -32,7 +32,7 @@ def shallow_water_tendencies(
     state: ShallowWaterState,
     transform: SpectralTransform,
     planet: PlanetaryConstants,
-    diffusion_order: int = 2,
+    diffusion_order: int = 4,
     diffusion_timescale: float = 2.0 * 3600.0,
 ) -> ShallowWaterState:
     """Compute explicit tendencies for the shallow water equations.
@@ -49,7 +49,7 @@ def shallow_water_tendencies(
     planet : PlanetaryConstants
         Planetary constants (radius, rotation_rate).
     diffusion_order : int
-        Order of hyperdiffusion (2 = del-4 biharmonic). Set to 0 to disable.
+        Order of hyperdiffusion (4 = del-8, default). Set to 0 to disable.
     diffusion_timescale : float
         E-folding damping time for the smallest resolved scale [s].
         Default: 2 hours.
@@ -108,13 +108,17 @@ def shallow_water_tendencies(
 
     # --- Step 5: Assemble spectral tendencies ---
     # The spectral tendency formulas (Hoskins & Simmons 1975):
-    #   dζ/dt = (1/a)·[-im·B̃ + D_μ(Ã)] = spectral_curl(A, B)
-    #   dδ/dt = (1/a)·[im·Ã + D_μ(B̃)] - ∇²(Φ+E) = spectral_div(A,B) - ∇²(Φ+E)
-    #   dΦ/dt = -(1/a)·[im·C + D_μ(D)] = -spectral_div(C, D)
-    vort_tend = spectral_curl(flux_a_spec, flux_b_spec, t, a)
+    #   dζ/dt = -div(ζ_a·v⃗)
+    #   dδ/dt = +curl(ζ_a·v⃗) - ∇²(Φ+E)
+    #   dΦ/dt = -div(Φ·v⃗)
+    #
+    # The EXPLICIT tendencies exclude the linear gravity-wave coupling
+    # (-∇²Φ for divergence, -Φ₀δ for geopotential) which is handled
+    # implicitly by the semi-implicit time stepper.  Only -∇²(KE) remains.
+    vort_tend = -spectral_divergence(flux_a_spec, flux_b_spec, t, a)
 
-    div_tend = spectral_divergence(flux_a_spec, flux_b_spec, t, a) - laplacian(
-        state.geopotential + ke_spec, t, a
+    div_tend = -spectral_curl(flux_a_spec, flux_b_spec, t, a) - laplacian(
+        ke_spec, t, a
     )
 
     phi_tend = -spectral_divergence(phi_flux_a_spec, phi_flux_b_spec, t, a)

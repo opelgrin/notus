@@ -299,6 +299,49 @@ def spectral_curl(
     )
 
 
+def exponential_filter(
+    truncation: int,
+    dt: float,
+    tau: float = 0.010938,
+    order: int = 18,
+) -> jnp.ndarray:
+    """Build a multiplicative spectral filter array (Hou & Li 2007).
+
+    Applied once per timestep, this damps high-wavenumber modes as:
+
+        scaling(n) = exp(-attenuation · (n / T) ^ (2·order))
+
+    where attenuation = dt · Ω / tau and Ω = 7.292e-5 s⁻¹.
+
+    Default parameters match Dinosaur / NeuralGCM: ``tau = 0.010938``,
+    ``order = 18``, giving a k^36 rolloff that removes > 99 % of the
+    energy at the truncation wavenumber every step while leaving n ≤ 0.8·T
+    essentially untouched.
+
+    Parameters
+    ----------
+    truncation : int
+        Triangular truncation T.
+    dt : float
+        Timestep [s].
+    tau : float
+        Nondimensional filter timescale.
+    order : int
+        Polynomial order of the filter exponent.
+
+    Returns
+    -------
+    jnp.ndarray
+        Multiplicative scaling array, shape ``(n_spectral,)``.
+        Multiply spectral coefficients by this every timestep.
+    """
+    n_vals = _n_index_array(truncation)
+    k = n_vals / truncation  # normalized wavenumber in [0, 1]
+    angular_velocity = 7.292e-5  # Earth's Ω [rad/s]
+    attenuation = dt * angular_velocity / tau
+    return jnp.exp(-attenuation * k ** (2 * order))
+
+
 # ---------------------------------------------------------------------------
 # Private helpers (cached)
 # ---------------------------------------------------------------------------

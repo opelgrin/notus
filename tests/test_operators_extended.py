@@ -156,8 +156,10 @@ class TestSpectralCurlDivergence:
         a_spec = t21_transform.grid_to_spectral(a_grid)
         b_spec = t21_transform.grid_to_spectral(b_grid)
 
-        vort_tend = spectral_curl(a_spec, b_spec, grid.truncation, a)
-        div_tend = spectral_divergence(a_spec, b_spec, grid.truncation, a)
+        # dζ/dt = -div(ζ_a·v⃗) = -spectral_divergence(A, B)
+        # dδ/dt = +curl(ζ_a·v⃗) = -spectral_curl(A, B)  (flux part only)
+        vort_tend = -spectral_divergence(a_spec, b_spec, grid.truncation, a)
+        div_tend = -spectral_curl(a_spec, b_spec, grid.truncation, a)
 
         # For a balanced state, both should be near machine zero
         vort_tend_grid = t21_transform.spectral_to_grid(vort_tend)

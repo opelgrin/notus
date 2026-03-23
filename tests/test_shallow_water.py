@@ -12,9 +12,14 @@ import pytest
 
 from notus import EARTH, GaussianGrid, SpectralTransform
 from notus.dynamics.shallow_water import shallow_water_tendencies
+from notus.operators import exponential_filter
 from notus.state import ShallowWaterState
 from notus.timestepping.leapfrog import LeapfrogState, euler_step
-from notus.timestepping.semi_implicit import SemiImplicitConfig, semi_implicit_correction
+from notus.timestepping.semi_implicit import (
+    SemiImplicitConfig,
+    implicit_inverse,
+    implicit_terms,
+)
 
 
 jax.config.update("jax_enable_x64", True)
@@ -70,83 +75,84 @@ def _run_shallow_water(
 ) -> ShallowWaterState:
     """Run the shallow water model for n_steps.
 
-    Uses leapfrog with RAW filter and semi-implicit gravity waves.
-    The SI correction is applied AFTER the explicit leapfrog prediction.
+    Uses IMEX leapfrog (Dinosaur-style) with Robert-Asselin filter
+    and exponential spectral filter for dealiasing stability.
     """
     si_config = SemiImplicitConfig(mean_geopotential=mean_phi)
     grid = transform.grid
     t = grid.truncation
     a = EARTH.radius
+    alpha = si_config.alpha
 
-    # First step: forward Euler (half step for SI)
-    tend = shallow_water_tendencies(state, transform, EARTH)
-    euler_state = euler_step(state, tend, dt)
+    # Exponential spectral filter (Hou & Li 2007)
+    exp_filter = exponential_filter(t, dt)
 
-    # Apply SI to the Euler prediction
-    delta_new, phi_new = semi_implicit_correction(
-        euler_state.current.divergence,
-        euler_state.current.geopotential,
-        state.divergence,
-        state.geopotential,
-        dt,
-        si_config,
-        t,
-        a,
-    )
-    lf_state = LeapfrogState(
-        current=euler_state.current.replace(divergence=delta_new, geopotential=phi_new),
-        previous=state,
-    )
-
-    # RAW filter constants
-    raw_curr = 0.04 * 0.53 / 2.0
-    raw_new = 0.04 * (1.0 - 0.53) / 2.0
-
-    # Subsequent steps: leapfrog + SI + RAW
-    for _step in range(n_steps - 1):
-        tend = shallow_water_tendencies(lf_state.current, transform, EARTH)
-
-        # Explicit leapfrog prediction
-        explicit_new = jax.tree.map(
-            lambda xp, f: xp + 2.0 * dt * f,
-            lf_state.previous,
-            tend,
+    def _apply_filter(s: ShallowWaterState) -> ShallowWaterState:
+        return s.replace(
+            vorticity=s.vorticity * exp_filter,
+            divergence=s.divergence * exp_filter,
+            geopotential=s.geopotential * exp_filter,
         )
 
-        # SI correction on divergence and geopotential
-        delta_new, phi_new = semi_implicit_correction(
-            explicit_new.divergence,
-            explicit_new.geopotential,
+    # ---- First step: backward-forward Euler ----
+    explicit = shallow_water_tendencies(state, transform, EARTH)
+    intermediate = jax.tree.map(lambda x, f: x + dt * f, state, explicit)
+    # Implicit solve: (I - dt·L)⁻¹
+    delta_new, phi_new = implicit_inverse(
+        intermediate.divergence, intermediate.geopotential,
+        dt, si_config, t, a,
+    )
+    current = _apply_filter(
+        intermediate.replace(divergence=delta_new, geopotential=phi_new)
+    )
+    lf_state = LeapfrogState(current=current, previous=state)
+
+    # Robert-Asselin filter coefficient (Dinosaur uses 0.05)
+    r = 0.05
+
+    # ---- Subsequent steps: IMEX leapfrog ----
+    for _step in range(n_steps - 1):
+        explicit_current = shallow_water_tendencies(
+            lf_state.current, transform, EARTH
+        )
+
+        # Implicit tendency at the previous time level
+        l_div_prev, l_phi_prev = implicit_terms(
             lf_state.previous.divergence,
             lf_state.previous.geopotential,
-            dt,
-            si_config,
-            t,
-            a,
-        )
-        corrected_new = explicit_new.replace(
-            divergence=delta_new, geopotential=phi_new
+            si_config, t, a,
         )
 
-        # RAW filter
-        d = jax.tree.map(
-            lambda xp, xc, xn: xp - 2.0 * xc + xn,
+        # Leapfrog: intermediate = x_{n-1} + 2dt*(F(x_n) + (1-α)*L(x_{n-1}))
+        intermediate = ShallowWaterState(
+            vorticity=lf_state.previous.vorticity
+            + 2.0 * dt * explicit_current.vorticity,
+            divergence=lf_state.previous.divergence
+            + 2.0 * dt * (explicit_current.divergence + (1.0 - alpha) * l_div_prev),
+            geopotential=lf_state.previous.geopotential
+            + 2.0 * dt * (explicit_current.geopotential + (1.0 - alpha) * l_phi_prev),
+        )
+
+        # Implicit solve: (I - η·L)⁻¹ where η = 2dt·α
+        eta = 2.0 * dt * alpha
+        delta_new, phi_new = implicit_inverse(
+            intermediate.divergence, intermediate.geopotential,
+            eta, si_config, t, a,
+        )
+        future = intermediate.replace(divergence=delta_new, geopotential=phi_new)
+
+        # Robert-Asselin filter
+        filtered_current = jax.tree.map(
+            lambda p, c, f: (1.0 - 2.0 * r) * c + r * (p + f),
             lf_state.previous,
             lf_state.current,
-            corrected_new,
-        )
-        filtered_curr = jax.tree.map(
-            lambda xc, dd: xc + raw_curr * dd,
-            lf_state.current,
-            d,
-        )
-        filtered_new = jax.tree.map(
-            lambda xn, dd: xn - raw_new * dd,
-            corrected_new,
-            d,
+            future,
         )
 
-        lf_state = LeapfrogState(current=filtered_new, previous=filtered_curr)
+        # Exponential spectral filter on the future state
+        future = _apply_filter(future)
+
+        lf_state = LeapfrogState(current=future, previous=filtered_current)
 
     return lf_state.current
 
@@ -157,7 +163,6 @@ class TestWilliamsonCase2:
     The balanced solid-body rotation should remain unchanged.
     """
 
-    @pytest.mark.xfail(reason="SI scheme needs debugging — aliasing instability at large dt")
     def test_steady_state_1day(self):
         """After 1 day, the state should not have drifted significantly."""
         grid = GaussianGrid(truncation=21)
@@ -176,7 +181,6 @@ class TestWilliamsonCase2:
         rel_error = jnp.max(jnp.abs(phi_final - phi_init)) / jnp.max(jnp.abs(phi_init))
         assert rel_error < 1e-4, f"Geopotential relative error: {rel_error:.2e}"
 
-    @pytest.mark.xfail(reason="SI scheme needs debugging — aliasing instability at large dt")
     def test_steady_state_5days(self):
         """After 5 days, the state should still be close to initial."""
         grid = GaussianGrid(truncation=21)
@@ -198,7 +202,6 @@ class TestWilliamsonCase2:
 class TestConservation:
     """Conservation properties of the shallow water solver."""
 
-    @pytest.mark.xfail(reason="SI scheme needs debugging — aliasing instability at large dt")
     def test_mass_conservation(self):
         """Global mean geopotential (total mass) should be conserved."""
         grid = GaussianGrid(truncation=21)
@@ -217,7 +220,6 @@ class TestConservation:
         rel_error = jnp.abs(mass_final - mass_init) / jnp.abs(mass_init)
         assert rel_error < 1e-10, f"Mass conservation error: {rel_error:.2e}"
 
-    @pytest.mark.xfail(reason="SI scheme needs debugging — aliasing instability at large dt")
     def test_no_blowup(self):
         """Model should not blow up after 10 days."""
         grid = GaussianGrid(truncation=21)
