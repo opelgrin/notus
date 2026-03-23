@@ -13,9 +13,9 @@ The model is planet-agnostic — it can simulate any rotating planet with an ide
 ## Architecture
 
 - **Spectral transform**: spherical harmonic decomposition (FFT in longitude, Legendre transform in latitude)
-- **Vertical coordinate**: sigma (p/ps), Eulerian
-- **Time stepping**: leapfrog with Robert-Asselin-Williams filter + semi-implicit gravity waves
-- **Diffusion**: biharmonic (del-4) hyperdiffusion
+- **Vertical coordinate**: sigma (p/ps), Eulerian (planned — currently 2D)
+- **Time stepping**: IMEX leapfrog with Robert-Asselin filter + semi-implicit gravity waves
+- **Filtering**: exponential spectral filter (Hou & Li 2007) + del-8 hyperdiffusion
 - **Computation**: JAX (JIT compilation, GPU support, autodiff)
 
 ## Installation
@@ -48,13 +48,15 @@ my_planet = PlanetaryConstants(
 
 ## Roadmap
 
-- [x] **Phase 1 — Foundations**: Gaussian grid, spherical harmonic transforms, spectral operators
-- [ ] **Phase 2 — Shallow water**: 2D shallow water equations on the sphere (validates the spectral machinery + time stepping). Williamson et al. (1992) standard test cases.
-- [ ] **Phase 3 — Primitive equations**: extend to 3D with sigma vertical coordinate, hydrostatic equation, semi-implicit gravity wave treatment
-- [ ] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20, validate against published zonal-mean diagnostics
+See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
+
+- [x] **Phase 1 — Spectral foundations**: Gaussian grid, spherical harmonic transforms, spectral operators
+- [x] **Phase 2 — Shallow water**: 2D shallow water equations on the sphere, Williamson et al. (1992) test case 2 (steady-state 10 days, mass conservation)
+- [ ] **Phase 3 — Primitive equations**: extend to 3D with sigma vertical coordinate, hydrostatic equation
+- [ ] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20
 - [ ] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment
-- [ ] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, simple convection scheme (Betts-Miller or similar)
-- [ ] **Phase 7 — Seasonal cycle**: orbital parameters (obliquity, eccentricity), shortwave/longwave radiation, diurnal and annual cycles
+- [ ] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, simple convection
+- [ ] **Phase 7 — Seasonal cycle**: orbital parameters, shortwave/longwave radiation, diurnal and annual cycles
 - [ ] **Phase 8 — Surface coupling**: slab ocean, simple land surface, boundary layer parameterization
 
 ## Tests
