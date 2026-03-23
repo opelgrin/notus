@@ -27,9 +27,7 @@ def _make_resting_state(
     return PrimitiveEquationState(
         vorticity=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
         divergence=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
-        temperature=jnp.full((n_levels, n_spec), 0.0 + 0j).at[:, 0].set(
-            t_ref_value + 0j
-        ),
+        temperature=jnp.full((n_levels, n_spec), 0.0 + 0j).at[:, 0].set(t_ref_value + 0j),
         log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
     )
 
@@ -48,25 +46,37 @@ class TestRestingState:
         state = _make_resting_state(grid, n_levels, 250.0)
 
         tendency_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
             diffusion_order=0,
         )
         tend = tendency_fn(state)
 
         np.testing.assert_allclose(
-            jnp.abs(tend.vorticity), 0.0, atol=1e-20,
+            jnp.abs(tend.vorticity),
+            0.0,
+            atol=1e-20,
             err_msg="Vorticity tendency should be zero for resting state",
         )
         np.testing.assert_allclose(
-            jnp.abs(tend.divergence), 0.0, atol=1e-20,
+            jnp.abs(tend.divergence),
+            0.0,
+            atol=1e-20,
             err_msg="Divergence tendency should be zero for resting state",
         )
         np.testing.assert_allclose(
-            jnp.abs(tend.temperature), 0.0, atol=1e-20,
+            jnp.abs(tend.temperature),
+            0.0,
+            atol=1e-20,
             err_msg="Temperature tendency should be zero for resting state",
         )
         np.testing.assert_allclose(
-            jnp.abs(tend.log_surface_pressure), 0.0, atol=1e-20,
+            jnp.abs(tend.log_surface_pressure),
+            0.0,
+            atol=1e-20,
             err_msg="ln(ps) tendency should be zero for resting state",
         )
 
@@ -85,7 +95,12 @@ class TestShapeCorrectness:
         state = _make_resting_state(grid, n_levels)
 
         tendency_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi, diffusion_order=0,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=0,
         )
         tend = tendency_fn(state)
 
@@ -117,14 +132,17 @@ class TestBarotropicState:
         state = PrimitiveEquationState(
             vorticity=jnp.tile(single_vort, (n_levels, 1)),
             divergence=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
-            temperature=jnp.full((n_levels, n_spec), 0.0 + 0j).at[:, 0].set(
-                250.0 + 0j
-            ),
+            temperature=jnp.full((n_levels, n_spec), 0.0 + 0j).at[:, 0].set(250.0 + 0j),
             log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
         )
 
         tendency_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi, diffusion_order=0,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=0,
         )
         tend = tendency_fn(state)
 
@@ -162,9 +180,7 @@ class TestVorticityMatchesSW:
         pe_state = PrimitiveEquationState(
             vorticity=jnp.tile(single_vort, (n_levels, 1)),
             divergence=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
-            temperature=jnp.full((n_levels, n_spec), 0.0 + 0j).at[:, 0].set(
-                250.0 + 0j
-            ),
+            temperature=jnp.full((n_levels, n_spec), 0.0 + 0j).at[:, 0].set(250.0 + 0j),
             log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
         )
 
@@ -176,10 +192,17 @@ class TestVorticityMatchesSW:
         )
 
         pe_tend_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi, diffusion_order=0,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=0,
         )
         sw_tend_fn = shallow_water_tendencies(
-            transform, EARTH, diffusion_order=0,
+            transform,
+            EARTH,
+            diffusion_order=0,
         )
 
         pe_tend = pe_tend_fn(pe_state)
@@ -216,7 +239,12 @@ class TestOrographyTerm:
         state = _make_resting_state(grid, n_levels)
 
         tendency_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi, diffusion_order=0,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=0,
         )
         tend = tendency_fn(state)
 
@@ -225,7 +253,9 @@ class TestOrographyTerm:
 
         for k in range(n_levels):
             np.testing.assert_allclose(
-                tend.divergence[k], expected, atol=1e-20,
+                tend.divergence[k],
+                expected,
+                atol=1e-20,
                 err_msg=f"Divergence at level {k} doesn't match orography",
             )
 
@@ -247,13 +277,22 @@ class TestHyperdiffusion:
 
         # With diffusion on, still zero for resting state (nothing to diffuse)
         tend_with_diff = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi, diffusion_order=4,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=4,
         )(state)
 
         # Both should be zero for resting state (no gradients to diffuse)
         np.testing.assert_allclose(
-            jnp.abs(tend_with_diff.vorticity), 0.0, atol=1e-20,
+            jnp.abs(tend_with_diff.vorticity),
+            0.0,
+            atol=1e-20,
         )
         np.testing.assert_allclose(
-            jnp.abs(tend_with_diff.log_surface_pressure), 0.0, atol=1e-20,
+            jnp.abs(tend_with_diff.log_surface_pressure),
+            0.0,
+            atol=1e-20,
         )

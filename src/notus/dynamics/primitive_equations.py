@@ -165,11 +165,17 @@ def _tendency_impl(
     cosphi_dlnps_dphi_spec = meridional_derivative(state.log_surface_pressure, t)
 
     # Step 3: Transform to grid (batched)
-    all_spec = jnp.concatenate([
-        state.vorticity, state.divergence, u_cos_spec, v_cos_spec,
-        state.temperature,
-        jnp.stack([dlnps_dlam_spec, cosphi_dlnps_dphi_spec]),
-    ], axis=0)
+    all_spec = jnp.concatenate(
+        [
+            state.vorticity,
+            state.divergence,
+            u_cos_spec,
+            v_cos_spec,
+            state.temperature,
+            jnp.stack([dlnps_dlam_spec, cosphi_dlnps_dphi_spec]),
+        ],
+        axis=0,
+    )
     all_grid = jax.vmap(transform.spectral_to_grid)(all_spec)
 
     vort_grid = all_grid[:n_levels]
@@ -182,23 +188,45 @@ def _tendency_impl(
 
     # Steps 4-6: Grid-point and vertical computations
     products_grid, lnps_tend_grid = _grid_point_tendencies(
-        vort_grid, div_grid, u_cos_grid, v_cos_grid, t_grid,
-        dlnps_dlam_grid, cosphi_dlnps_dphi_grid,
-        levels, t_ref, rotation_rate, gas_constant, kappa, sin_lat, cos_lat,
+        vort_grid,
+        div_grid,
+        u_cos_grid,
+        v_cos_grid,
+        t_grid,
+        dlnps_dlam_grid,
+        cosphi_dlnps_dphi_grid,
+        levels,
+        t_ref,
+        rotation_rate,
+        gas_constant,
+        kappa,
+        sin_lat,
+        cos_lat,
     )
 
     # Step 7: Transform all products to spectral (batched)
-    all_products = jnp.concatenate([
-        products_grid, lnps_tend_grid[None, :, :],
-    ], axis=0)
+    all_products = jnp.concatenate(
+        [
+            products_grid,
+            lnps_tend_grid[None, :, :],
+        ],
+        axis=0,
+    )
     all_products_spec = jax.vmap(transform.grid_to_spectral)(all_products)
     products_spec = all_products_spec[:-1]
     lnps_tend_spec = all_products_spec[-1]
 
     # Step 8: Assemble spectral tendencies per level
     return _assemble_spectral_tendencies(
-        products_spec, state, lnps_tend_spec, orography_tend,
-        n_levels, t, a, diffusion_order, diffusion_timescale,
+        products_spec,
+        state,
+        lnps_tend_spec,
+        orography_tend,
+        n_levels,
+        t,
+        a,
+        diffusion_order,
+        diffusion_timescale,
     )
 
 
@@ -235,9 +263,7 @@ def _grid_point_tendencies(
     cosphi_dlnps_dphi_bc = cosphi_dlnps_dphi_grid[None, :, :]
 
     # v⃗·∇ln(ps)
-    v_dot_grad_lnps = (
-        u_cos_grid * dlnps_dlam_bc + v_cos_grid * cosphi_dlnps_dphi_bc
-    ) * cos2_inv
+    v_dot_grad_lnps = (u_cos_grid * dlnps_dlam_bc + v_cos_grid * cosphi_dlnps_dphi_bc) * cos2_inv
 
     # Horizontal products
     flux_a = zeta_a * u_cos_grid * cos2_inv
@@ -249,7 +275,16 @@ def _grid_point_tendencies(
     # Vertical operations
     column_div = div_grid + v_dot_grad_lnps
     sd = sigma_dot(column_div, levels)
-    vert_adv_temp = vertical_advection(sd, t_grid, levels)
+
+    # Vertical advection of temperature, split for semi-implicit scheme:
+    # - T' part uses full σ̇ (D-dependent): fully explicit
+    # - T_ref part uses σ̇_explicit (D-free): the D-dependent part is implicit
+    #   (captured by the K terms in the temperature implicit weights matrix H)
+    sd_explicit = sigma_dot(v_dot_grad_lnps, levels)
+    t_ref_field = jnp.broadcast_to(t_ref_bc, t_prime_grid.shape)
+    vert_adv_temp = vertical_advection(sd, t_prime_grid, levels) + vertical_advection(
+        sd_explicit, t_ref_field, levels
+    )
 
     # Adiabatic heating κ·T·(ω/p), split for semi-implicit scheme:
     # - T_ref part uses g_term = v⃗·∇ln(ps) only (D-dependent part is implicit)
@@ -271,10 +306,17 @@ def _grid_point_tendencies(
     lnps_tend_grid = surface_pressure_tendency(v_dot_grad_lnps, levels)
     nodal_temp_tend = vert_adv_temp + adiabatic
 
-    products_grid = jnp.concatenate([
-        combined_u, combined_v, kinetic_energy,
-        t_flux_a, t_flux_b, nodal_temp_tend,
-    ], axis=0)
+    products_grid = jnp.concatenate(
+        [
+            combined_u,
+            combined_v,
+            kinetic_energy,
+            t_flux_a,
+            t_flux_b,
+            nodal_temp_tend,
+        ],
+        axis=0,
+    )
 
     return products_grid, lnps_tend_grid
 
@@ -300,15 +342,18 @@ def _assemble_spectral_tendencies(
 
     def _assemble_level(args: jnp.ndarray) -> jnp.ndarray:
         cu, cv, ke, tfa, tfb, nodal_t, vort_k, div_k, temp_k = (
-            args[0], args[1], args[2], args[3], args[4],
-            args[5], args[6], args[7], args[8],
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+            args[8],
         )
         vort_tend = spectral_curl(cu, cv, t, a)
-        div_tend = (
-            -spectral_divergence(cu, cv, t, a)
-            - laplacian(ke, t, a)
-            + orography_tend
-        )
+        div_tend = -spectral_divergence(cu, cv, t, a) - laplacian(ke, t, a) + orography_tend
         temp_tend = -spectral_divergence(tfa, tfb, t, a) + nodal_t
 
         if diffusion_order > 0:
@@ -318,11 +363,20 @@ def _assemble_spectral_tendencies(
 
         return jnp.stack([vort_tend, div_tend, temp_tend])
 
-    level_args = jnp.stack([
-        combined_u_spec, combined_v_spec, ke_spec,
-        t_flux_a_spec, t_flux_b_spec, nodal_temp_tend_spec,
-        state.vorticity, state.divergence, state.temperature,
-    ], axis=1)
+    level_args = jnp.stack(
+        [
+            combined_u_spec,
+            combined_v_spec,
+            ke_spec,
+            t_flux_a_spec,
+            t_flux_b_spec,
+            nodal_temp_tend_spec,
+            state.vorticity,
+            state.divergence,
+            state.temperature,
+        ],
+        axis=1,
+    )
 
     level_tendencies = jax.vmap(_assemble_level)(level_args)
 
