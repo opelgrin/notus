@@ -27,7 +27,7 @@ import dataclasses
 
 import jax.numpy as jnp
 
-from notus.operators import _laplacian_eigenvalues, laplacian
+from notus.operators import _laplacian_eigenvalues
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -58,7 +58,8 @@ def implicit_terms(
 
     Returns (L_δ, L_Φ) = (-∇²Φ, -Φ₀·δ).
     """
-    l_div = -laplacian(geopotential, truncation, radius)
+    eigenvalues = _laplacian_eigenvalues(truncation, radius)
+    l_div = -eigenvalues * geopotential
     l_phi = -config.mean_geopotential * divergence
     return l_div, l_phi
 
@@ -88,7 +89,7 @@ def implicit_inverse(
     inv_schur = 1.0 / (1.0 - step_size**2 * phi0 * eigenvalues)
 
     div_out = inv_schur * (
-        divergence - step_size * laplacian(geopotential, truncation, radius)
+        divergence - step_size * eigenvalues * geopotential
     )
     phi_out = inv_schur * (
         -step_size * phi0 * divergence + geopotential
