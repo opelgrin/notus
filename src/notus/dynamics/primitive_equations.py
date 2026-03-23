@@ -161,8 +161,13 @@ def _tendency_impl(
     v_cos_spec = uv_spec[:, 1, :]
 
     # Step 2: Surface pressure gradient in spectral space
-    dlnps_dlam_spec = zonal_derivative(state.log_surface_pressure, t)
-    cosphi_dlnps_dphi_spec = meridional_derivative(state.log_surface_pressure, t)
+    # The physical gradient on the sphere is ∇f = (1/(a·cosφ))·∂f/∂λ ê_λ
+    # + (1/a)·∂f/∂φ ê_φ.  zonal_derivative gives ∂f/∂λ and
+    # meridional_derivative gives cosφ·∂f/∂φ — both WITHOUT the 1/a factor.
+    # We include 1/a here so that v⃗·∇(lnps) and RT'∇(lnps) are physical.
+    inv_a = 1.0 / a
+    dlnps_dlam_spec = zonal_derivative(state.log_surface_pressure, t) * inv_a
+    cosphi_dlnps_dphi_spec = meridional_derivative(state.log_surface_pressure, t) * inv_a
 
     # Step 3: Transform to grid (batched)
     all_spec = jnp.concatenate(

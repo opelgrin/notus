@@ -11,7 +11,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from notus.constants import EARTH
 from notus.dynamics.primitive_equations import primitive_equation_tendencies
@@ -342,14 +341,8 @@ class TestMultiStepStability:
             max_err = float(jnp.max(jnp.abs(getattr(final, field))))
             assert max_err < 1e-8, f"{field} drifted to {max_err} after 100 lapse-rate steps"
 
-    @pytest.mark.xfail(reason="PE perturbation stability bug — see docs/debugging_pe_stability.md")
     def test_perturbation_20_steps(self) -> None:
-        """Perturbed state should survive 20 IMEX steps with filter.
-
-        Dinosaur achieves this with the same physical state. Our code blows
-        up at step 4 due to excessive lnps/temperature growth through the
-        explicit tendency. See docs/debugging_pe_stability.md.
-        """
+        """Perturbed state should survive 20 IMEX steps with filter."""
         init_fn, step_fn, grid, _ = _make_stepper(with_filter=True)
         state = _make_perturbed_state(grid, 5)
         final = _run_steps(init_fn, step_fn, state, 20)
