@@ -122,26 +122,24 @@ def _recurrence_coefficients(truncation: int) -> tuple[jnp.ndarray, jnp.ndarray]
 
     Returns flat arrays indexed by spectral_index(m, n).
     """
+    import numpy as np
+
     n_spectral = (truncation + 1) * (truncation + 2) // 2
-    a = jnp.zeros(n_spectral)
-    b = jnp.zeros(n_spectral)
+    a = np.zeros(n_spectral)
+    b = np.zeros(n_spectral)
 
     for m in range(truncation + 1):
         for n in range(m + 1, truncation + 1):
             idx = _spectral_index(truncation, m, n)
             nm = float(n - m)
             np_ = float(n + m)
-            a_val = ((2.0 * n - 1.0) * (2.0 * n + 1.0) / (nm * np_)) ** 0.5
+            a[idx] = ((2.0 * n - 1.0) * (2.0 * n + 1.0) / (nm * np_)) ** 0.5
             if n >= m + 2:
-                b_val = (
+                b[idx] = (
                     (2.0 * n + 1.0) * (n + m - 1.0) * (n - m - 1.0) / (nm * np_ * (2.0 * n - 3.0))
                 ) ** 0.5
-            else:
-                b_val = 0.0
-            a = a.at[idx].set(a_val)
-            b = b.at[idx].set(b_val)
 
-    return a, b
+    return jnp.array(a), jnp.array(b)
 
 
 def _spectral_index(truncation: int, m: int, n: int) -> int:

@@ -16,6 +16,9 @@ and E = (u² + v²)/2 is kinetic energy.
 
 from __future__ import annotations
 
+import jax
+import jax.numpy as jnp
+
 from notus.constants import PlanetaryConstants
 from notus.operators import (
     hyperdiffusion,
@@ -68,11 +71,12 @@ def shallow_water_tendencies(
         state.vorticity, state.divergence, t, a
     )
 
-    # --- Step 2: Transform to grid ---
-    vort_grid = transform.spectral_to_grid(state.vorticity)
-    u_cos_grid = transform.spectral_to_grid(u_cos_spec)
-    v_cos_grid = transform.spectral_to_grid(v_cos_spec)
-    phi_grid = transform.spectral_to_grid(state.geopotential)
+    # --- Step 2: Transform to grid (batched for fewer kernel launches) ---
+    fields_spec = jnp.stack(
+        [state.vorticity, u_cos_spec, v_cos_spec, state.geopotential]
+    )
+    fields_grid = jax.vmap(transform.spectral_to_grid)(fields_spec)
+    vort_grid, u_cos_grid, v_cos_grid, phi_grid = fields_grid
 
     # --- Step 3: Grid-point computations ---
     # Coriolis parameter: f = 2Ω·sin(φ)
@@ -99,12 +103,14 @@ def shallow_water_tendencies(
     # Kinetic energy: E = (u² + v²)/2 = (U² + V²)/(2·cos²(φ))
     kinetic_energy = 0.5 * (u_cos_grid**2 + v_cos_grid**2) * cos2_inv
 
-    # --- Step 4: Transform products to spectral ---
-    flux_a_spec = transform.grid_to_spectral(flux_a)
-    flux_b_spec = transform.grid_to_spectral(flux_b)
-    phi_flux_a_spec = transform.grid_to_spectral(phi_flux_a)
-    phi_flux_b_spec = transform.grid_to_spectral(phi_flux_b)
-    ke_spec = transform.grid_to_spectral(kinetic_energy)
+    # --- Step 4: Transform products to spectral (batched) ---
+    products_grid = jnp.stack(
+        [flux_a, flux_b, phi_flux_a, phi_flux_b, kinetic_energy]
+    )
+    products_spec = jax.vmap(transform.grid_to_spectral)(products_grid)
+    flux_a_spec, flux_b_spec = products_spec[0], products_spec[1]
+    phi_flux_a_spec, phi_flux_b_spec = products_spec[2], products_spec[3]
+    ke_spec = products_spec[4]
 
     # --- Step 5: Assemble spectral tendencies ---
     # The spectral tendency formulas (Hoskins & Simmons 1975):

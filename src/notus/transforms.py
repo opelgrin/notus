@@ -27,6 +27,7 @@ import functools
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from notus.grid import GaussianGrid
 from notus.spherical_harmonics import compute_legendre_polynomials
@@ -54,30 +55,32 @@ class SpectralTransform:
         # Reorganize into 3D array for JIT-friendly transforms.
         # legendre_3d[m, j, k] = P_n^m(sin phi_j) where k = n - m.
         # Shape: (T+1, n_lat, T+1), zero-padded when k > T - m.
+        #
+        # Built with numpy to avoid O(T²) JAX array copies from .at[].set().
         n_lat = grid.n_lat
         max_len = t + 1  # max number of n-values for any m (occurs at m=0)
 
-        leg3d = jnp.zeros((max_len, n_lat, max_len))
-        wleg3d = jnp.zeros((max_len, n_lat, max_len))
+        leg_flat_np = np.asarray(self.legendre_flat)
+        weights_np = np.asarray(grid.lat_weights)
+
+        leg3d = np.zeros((max_len, n_lat, max_len))
+        wleg3d = np.zeros((max_len, n_lat, max_len))
 
         for m in range(t + 1):
             for k in range(t - m + 1):
                 n = m + k
                 flat_idx = grid.spectral_index(m, n)
-                leg3d = leg3d.at[m, :, k].set(self.legendre_flat[:, flat_idx])
-                wleg3d = wleg3d.at[m, :, k].set(
-                    self.legendre_flat[:, flat_idx] * grid.lat_weights
-                )
+                leg3d[m, :, k] = leg_flat_np[:, flat_idx]
+                wleg3d[m, :, k] = leg_flat_np[:, flat_idx] * weights_np
 
-        self._legendre_3d = leg3d          # (T+1, n_lat, T+1)
-        self._weighted_legendre_3d = wleg3d  # (T+1, n_lat, T+1)
+        self._legendre_3d = jnp.array(leg3d)          # (T+1, n_lat, T+1)
+        self._weighted_legendre_3d = jnp.array(wleg3d)  # (T+1, n_lat, T+1)
 
         # Mask: mask_3d[m, k] = 1.0 if k <= T - m, else 0.0
-        mask = jnp.zeros((max_len, max_len))
+        mask = np.zeros((max_len, max_len))
         for m in range(t + 1):
-            for k in range(t - m + 1):
-                mask = mask.at[m, k].set(1.0)
-        self._mask = mask  # (T+1, T+1)
+            mask[m, : t - m + 1] = 1.0
+        self._mask = jnp.array(mask)  # (T+1, T+1)
 
     def grid_to_spectral(self, field: jnp.ndarray) -> jnp.ndarray:
         """Forward transform: grid-point field -> spectral coefficients.

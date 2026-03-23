@@ -302,6 +302,7 @@ def spectral_curl(
 def exponential_filter(
     truncation: int,
     dt: float,
+    rotation_rate: float = 7.292e-5,
     tau: float = 0.010938,
     order: int = 18,
 ) -> jnp.ndarray:
@@ -311,7 +312,7 @@ def exponential_filter(
 
         scaling(n) = exp(-attenuation · (n / T) ^ (2·order))
 
-    where attenuation = dt · Ω / tau and Ω = 7.292e-5 s⁻¹.
+    where attenuation = dt · Ω / tau.
 
     Default parameters match Dinosaur / NeuralGCM: ``tau = 0.010938``,
     ``order = 18``, giving a k^36 rolloff that removes > 99 % of the
@@ -324,6 +325,8 @@ def exponential_filter(
         Triangular truncation T.
     dt : float
         Timestep [s].
+    rotation_rate : float
+        Planetary angular velocity Ω [rad/s]. Default: Earth.
     tau : float
         Nondimensional filter timescale.
     order : int
@@ -337,8 +340,7 @@ def exponential_filter(
     """
     n_vals = _n_index_array(truncation)
     k = n_vals / truncation  # normalized wavenumber in [0, 1]
-    angular_velocity = 7.292e-5  # Earth's Ω [rad/s]
-    attenuation = dt * angular_velocity / tau
+    attenuation = dt * rotation_rate / tau
     return jnp.exp(-attenuation * k ** (2 * order))
 
 
