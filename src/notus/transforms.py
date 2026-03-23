@@ -73,7 +73,7 @@ class SpectralTransform:
                 leg3d[m, :, k] = leg_flat_np[:, flat_idx]
                 wleg3d[m, :, k] = leg_flat_np[:, flat_idx] * weights_np
 
-        self._legendre_3d = jnp.array(leg3d)          # (T+1, n_lat, T+1)
+        self._legendre_3d = jnp.array(leg3d)  # (T+1, n_lat, T+1)
         self._weighted_legendre_3d = jnp.array(wleg3d)  # (T+1, n_lat, T+1)
 
         # Mask: mask_3d[m, k] = 1.0 if k <= T - m, else 0.0
@@ -92,10 +92,10 @@ class SpectralTransform:
         for m in range(t + 1):
             for k in range(t - m + 1):
                 flat_i = m * max_len - m * (m - 1) // 2 + k
-                pack_idx[flat_i] = m * max_len + k   # row-major into (T+1, T+1)
+                pack_idx[flat_i] = m * max_len + k  # row-major into (T+1, T+1)
                 unpack_idx[m, k] = flat_i
-        self._pack_indices = jnp.array(pack_idx)      # (n_spectral,)
-        self._unpack_indices = jnp.array(unpack_idx)   # (T+1, T+1)
+        self._pack_indices = jnp.array(pack_idx)  # (n_spectral,)
+        self._unpack_indices = jnp.array(unpack_idx)  # (T+1, T+1)
 
     def grid_to_spectral(self, field: jnp.ndarray) -> jnp.ndarray:
         """Forward transform: grid-point field -> spectral coefficients.

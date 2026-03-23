@@ -37,8 +37,8 @@ class TestGaussianLatitudes:
     def test_latitudes_symmetric(self, t21_grid: GaussianGrid):
         """Gaussian latitudes should be symmetric about the equator."""
         n = t21_grid.n_lat
-        north = t21_grid.latitudes[:n // 2]
-        south = t21_grid.latitudes[n // 2:][::-1]
+        north = t21_grid.latitudes[: n // 2]
+        south = t21_grid.latitudes[n // 2 :][::-1]
         assert jnp.allclose(north, -south, atol=1e-14)
 
     def test_latitudes_range(self, t21_grid: GaussianGrid):

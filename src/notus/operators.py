@@ -288,9 +288,7 @@ def spectral_divergence(
         Spectral divergence coefficients, shape ``(n_spectral,)``.
     """
     inv_a = 1.0 / radius
-    return inv_a * (
-        zonal_derivative(a_hat, truncation) + _mu_derivative(b_hat, truncation)
-    )
+    return inv_a * (zonal_derivative(a_hat, truncation) + _mu_derivative(b_hat, truncation))
 
 
 def spectral_curl(
@@ -328,9 +326,7 @@ def spectral_curl(
         Spectral curl coefficients, shape ``(n_spectral,)``.
     """
     inv_a = 1.0 / radius
-    return inv_a * (
-        -zonal_derivative(b_hat, truncation) + _mu_derivative(a_hat, truncation)
-    )
+    return inv_a * (-zonal_derivative(b_hat, truncation) + _mu_derivative(a_hat, truncation))
 
 
 def exponential_filter(
@@ -387,9 +383,7 @@ def exponential_filter(
 def _laplacian_eigenvalues(truncation: int, radius: float) -> jnp.ndarray:
     """Pre-compute -n(n+1)/a² for all spectral indices."""
     vals = [
-        -n * (n + 1) / radius**2
-        for m in range(truncation + 1)
-        for n in range(m, truncation + 1)
+        -n * (n + 1) / radius**2 for m in range(truncation + 1) for n in range(m, truncation + 1)
     ]
     return jnp.array(vals)
 

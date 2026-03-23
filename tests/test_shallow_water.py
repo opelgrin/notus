@@ -100,12 +100,14 @@ def _run_shallow_water(
     intermediate = jax.tree.map(lambda x, f: x + dt * f, state, explicit)
     # Implicit solve: (I - dt·L)⁻¹
     delta_new, phi_new = implicit_inverse(
-        intermediate.divergence, intermediate.geopotential,
-        dt, si_config, t, a,
+        intermediate.divergence,
+        intermediate.geopotential,
+        dt,
+        si_config,
+        t,
+        a,
     )
-    current = _apply_filter(
-        intermediate.replace(divergence=delta_new, geopotential=phi_new)
-    )
+    current = _apply_filter(intermediate.replace(divergence=delta_new, geopotential=phi_new))
     lf_state = LeapfrogState(current=current, previous=state)
 
     # Robert-Asselin filter coefficient (Dinosaur uses 0.05)
@@ -119,13 +121,14 @@ def _run_shallow_water(
         l_div_prev, l_phi_prev = implicit_terms(
             lf_state.previous.divergence,
             lf_state.previous.geopotential,
-            si_config, t, a,
+            si_config,
+            t,
+            a,
         )
 
         # Leapfrog: intermediate = x_{n-1} + 2dt*(F(x_n) + (1-α)*L(x_{n-1}))
         intermediate = ShallowWaterState(
-            vorticity=lf_state.previous.vorticity
-            + 2.0 * dt * explicit_current.vorticity,
+            vorticity=lf_state.previous.vorticity + 2.0 * dt * explicit_current.vorticity,
             divergence=lf_state.previous.divergence
             + 2.0 * dt * (explicit_current.divergence + (1.0 - alpha) * l_div_prev),
             geopotential=lf_state.previous.geopotential
@@ -135,8 +138,12 @@ def _run_shallow_water(
         # Implicit solve: (I - η·L)⁻¹ where η = 2dt·α
         eta = 2.0 * dt * alpha
         delta_new, phi_new = implicit_inverse(
-            intermediate.divergence, intermediate.geopotential,
-            eta, si_config, t, a,
+            intermediate.divergence,
+            intermediate.geopotential,
+            eta,
+            si_config,
+            t,
+            a,
         )
         future = intermediate.replace(divergence=delta_new, geopotential=phi_new)
 

@@ -109,10 +109,6 @@ def implicit_inverse(
     # (eigenvalues are negative, so -step_size²·Φ₀·eigenvalues > 0)
     inv_schur = 1.0 / (1.0 - step_size**2 * phi0 * eigenvalues)
 
-    div_out = inv_schur * (
-        divergence - step_size * eigenvalues * geopotential
-    )
-    phi_out = inv_schur * (
-        -step_size * phi0 * divergence + geopotential
-    )
+    div_out = inv_schur * (divergence - step_size * eigenvalues * geopotential)
+    phi_out = inv_schur * (-step_size * phi0 * divergence + geopotential)
     return div_out, phi_out

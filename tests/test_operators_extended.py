@@ -102,9 +102,7 @@ class TestUVFromVorDiv:
         assert jnp.allclose(u_cos_grid, expected_u, atol=1e-6)
         assert jnp.allclose(v_cos_grid, expected_v, atol=1e-6)
 
-    def test_nondivergent_gives_zero_v_potential(
-        self, t21_transform: SpectralTransform, earth
-    ):
+    def test_nondivergent_gives_zero_v_potential(self, t21_transform: SpectralTransform, earth):
         """With δ=0, the velocity potential χ=0 so winds come only from ψ."""
         grid = t21_transform.grid
         n_spec = grid.n_spectral_coeffs
@@ -121,9 +119,7 @@ class TestUVFromVorDiv:
 
 
 class TestSpectralCurlDivergence:
-    def test_balanced_state_zero_tendencies(
-        self, t21_transform: SpectralTransform, earth
-    ):
+    def test_balanced_state_zero_tendencies(self, t21_transform: SpectralTransform, earth):
         """For solid-body rotation, vorticity and divergence tendencies ~ 0.
 
         This is the key consistency test: the curl/div operators applied

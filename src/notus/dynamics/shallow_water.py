@@ -94,8 +94,15 @@ def shallow_water_tendencies(
     @jax.jit
     def tendency(state: ShallowWaterState) -> ShallowWaterState:
         return _tendency_impl(
-            state, transform, t, a, rotation_rate, sin_lat, cos_lat,
-            diffusion_order, diffusion_timescale,
+            state,
+            transform,
+            t,
+            a,
+            rotation_rate,
+            sin_lat,
+            cos_lat,
+            diffusion_order,
+            diffusion_timescale,
         )
 
     return tendency
@@ -138,10 +145,15 @@ def shallow_water_tendencies_eager(
     """
     grid = transform.grid
     return _tendency_impl(
-        state, transform,
-        grid.truncation, planet.radius, planet.rotation_rate,
-        grid.sin_lat, grid.cos_lat,
-        diffusion_order, diffusion_timescale,
+        state,
+        transform,
+        grid.truncation,
+        planet.radius,
+        planet.rotation_rate,
+        grid.sin_lat,
+        grid.cos_lat,
+        diffusion_order,
+        diffusion_timescale,
     )
 
 
@@ -158,14 +170,10 @@ def _tendency_impl(
 ) -> ShallowWaterState:
     """Core tendency computation shared by JIT and eager paths."""
     # --- Step 1: Reconstruct cosine-weighted winds (spectral) ---
-    u_cos_spec, v_cos_spec = uv_from_vordiv(
-        state.vorticity, state.divergence, t, a
-    )
+    u_cos_spec, v_cos_spec = uv_from_vordiv(state.vorticity, state.divergence, t, a)
 
     # --- Step 2: Transform to grid (batched) ---
-    fields_spec = jnp.stack(
-        [state.vorticity, u_cos_spec, v_cos_spec, state.geopotential]
-    )
+    fields_spec = jnp.stack([state.vorticity, u_cos_spec, v_cos_spec, state.geopotential])
     fields_grid = jax.vmap(transform.spectral_to_grid)(fields_spec)
     vort_grid, u_cos_grid, v_cos_grid, phi_grid = fields_grid
 
@@ -181,9 +189,7 @@ def _tendency_impl(
     kinetic_energy = 0.5 * (u_cos_grid**2 + v_cos_grid**2) * cos2_inv
 
     # --- Step 4: Transform products to spectral (batched) ---
-    products_grid = jnp.stack(
-        [flux_a, flux_b, phi_flux_a, phi_flux_b, kinetic_energy]
-    )
+    products_grid = jnp.stack([flux_a, flux_b, phi_flux_a, phi_flux_b, kinetic_energy])
     products_spec = jax.vmap(transform.grid_to_spectral)(products_grid)
     flux_a_spec, flux_b_spec = products_spec[0], products_spec[1]
     phi_flux_a_spec, phi_flux_b_spec = products_spec[2], products_spec[3]
@@ -191,19 +197,13 @@ def _tendency_impl(
 
     # --- Step 5: Assemble spectral tendencies ---
     vort_tend = -spectral_divergence(flux_a_spec, flux_b_spec, t, a)
-    div_tend = -spectral_curl(flux_a_spec, flux_b_spec, t, a) - laplacian(
-        ke_spec, t, a
-    )
+    div_tend = -spectral_curl(flux_a_spec, flux_b_spec, t, a) - laplacian(ke_spec, t, a)
     phi_tend = -spectral_divergence(phi_flux_a_spec, phi_flux_b_spec, t, a)
 
     # --- Step 6: Hyperdiffusion for numerical stability ---
     if diffusion_order > 0:
-        vort_tend += hyperdiffusion(
-            state.vorticity, t, a, diffusion_order, diffusion_timescale
-        )
-        div_tend += hyperdiffusion(
-            state.divergence, t, a, diffusion_order, diffusion_timescale
-        )
+        vort_tend += hyperdiffusion(state.vorticity, t, a, diffusion_order, diffusion_timescale)
+        div_tend += hyperdiffusion(state.divergence, t, a, diffusion_order, diffusion_timescale)
 
     return ShallowWaterState(
         vorticity=vort_tend,
