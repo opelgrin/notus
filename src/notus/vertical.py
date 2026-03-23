@@ -30,8 +30,6 @@ References
 
 from __future__ import annotations
 
-import functools
-
 import jax.numpy as jnp
 import numpy as np
 
@@ -125,29 +123,9 @@ def geopotential(
     jnp.ndarray
         Geopotential at full levels, shape ``(n_levels, n_spectral)``.
     """
-    sigma_full_key = tuple(np.asarray(levels.sigma_full).tolist())
-    weights = _cached_geopotential_weights(levels.n_levels, sigma_full_key, gas_constant)
+    weights = jnp.array(geopotential_weights(levels, gas_constant))
     phi_diff = jnp.einsum("kj,j...->k...", weights, temperature)
     return surface_geopotential + phi_diff
-
-
-@functools.lru_cache(maxsize=16)
-def _cached_geopotential_weights(
-    n_levels: int,
-    sigma_full_tuple: tuple[float, ...],
-    gas_constant: float,
-) -> jnp.ndarray:
-    """Cached version of geopotential weights, keyed by hashable args."""
-    centers = np.array(sigma_full_tuple)
-    alpha = np.diff(np.log(centers), append=0) / 2
-    alpha[-1] = -np.log(centers[-1])
-
-    weights = np.zeros((n_levels, n_levels))
-    for j in range(n_levels):
-        weights[j, j] = alpha[j]
-        for k in range(j + 1, n_levels):
-            weights[j, k] = alpha[k] + alpha[k - 1]
-    return jnp.array(gas_constant * weights)
 
 
 def surface_pressure_tendency(

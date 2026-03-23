@@ -154,6 +154,7 @@ def _tendency_impl(
         u, v = uv_from_vordiv(vort, div, t, a)
         return jnp.stack([u, v])
 
+    # Shape: (n_levels, 2, n_spectral) — vmap maps over the level axis
     vort_div_stacked = jnp.stack([state.vorticity, state.divergence], axis=1)
     uv_spec = jax.vmap(_uv_at_level)(vort_div_stacked)
     u_cos_spec = uv_spec[:, 0, :]
@@ -250,6 +251,9 @@ def _grid_point_tendencies(
     sd = sigma_dot(column_div, levels)
     vert_adv_temp = vertical_advection(sd, t_grid, levels)
 
+    # Adiabatic heating κ·T·(ω/p), split for semi-implicit scheme:
+    # - T_ref part uses g_term = v⃗·∇ln(ps) only (D-dependent part is implicit)
+    # - T' part uses g_term = D + v⃗·∇ln(ps) (full explicit contribution)
     omega_p_explicit = omega_over_pressure(v_dot_grad_lnps, v_dot_grad_lnps, levels)
     omega_p_full = omega_over_pressure(column_div, v_dot_grad_lnps, levels)
     adiabatic = kappa * (t_ref_bc * omega_p_explicit + t_prime_grid * omega_p_full)
