@@ -15,7 +15,6 @@ Core components
 
 from notus.constants import EARTH, PlanetaryConstants
 from notus.grid import GaussianGrid
-from notus.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
 from notus.operators import (
     hyperdiffusion,
     inverse_laplacian,
@@ -26,8 +25,10 @@ from notus.operators import (
     uv_from_vordiv,
     zonal_derivative,
 )
+from notus.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
+from notus.vertical import geopotential
 
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "ShallowWaterState",
     "SigmaLevels",
     "SpectralTransform",
+    "geopotential",
     "hyperdiffusion",
     "inverse_laplacian",
     "laplacian",
