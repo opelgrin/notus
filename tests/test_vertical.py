@@ -5,7 +5,13 @@ import jax.numpy as jnp
 import numpy as np
 
 from notus.sigma import uniform_sigma_levels
-from notus.vertical import geopotential, geopotential_weights, sigma_ratios
+from notus.vertical import (
+    geopotential,
+    geopotential_weights,
+    sigma_dot,
+    sigma_ratios,
+    surface_pressure_tendency,
+)
 
 
 jax.config.update("jax_enable_x64", True)
@@ -188,3 +194,140 @@ class TestGeopotential:
 
         for k in range(n_levels):
             np.testing.assert_allclose(phi[k], 42.0, rtol=1e-14)
+
+
+class TestSurfacePressureTendency:
+    """Tests for the surface pressure tendency computation."""
+
+    def test_uniform_divergence(self) -> None:
+        """Uniform D at all levels → tendency = -D (since Σ Δσ = 1)."""
+        n_levels = 10
+        levels = uniform_sigma_levels(n_levels)
+        d_val = 3.5
+        column_div = jnp.full((n_levels, 4), d_val)
+
+        tend = surface_pressure_tendency(column_div, levels)
+
+        np.testing.assert_allclose(tend, -d_val, rtol=1e-14)
+
+    def test_zero_divergence(self) -> None:
+        """Zero divergence → zero tendency."""
+        levels = uniform_sigma_levels(5)
+        column_div = jnp.zeros((5, 3))
+
+        tend = surface_pressure_tendency(column_div, levels)
+
+        np.testing.assert_allclose(tend, 0.0, atol=1e-15)
+
+    def test_single_nonzero_level(self) -> None:
+        """Divergence only at level k → tendency = -D_k · Δσ_k."""
+        levels = uniform_sigma_levels(4)
+        column_div = jnp.zeros((4, 1))
+        column_div = column_div.at[2, 0].set(8.0)
+
+        tend = surface_pressure_tendency(column_div, levels)
+
+        expected = -8.0 * float(levels.dsigma[2])
+        np.testing.assert_allclose(tend[0], expected, rtol=1e-14)
+
+    def test_shape(self) -> None:
+        """(n_levels, n_spectral) → (n_spectral,)."""
+        levels = uniform_sigma_levels(8)
+        column_div = jnp.ones((8, 42))
+
+        tend = surface_pressure_tendency(column_div, levels)
+
+        assert tend.shape == (42,)
+
+    def test_single_level(self) -> None:
+        """Single level: tendency = -D (Δσ = 1)."""
+        levels = uniform_sigma_levels(1)
+        column_div = jnp.array([[5.0]])
+
+        tend = surface_pressure_tendency(column_div, levels)
+
+        np.testing.assert_allclose(tend[0], -5.0, rtol=1e-14)
+
+
+class TestSigmaDot:
+    """Tests for the sigma-dot (vertical velocity) computation."""
+
+    def test_boundary_conditions(self) -> None:
+        """σ̇ = 0 at top and surface for any input."""
+        levels = uniform_sigma_levels(10)
+        # Random-ish divergence profile
+        column_div = jnp.array([1, -2, 3, -1, 2, -3, 1, 0, 2, -1])[:, None]
+
+        sd = sigma_dot(column_div, levels)
+
+        np.testing.assert_equal(float(sd[0, 0]), 0.0)
+        np.testing.assert_equal(float(sd[-1, 0]), 0.0)
+
+    def test_uniform_divergence_gives_zero(self) -> None:
+        """Uniform D with uniform levels → σ̇ = 0 everywhere.
+
+        Proof: C_k = D·k/L, C_L = D, σ_{k+1/2} = k/L
+        → σ̇ = (k/L)·D - D·k/L = 0.
+        """
+        n_levels = 8
+        levels = uniform_sigma_levels(n_levels)
+        column_div = jnp.full((n_levels, 3), 2.5)
+
+        sd = sigma_dot(column_div, levels)
+
+        np.testing.assert_allclose(sd, 0.0, atol=1e-14)
+
+    def test_hand_computed_3_levels(self) -> None:
+        """3 uniform levels, D = [3, 0, 0].
+
+        Δσ = 1/3, interfaces [0, 1/3, 2/3, 1]
+        C_1 = 3·(1/3) = 1, C_2 = 1, C_3 = 1 = C_L
+        σ̇[0] = 0                         (top)
+        σ̇[1] = (1/3)·1 - 1 = -2/3
+        σ̇[2] = (2/3)·1 - 1 = -1/3
+        σ̇[3] = 0                         (surface)
+        """
+        levels = uniform_sigma_levels(3)
+        column_div = jnp.array([[3.0], [0.0], [0.0]])
+
+        sd = sigma_dot(column_div, levels)
+
+        expected = jnp.array([[0.0], [-2.0 / 3.0], [-1.0 / 3.0], [0.0]])
+        np.testing.assert_allclose(sd, expected, atol=1e-14)
+
+    def test_shape(self) -> None:
+        """(n_levels, ...) → (n_levels + 1, ...)."""
+        levels = uniform_sigma_levels(6)
+        column_div = jnp.ones((6, 10))
+
+        sd = sigma_dot(column_div, levels)
+
+        assert sd.shape == (7, 10)
+
+    def test_single_level(self) -> None:
+        """Single level: σ̇ = [0, 0] (only boundaries)."""
+        levels = uniform_sigma_levels(1)
+        column_div = jnp.array([[7.0]])
+
+        sd = sigma_dot(column_div, levels)
+
+        assert sd.shape == (2, 1)
+        np.testing.assert_allclose(sd, 0.0, atol=1e-15)
+
+    def test_consistency_with_surface_tendency(self) -> None:
+        """σ̇ at surface = 0 is consistent with the surface pressure tendency.
+
+        The formula σ̇_L = σ_L · C_L - C_L = 0 holds because σ_L = 1.
+        Verify that sigma_dot[-1] = 0 even when the surface pressure
+        tendency is large.
+        """
+        levels = uniform_sigma_levels(5)
+        column_div = jnp.array([10.0, -5.0, 3.0, -8.0, 20.0])[:, None]
+
+        tend = surface_pressure_tendency(column_div, levels)
+        sd = sigma_dot(column_div, levels)
+
+        # Surface pressure tendency should be nonzero
+        assert float(jnp.abs(tend[0])) > 0
+        # But σ̇ at surface is exactly 0
+        np.testing.assert_allclose(float(sd[-1, 0]), 0.0, atol=1e-13)

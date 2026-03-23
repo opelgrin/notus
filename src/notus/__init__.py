@@ -28,7 +28,7 @@ from notus.operators import (
 from notus.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
-from notus.vertical import geopotential
+from notus.vertical import geopotential, sigma_dot, surface_pressure_tendency
 
 
 __all__ = [
@@ -40,6 +40,7 @@ __all__ = [
     "SigmaLevels",
     "SpectralTransform",
     "geopotential",
+    "sigma_dot",
     "hyperdiffusion",
     "inverse_laplacian",
     "laplacian",
@@ -47,6 +48,7 @@ __all__ = [
     "spectral_curl",
     "spectral_divergence",
     "standard_sigma_levels",
+    "surface_pressure_tendency",
     "uniform_sigma_levels",
     "uv_from_vordiv",
     "zonal_derivative",
