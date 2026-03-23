@@ -30,6 +30,7 @@ from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
 from notus.vertical import (
     geopotential,
+    omega_over_pressure,
     sigma_dot,
     surface_pressure_tendency,
     vertical_advection,
@@ -49,6 +50,7 @@ __all__ = [
     "inverse_laplacian",
     "laplacian",
     "meridional_derivative",
+    "omega_over_pressure",
     "sigma_dot",
     "spectral_curl",
     "spectral_divergence",

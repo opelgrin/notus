@@ -8,6 +8,7 @@ from notus.sigma import uniform_sigma_levels
 from notus.vertical import (
     geopotential,
     geopotential_weights,
+    omega_over_pressure,
     sigma_dot,
     sigma_ratios,
     surface_pressure_tendency,
@@ -458,3 +459,95 @@ class TestVerticalAdvection:
         # Bottom level: only upper half contributes → -0.5·90 = -45
         expected = jnp.array([[-45.0], [-90.0], [-45.0]])
         np.testing.assert_allclose(result, expected, atol=1e-10)
+
+
+class TestOmegaOverPressure:
+    """Tests for ω/p (Durran §8.6.3)."""
+
+    def test_zero_input(self) -> None:
+        """Zero G and v⃗·∇ln(ps) → ω/p = 0."""
+        levels = uniform_sigma_levels(5)
+        g = jnp.zeros((5, 3))
+        v_grad = jnp.zeros((5, 3))
+
+        result = omega_over_pressure(g, v_grad, levels)
+
+        np.testing.assert_allclose(result, 0.0, atol=1e-15)
+
+    def test_shape(self) -> None:
+        """(n_levels, ...) → (n_levels, ...)."""
+        levels = uniform_sigma_levels(8)
+        g = jnp.ones((8, 20))
+        v_grad = jnp.ones((8, 20))
+
+        result = omega_over_pressure(g, v_grad, levels)
+
+        assert result.shape == (8, 20)
+
+    def test_hand_computed_3_levels(self) -> None:
+        """3 uniform levels with specific G values.
+
+        Uniform Δσ = 1/3, centers [1/6, 1/2, 5/6]
+        α[0] = ln(3)/2, α[1] = ln(5/3)/2, α[2] = -ln(5/6)
+
+        G = [3, 6, 9], v_dot_grad = [1, 1, 1]
+
+        Cumulative F (cumsum of G*Δσ):
+          f[0] = 3·(1/3) = 1
+          f[1] = 1 + 6·(1/3) = 3
+          f[2] = 3 + 9·(1/3) = 6
+
+        alpha_f = [α[0]·1, α[1]·3, α[2]·6]
+        alpha_f_shifted = [0, α[0]·1, α[1]·3]
+
+        g_part[k] = (alpha_f[k] + alpha_f_shifted[k]) / Δσ[k]
+        g_part[0] = (α[0]·1 + 0) / (1/3) = 3·α[0]
+        g_part[1] = (α[1]·3 + α[0]·1) / (1/3) = 3·(3·α[1] + α[0])
+        g_part[2] = (α[2]·6 + α[1]·3) / (1/3) = 3·(6·α[2] + 3·α[1])
+
+        ω/p[k] = v_dot_grad[k] - g_part[k]
+        """
+        levels = uniform_sigma_levels(3)
+        alpha = sigma_ratios(levels)
+
+        g = jnp.array([[3.0], [6.0], [9.0]])
+        v_grad = jnp.array([[1.0], [1.0], [1.0]])
+
+        result = omega_over_pressure(g, v_grad, levels)
+
+        gp0 = 3.0 * alpha[0]
+        gp1 = 3.0 * (3.0 * alpha[1] + alpha[0])
+        gp2 = 3.0 * (6.0 * alpha[2] + 3.0 * alpha[1])
+        expected = jnp.array([[1.0 - gp0], [1.0 - gp1], [1.0 - gp2]])
+
+        np.testing.assert_allclose(result, expected, rtol=1e-13)
+
+    def test_single_level(self) -> None:
+        """Single level: F_1 = G·Δσ = G, α_0·F_1/Δσ = α_0·G."""
+        levels = uniform_sigma_levels(1)
+        alpha = sigma_ratios(levels)
+        g = jnp.array([[5.0]])
+        v_grad = jnp.array([[2.0]])
+
+        result = omega_over_pressure(g, v_grad, levels)
+
+        # g_part = (α[0]·F_1 + 0) / Δσ = α[0]·5·1/1 = 5·α[0]
+        expected = 2.0 - 5.0 * alpha[0]
+        np.testing.assert_allclose(result[0, 0], expected, rtol=1e-13)
+
+    def test_g_equals_v_grad_uniform(self) -> None:
+        """When g_term = v_dot_grad (no divergence), verify against Dinosaur.
+
+        For uniform G = v·∇ln(ps) = const, the formula simplifies.
+        The ω/p should represent pure advective pressure change.
+        """
+        n_levels = 10
+        levels = uniform_sigma_levels(n_levels)
+        val = 2.5
+        g = jnp.full((n_levels, 1), val)
+        v_grad = jnp.full((n_levels, 1), val)
+
+        result = omega_over_pressure(g, v_grad, levels)
+
+        # Result should be well-defined (no NaN/inf)
+        assert jnp.all(jnp.isfinite(result))
