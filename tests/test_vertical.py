@@ -75,7 +75,9 @@ class TestGeopotentialWeights:
                 else:
                     expected = R * (alpha[j] + alpha[j - 1])
                 np.testing.assert_allclose(
-                    g[i, j], expected, rtol=1e-14,
+                    g[i, j],
+                    expected,
+                    rtol=1e-14,
                     err_msg=f"Mismatch at G[{i},{j}]",
                 )
 
@@ -85,9 +87,7 @@ class TestGeopotentialWeights:
         g = geopotential_weights(levels, R)
         for i in range(levels.n_levels):
             for j in range(i):
-                np.testing.assert_equal(
-                    g[i, j], 0.0, err_msg=f"G[{i},{j}] should be zero"
-                )
+                np.testing.assert_equal(g[i, j], 0.0, err_msg=f"G[{i},{j}] should be zero")
 
 
 class TestGeopotential:

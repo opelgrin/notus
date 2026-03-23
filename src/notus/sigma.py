@@ -67,10 +67,7 @@ class SigmaLevels:
         """
         min_interfaces = 2
         if sigma_half.ndim != 1 or len(sigma_half) < min_interfaces:
-            msg = (
-                "sigma_half must be 1-D with at least 2 elements, "
-                f"got shape {sigma_half.shape}"
-            )
+            msg = f"sigma_half must be 1-D with at least 2 elements, got shape {sigma_half.shape}"
             raise ValueError(msg)
         if not np.isclose(sigma_half[0], 0.0):
             msg = f"sigma_half must start at 0 (top of atmosphere), got {sigma_half[0]}"

@@ -126,9 +126,7 @@ def geopotential(
         Geopotential at full levels, shape ``(n_levels, n_spectral)``.
     """
     sigma_full_key = tuple(np.asarray(levels.sigma_full).tolist())
-    weights = _cached_geopotential_weights(
-        levels.n_levels, sigma_full_key, gas_constant
-    )
+    weights = _cached_geopotential_weights(levels.n_levels, sigma_full_key, gas_constant)
     phi_diff = jnp.einsum("kj,j...->k...", weights, temperature)
     return surface_geopotential + phi_diff
 
@@ -247,6 +245,4 @@ def sigma_dot(
     internal_cumulative = cumulative[:-1]  # C_1 through C_{L-1}
     internal_sigma_dot = internal_sigma * c_total - internal_cumulative
 
-    return jnp.concatenate(
-        [zero_boundary, internal_sigma_dot, zero_boundary], axis=0
-    )
+    return jnp.concatenate([zero_boundary, internal_sigma_dot, zero_boundary], axis=0)
