@@ -368,8 +368,10 @@ def pe_implicit_terms(
 
     eigenvalues = _laplacian_eigenvalues(truncation, radius)  # (n_spec,)
 
-    # L_δ = -∇²(G @ T + R·T_ref·lnps) = -eigenvalues · (G @ T + R·T_ref·lnps)
-    phi = geo_w @ state.temperature + r_gas * t_ref[:, None] * state.log_surface_pressure[None, :]
+    # L_δ = -∇²(G @ T' + R·T_ref·lnps) where T' = T - T_ref
+    # T_ref is spatially constant → only mode (0,0) in spectral space
+    t_prime = state.temperature.at[:, 0].add(-t_ref)
+    phi = geo_w @ t_prime + r_gas * t_ref[:, None] * state.log_surface_pressure[None, :]
     l_div = -eigenvalues[None, :] * phi
 
     # Temperature implicit tendency: -H @ divergence
@@ -440,10 +442,10 @@ def pe_implicit_inverse(
     n_levels = state.n_levels
 
     # --- Step 1: geopotential intermediate ---
-    # Φ* = G @ T* + R·T_ref·lnps*   shape (L, n_spec)
-    phi_star = (
-        geo_w @ state.temperature + r_gas * t_ref[:, None] * state.log_surface_pressure[None, :]
-    )
+    # Φ* = G @ T'* + R·T_ref·lnps*   where T'* = T* - T_ref
+    # T_ref is spatially constant → only mode (0,0) in spectral space
+    t_prime_star = state.temperature.at[:, 0].add(-t_ref)
+    phi_star = geo_w @ t_prime_star + r_gas * t_ref[:, None] * state.log_surface_pressure[None, :]
 
     # --- Step 2: right-hand side for δ solve ---
     # rhs = δ* - s·eigenvalues·Φ*

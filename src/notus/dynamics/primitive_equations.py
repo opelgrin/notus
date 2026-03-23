@@ -269,8 +269,8 @@ def _grid_point_tendencies(
     flux_a = zeta_a * u_cos_grid * cos2_inv
     flux_b = zeta_a * v_cos_grid * cos2_inv
     kinetic_energy = 0.5 * (u_cos_grid**2 + v_cos_grid**2) * cos2_inv
-    t_flux_a = t_grid * u_cos_grid * cos2_inv
-    t_flux_b = t_grid * v_cos_grid * cos2_inv
+    t_flux_a = t_prime_grid * u_cos_grid * cos2_inv
+    t_flux_b = t_prime_grid * v_cos_grid * cos2_inv
 
     # Vertical operations
     column_div = div_grid + v_dot_grad_lnps
