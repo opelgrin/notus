@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-import pytest
 
 from notus import EARTH, GaussianGrid, SpectralTransform
 from notus.dynamics.shallow_water import shallow_water_tendencies
 from notus.operators import exponential_filter
 from notus.state import ShallowWaterState
-from notus.timestepping.leapfrog import LeapfrogState, euler_step
+from notus.timestepping.leapfrog import LeapfrogState
 from notus.timestepping.semi_implicit import (
     SemiImplicitConfig,
     implicit_inverse,
@@ -78,6 +77,8 @@ def _run_shallow_water(
     Uses IMEX leapfrog (Dinosaur-style) with Robert-Asselin filter
     and exponential spectral filter for dealiasing stability.
     """
+    tendency_fn = shallow_water_tendencies(transform, EARTH)
+
     si_config = SemiImplicitConfig(mean_geopotential=mean_phi)
     grid = transform.grid
     t = grid.truncation
@@ -95,7 +96,7 @@ def _run_shallow_water(
         )
 
     # ---- First step: backward-forward Euler ----
-    explicit = shallow_water_tendencies(state, transform, EARTH)
+    explicit = tendency_fn(state)
     intermediate = jax.tree.map(lambda x, f: x + dt * f, state, explicit)
     # Implicit solve: (I - dt·L)⁻¹
     delta_new, phi_new = implicit_inverse(
@@ -112,9 +113,7 @@ def _run_shallow_water(
 
     # ---- Subsequent steps: IMEX leapfrog ----
     for _step in range(n_steps - 1):
-        explicit_current = shallow_water_tendencies(
-            lf_state.current, transform, EARTH
-        )
+        explicit_current = tendency_fn(lf_state.current)
 
         # Implicit tendency at the previous time level
         l_div_prev, l_phi_prev = implicit_terms(

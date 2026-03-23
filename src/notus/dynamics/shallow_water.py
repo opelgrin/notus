@@ -16,11 +16,17 @@ and E = (u² + v²)/2 is kinetic energy.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import jax
 import jax.numpy as jnp
 
 from notus.constants import PlanetaryConstants
 from notus.operators import (
+    _laplacian_eigenvalues,
+    _m_index_array,
+    _meridional_coupling,
+    _mu_derivative_coupling,
     hyperdiffusion,
     laplacian,
     spectral_curl,
@@ -32,16 +38,79 @@ from notus.transforms import SpectralTransform
 
 
 def shallow_water_tendencies(
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+    diffusion_order: int = 4,
+    diffusion_timescale: float = 2.0 * 3600.0,
+) -> Callable[[ShallowWaterState], ShallowWaterState]:
+    """Build a JIT-compiled explicit tendency function for the shallow water equations.
+
+    All nonlinear products are evaluated on the Gaussian grid, then
+    transformed to spectral space for tendency assembly.  Includes
+    biharmonic hyperdiffusion for stability.
+
+    The transform arrays and planet constants are closed over so that
+    ``jax.jit`` sees only the ``ShallowWaterState`` pytree as input.
+    This lets XLA fuse all spectral transforms, grid-point products,
+    and operator evaluations into a single compiled kernel.
+
+    Parameters
+    ----------
+    transform : SpectralTransform
+        Pre-computed spectral transform (arrays captured by closure).
+    planet : PlanetaryConstants
+        Planetary constants (radius, rotation_rate; captured by closure).
+    diffusion_order : int
+        Order of hyperdiffusion (4 = del-8, default). Set to 0 to disable.
+    diffusion_timescale : float
+        E-folding damping time for the smallest resolved scale [s].
+        Default: 2 hours.
+
+    Returns
+    -------
+    Callable[[ShallowWaterState], ShallowWaterState]
+        JIT-compiled function mapping state to tendencies
+        dζ/dt, dδ/dt, dΦ/dt in spectral space.
+    """
+    grid = transform.grid
+    t = grid.truncation
+    a = planet.radius
+    rotation_rate = planet.rotation_rate
+    sin_lat = grid.sin_lat
+    cos_lat = grid.cos_lat
+
+    # Pre-fetch cached operator coefficients at build time so that
+    # the JIT-compiled function captures only JAX arrays, not lru_cache lookups.
+    _laplacian_eigenvalues(t, a)
+    _m_index_array(t)
+    _meridional_coupling(t)
+    _mu_derivative_coupling(t)
+
+    @jax.jit
+    def tendency(state: ShallowWaterState) -> ShallowWaterState:
+        return _tendency_impl(
+            state, transform, t, a, rotation_rate, sin_lat, cos_lat,
+            diffusion_order, diffusion_timescale,
+        )
+
+    return tendency
+
+
+def shallow_water_tendencies_eager(
     state: ShallowWaterState,
     transform: SpectralTransform,
     planet: PlanetaryConstants,
     diffusion_order: int = 4,
     diffusion_timescale: float = 2.0 * 3600.0,
 ) -> ShallowWaterState:
-    """Compute explicit tendencies for the shallow water equations.
+    """Compute explicit tendencies for the shallow water equations (eager).
 
-    All nonlinear products are evaluated on the grid, then transformed to
-    spectral space.  Includes biharmonic hyperdiffusion for stability.
+    Convenience wrapper that evaluates tendencies immediately without
+    JIT compilation.  Useful for debugging, single-shot diagnostics,
+    or when the caller manages JIT boundaries externally.
+
+    For time-stepping loops, prefer :func:`shallow_water_tendencies`
+    which returns a JIT-compiled callable.
 
     Parameters
     ----------
@@ -63,15 +132,32 @@ def shallow_water_tendencies(
         Tendencies dζ/dt, dδ/dt, dΦ/dt in spectral space.
     """
     grid = transform.grid
-    t = grid.truncation
-    a = planet.radius
+    return _tendency_impl(
+        state, transform,
+        grid.truncation, planet.radius, planet.rotation_rate,
+        grid.sin_lat, grid.cos_lat,
+        diffusion_order, diffusion_timescale,
+    )
 
+
+def _tendency_impl(
+    state: ShallowWaterState,
+    transform: SpectralTransform,
+    t: int,
+    a: float,
+    rotation_rate: float,
+    sin_lat: jnp.ndarray,
+    cos_lat: jnp.ndarray,
+    diffusion_order: int,
+    diffusion_timescale: float,
+) -> ShallowWaterState:
+    """Core tendency computation shared by JIT and eager paths."""
     # --- Step 1: Reconstruct cosine-weighted winds (spectral) ---
     u_cos_spec, v_cos_spec = uv_from_vordiv(
         state.vorticity, state.divergence, t, a
     )
 
-    # --- Step 2: Transform to grid (batched for fewer kernel launches) ---
+    # --- Step 2: Transform to grid (batched) ---
     fields_spec = jnp.stack(
         [state.vorticity, u_cos_spec, v_cos_spec, state.geopotential]
     )
@@ -79,28 +165,14 @@ def shallow_water_tendencies(
     vort_grid, u_cos_grid, v_cos_grid, phi_grid = fields_grid
 
     # --- Step 3: Grid-point computations ---
-    # Coriolis parameter: f = 2Ω·sin(φ)
-    f_coriolis = 2.0 * planet.rotation_rate * grid.sin_lat[:, None]
-
-    # Absolute vorticity
+    f_coriolis = 2.0 * rotation_rate * sin_lat[:, None]
     zeta_a = vort_grid + f_coriolis
+    cos2_inv = 1.0 / (cos_lat[:, None] ** 2)
 
-    # 1/cos²(φ) factor — safe because Gaussian grid never touches poles
-    cos2_inv = 1.0 / (grid.cos_lat[:, None] ** 2)
-
-    # Flux terms divided by cos(φ) for spectral curl/divergence:
-    #   A = ζ_a·u/cos(φ) = ζ_a·U/cos²(φ)
-    #   B = ζ_a·v/cos(φ) = ζ_a·V/cos²(φ)
     flux_a = zeta_a * u_cos_grid * cos2_inv
     flux_b = zeta_a * v_cos_grid * cos2_inv
-
-    # Geopotential flux terms:
-    #   C = Φ·u/cos(φ) = Φ·U/cos²(φ)
-    #   D = Φ·v/cos(φ) = Φ·V/cos²(φ)
     phi_flux_a = phi_grid * u_cos_grid * cos2_inv
     phi_flux_b = phi_grid * v_cos_grid * cos2_inv
-
-    # Kinetic energy: E = (u² + v²)/2 = (U² + V²)/(2·cos²(φ))
     kinetic_energy = 0.5 * (u_cos_grid**2 + v_cos_grid**2) * cos2_inv
 
     # --- Step 4: Transform products to spectral (batched) ---
@@ -113,20 +185,10 @@ def shallow_water_tendencies(
     ke_spec = products_spec[4]
 
     # --- Step 5: Assemble spectral tendencies ---
-    # The spectral tendency formulas (Hoskins & Simmons 1975):
-    #   dζ/dt = -div(ζ_a·v⃗)
-    #   dδ/dt = +curl(ζ_a·v⃗) - ∇²(Φ+E)
-    #   dΦ/dt = -div(Φ·v⃗)
-    #
-    # The EXPLICIT tendencies exclude the linear gravity-wave coupling
-    # (-∇²Φ for divergence, -Φ₀δ for geopotential) which is handled
-    # implicitly by the semi-implicit time stepper.  Only -∇²(KE) remains.
     vort_tend = -spectral_divergence(flux_a_spec, flux_b_spec, t, a)
-
     div_tend = -spectral_curl(flux_a_spec, flux_b_spec, t, a) - laplacian(
         ke_spec, t, a
     )
-
     phi_tend = -spectral_divergence(phi_flux_a_spec, phi_flux_b_spec, t, a)
 
     # --- Step 6: Hyperdiffusion for numerical stability ---
