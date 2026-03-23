@@ -4,14 +4,19 @@ Solves the shallow water equations in vorticity-divergence form using the
 pseudo-spectral method: nonlinear products are computed on the Gaussian
 grid, then transformed to spectral space for tendency assembly.
 
-The equations:
+The full continuous equations:
 
     dζ/dt = -div(ζ_a · v⃗)                    (vorticity)
-    dδ/dt = +curl(ζ_a · v⃗) - ∇²(Φ+E)        (divergence)
+    dδ/dt = +curl(ζ_a · v⃗) - ∇²(Φ + E)      (divergence)
     dΦ/dt = -div(Φ · v⃗)                       (continuity)
 
 where ζ_a = ζ + f is absolute vorticity, Φ = g·h is geopotential,
 and E = (u² + v²)/2 is kinetic energy.
+
+Note: the -∇²Φ term in the divergence equation is split out and
+handled by the semi-implicit scheme (see :mod:`notus.timestepping.semi_implicit`).
+The explicit tendencies computed here therefore contain only
++curl(ζ_a·v⃗) - ∇²E for the divergence equation.
 """
 
 from __future__ import annotations

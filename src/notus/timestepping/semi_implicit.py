@@ -80,6 +80,27 @@ def implicit_inverse(
         [step_size·Φ₀    1            ] [Φ_out] = [Φ_in ]
 
     The Schur complement gives a diagonal solve in spectral space.
+
+    Parameters
+    ----------
+    divergence : jnp.ndarray
+        Intermediate spectral divergence, shape ``(n_spectral,)``.
+    geopotential : jnp.ndarray
+        Intermediate spectral geopotential, shape ``(n_spectral,)``.
+    step_size : float
+        Implicit step size, typically ``2 · dt · α`` [s] where α is the
+        implicit weighting from :class:`SemiImplicitConfig`.
+    config : SemiImplicitConfig
+        Semi-implicit configuration (provides Φ₀).
+    truncation : int
+        Triangular truncation.
+    radius : float
+        Planet radius [m].
+
+    Returns
+    -------
+    tuple[jnp.ndarray, jnp.ndarray]
+        Solved (δ_out, Φ_out), each shape ``(n_spectral,)``.
     """
     eigenvalues = _laplacian_eigenvalues(truncation, radius)  # -n(n+1)/a²
     phi0 = config.mean_geopotential

@@ -31,6 +31,7 @@ import functools
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 def compute_legendre_polynomials(
@@ -122,7 +123,6 @@ def _recurrence_coefficients(truncation: int) -> tuple[jnp.ndarray, jnp.ndarray]
 
     Returns flat arrays indexed by spectral_index(m, n).
     """
-    import numpy as np
 
     n_spectral = (truncation + 1) * (truncation + 2) // 2
     a = np.zeros(n_spectral)

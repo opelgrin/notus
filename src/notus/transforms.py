@@ -207,30 +207,9 @@ def _spectral_to_grid(
     fourier_full = jnp.zeros((fourier.shape[0], n_rfft), dtype=jnp.complex128)
     fourier_full = fourier_full.at[:, :max_len].set(fourier)
 
-    # The forward transform divided by (2*N_lon), so inverse multiplies by (2*N_lon).
-    # jnp.fft.irfft computes: (1/N) * sum c_m * exp(i*m*lambda) * N = sum c_m * exp(...)
-    # Wait — jnp.fft.irfft expects unnormalized FFT output.
-    # rfft(x)[m] = sum_k x[k] * exp(-2*pi*i*m*k/N)  (unnormalized)
-    # irfft(X)[k] = (1/N) * sum_m X[m] * exp(2*pi*i*m*k/N)
-    # Our forward gave: coeff = FFT / (2*N) * (Legendre stuff)
-    # So spectral -> fourier gives: fourier[j,m] = sum_n coeffs_n^m * P_n^m
-    # We want: f(lambda_k, phi_j) = sum_m fourier[j,m] * exp(i*m*lambda_k)
-    # Using irfft: f = irfft(X, N) = (1/N) * sum X[m] * exp(i*m*...)
-    # ... no, irfft actually does: sum X[m] * exp(2*pi*i*m*k/N) / N
-    # So we need X[m] = fourier[j,m] * N ... wait.
-    # Let's just think about it end-to-end:
-    # Forward: fft gives sum f*exp(-i*m*lam) with lam = 2*pi*k/N.
-    # We then divide by (2*N_lon).
-    # Inverse: we reconstruct fourier[j,m] from spectral coefficients.
-    # Then irfft(X, N) = (1/N) * sum_{m=0}^{N/2} X[m] * exp(i*2*pi*m*k/N) * weight
-    # where weight accounts for conjugate symmetry.
-    # To recover the original field: irfft(rfft(field)) = field * N ... no.
-    # Actually jnp.fft.irfft(jnp.fft.rfft(x)) = x (they are mutual inverses).
-    # So rfft(x)[m] / (2*N) was stored. To invert: multiply by (2*N) and irfft.
-    # The synthesis is: f(λ_k, φ_j) = Σ_m g_m(φ_j) · e^{imλ_k}
-    # irfft computes: x[k] = (1/N) Σ_m X[m] · e^{2πi·m·k/N}
-    # So we need to multiply by N to cancel the 1/N in irfft.
-    # (The forward divided by 2N; the factor of 2 accounts for the
-    # longitude integral normalization 2π/(4π) = 1/2, which is already
-    # absorbed into the spectral coefficients and doesn't need undoing.)
+    # Normalization: the forward transform divided by (2·N_lon).  The factor
+    # of 2 absorbs the longitude integral weight 2π/(4π) = 1/2, which is
+    # baked into the spectral coefficients permanently.  The factor of N_lon
+    # compensates jnp.fft.rfft being unnormalized, and must be undone here:
+    # irfft divides by N_lon internally, so we pre-multiply by N_lon.
     return jnp.fft.irfft(fourier_full * n_lon, n=n_lon, axis=1)

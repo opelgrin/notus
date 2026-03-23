@@ -10,21 +10,20 @@ Key identities for a scalar f with spectral coefficients f̂ₙᵐ:
 - **Inverse Laplacian:** ∇⁻²f has coefficients  -a²/[n(n+1)] · f̂ₙᵐ  (n>0)
 
 For vector operations (gradient, divergence, curl), we use the
-vorticity-divergence formulation where the wind is decomposed as:
+vorticity-divergence formulation.  From streamfunction ψ and velocity
+potential χ:
 
-    u = -1/(a cos φ) ∂ψ/∂φ + 1/(a cos φ) ∂χ/∂λ
-    v =  1/a ∂ψ/∂λ/(cos φ) ... [actually need careful treatment]
+    ζ = ∇²ψ  (vorticity)        ψ = ∇⁻²ζ
+    δ = ∇²χ  (divergence)       χ = ∇⁻²δ
 
-More precisely, from streamfunction ψ and velocity potential χ:
-    ζ = ∇²ψ  (vorticity)
-    δ = ∇²χ  (divergence)
+The cosine-weighted winds are then:
 
-So:  ψ = ∇⁻²ζ,  χ = ∇⁻²δ
+    U = u·cos φ = (1/a)·[−cos φ · ∂ψ/∂φ  +  ∂χ/∂λ]
+    V = v·cos φ = (1/a)·[ ∂ψ/∂λ           +  cos φ · ∂χ/∂φ]
 
-The gradient in spectral space uses recurrence relations on P̄ₙᵐ for
-the meridional derivative.  However, it is more practical to compute
-derivatives via the "cos(φ) · ∂f/∂φ" form which avoids 1/cos(φ)
-singularities.
+Working with U and V avoids 1/cos(φ) singularities at the poles.
+The meridional derivative is likewise computed in the "cos(φ)·∂f/∂φ"
+form using a Legendre recurrence relation.
 
 For the dynamical core, the key operations needed are:
 1. Laplacian / inverse Laplacian (trivial in spectral space)
@@ -60,6 +59,11 @@ def laplacian(
         Triangular truncation.
     radius : float
         Planet radius [m].
+
+    Returns
+    -------
+    jnp.ndarray
+        Spectral coefficients of ∇²f, same shape as *coeffs*.
     """
     eigenvalues = _laplacian_eigenvalues(truncation, radius)
     return coeffs * eigenvalues
@@ -161,6 +165,11 @@ def zonal_derivative(
         Spectral coefficients, shape ``(n_spectral,)``.
     truncation : int
         Triangular truncation.
+
+    Returns
+    -------
+    jnp.ndarray
+        Spectral coefficients of ∂f/∂λ, same shape as *coeffs*.
     """
     m_values = _m_index_array(truncation)
     return 1j * m_values * coeffs
@@ -186,6 +195,11 @@ def meridional_derivative(
         Spectral coefficients, shape ``(n_spectral,)``.
     truncation : int
         Triangular truncation.
+
+    Returns
+    -------
+    jnp.ndarray
+        Spectral coefficients of cos(φ)·∂f/∂φ, same shape as *coeffs*.
     """
     idx_lower, idx_upper, c_lower, c_upper = _meridional_coupling(truncation)
     return c_lower * coeffs[idx_lower] + c_upper * coeffs[idx_upper]
@@ -241,27 +255,37 @@ def spectral_divergence(
     truncation: int,
     radius: float,
 ) -> jnp.ndarray:
-    """Compute spectral divergence from cos²(φ)-scaled flux components.
+    """Compute spectral divergence from flux components divided by cos²(φ).
 
-    Given spectral transforms of A = F_u·cos(φ)/cos²(φ) and
-    B = F_v·cos(φ)/cos²(φ) where (F_u, F_v) are cosine-weighted fluxes,
-    computes the spectral divergence via integration by parts:
+    The caller provides spectral transforms of grid-point fields
+    ``A = F_λ / cos²(φ)`` and ``B = F_φ / cos²(φ)`` where F_λ and F_φ are
+    the cosine-weighted (u·cos φ, v·cos φ) flux components already
+    multiplied by the quantity being advected.
+
+    The spectral divergence is then:
 
         [∇·F]ₙᵐ = (1/a)·[im·Â + D_μ(B̂)]
 
-    where D_μ is the μ-derivative recurrence (integration by parts):
+    where D_μ is the μ-derivative recurrence:
         D_μ(f̂)ₙ = −(n+1)·ε(n,m)·f̂_{n−1} + n·ε(n+1,m)·f̂_{n+1}
 
     Parameters
     ----------
     a_hat : jnp.ndarray
-        Spectral coefficients of zonal flux / cos²(φ), shape ``(n_spectral,)``.
+        Spectral coefficients of the zonal flux divided by cos²(φ),
+        shape ``(n_spectral,)``.
     b_hat : jnp.ndarray
-        Spectral coefficients of meridional flux / cos²(φ), shape ``(n_spectral,)``.
+        Spectral coefficients of the meridional flux divided by cos²(φ),
+        shape ``(n_spectral,)``.
     truncation : int
         Triangular truncation.
     radius : float
         Planet radius [m].
+
+    Returns
+    -------
+    jnp.ndarray
+        Spectral divergence coefficients, shape ``(n_spectral,)``.
     """
     inv_a = 1.0 / radius
     return inv_a * (
@@ -275,23 +299,33 @@ def spectral_curl(
     truncation: int,
     radius: float,
 ) -> jnp.ndarray:
-    """Compute spectral curl (vertical component) from cos²(φ)-scaled flux components.
+    """Compute spectral curl (vertical component) from flux components divided by cos²(φ).
 
-    Given spectral transforms of A = F_u·cos(φ)/cos²(φ) and
-    B = F_v·cos(φ)/cos²(φ), computes the vertical curl:
+    Same input convention as :func:`spectral_divergence`: the caller
+    provides spectral transforms of ``A = F_λ / cos²(φ)`` and
+    ``B = F_φ / cos²(φ)``.
+
+    The spectral curl is:
 
         [curl_z(F)]ₙᵐ = (1/a)·[−im·B̂ + D_μ(Â)]
 
     Parameters
     ----------
     a_hat : jnp.ndarray
-        Spectral coefficients of zonal flux / cos²(φ), shape ``(n_spectral,)``.
+        Spectral coefficients of the zonal flux divided by cos²(φ),
+        shape ``(n_spectral,)``.
     b_hat : jnp.ndarray
-        Spectral coefficients of meridional flux / cos²(φ), shape ``(n_spectral,)``.
+        Spectral coefficients of the meridional flux divided by cos²(φ),
+        shape ``(n_spectral,)``.
     truncation : int
         Triangular truncation.
     radius : float
         Planet radius [m].
+
+    Returns
+    -------
+    jnp.ndarray
+        Spectral curl coefficients, shape ``(n_spectral,)``.
     """
     inv_a = 1.0 / radius
     return inv_a * (
