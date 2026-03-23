@@ -27,6 +27,7 @@ import functools
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from notus.grid import GaussianGrid
 from notus.spherical_harmonics import compute_legendre_polynomials
@@ -54,30 +55,47 @@ class SpectralTransform:
         # Reorganize into 3D array for JIT-friendly transforms.
         # legendre_3d[m, j, k] = P_n^m(sin phi_j) where k = n - m.
         # Shape: (T+1, n_lat, T+1), zero-padded when k > T - m.
+        #
+        # Built with numpy to avoid O(T²) JAX array copies from .at[].set().
         n_lat = grid.n_lat
         max_len = t + 1  # max number of n-values for any m (occurs at m=0)
 
-        leg3d = jnp.zeros((max_len, n_lat, max_len))
-        wleg3d = jnp.zeros((max_len, n_lat, max_len))
+        leg_flat_np = np.asarray(self.legendre_flat)
+        weights_np = np.asarray(grid.lat_weights)
+
+        leg3d = np.zeros((max_len, n_lat, max_len))
+        wleg3d = np.zeros((max_len, n_lat, max_len))
 
         for m in range(t + 1):
             for k in range(t - m + 1):
                 n = m + k
                 flat_idx = grid.spectral_index(m, n)
-                leg3d = leg3d.at[m, :, k].set(self.legendre_flat[:, flat_idx])
-                wleg3d = wleg3d.at[m, :, k].set(
-                    self.legendre_flat[:, flat_idx] * grid.lat_weights
-                )
+                leg3d[m, :, k] = leg_flat_np[:, flat_idx]
+                wleg3d[m, :, k] = leg_flat_np[:, flat_idx] * weights_np
 
-        self._legendre_3d = leg3d          # (T+1, n_lat, T+1)
-        self._weighted_legendre_3d = wleg3d  # (T+1, n_lat, T+1)
+        self._legendre_3d = jnp.array(leg3d)  # (T+1, n_lat, T+1)
+        self._weighted_legendre_3d = jnp.array(wleg3d)  # (T+1, n_lat, T+1)
 
         # Mask: mask_3d[m, k] = 1.0 if k <= T - m, else 0.0
-        mask = jnp.zeros((max_len, max_len))
+        mask = np.zeros((max_len, max_len))
+        for m in range(t + 1):
+            mask[m, : t - m + 1] = 1.0
+        self._mask = jnp.array(mask)  # (T+1, T+1)
+
+        # Index arrays for pack/unpack between (T+1, T+1) and flat (n_spectral,).
+        # _pack_indices[i] = row-major index into (T+1, T+1) for flat position i.
+        # _unpack_indices[m, k] = flat spectral index; invalid entries point to
+        #   n_spectral (a padding zero appended at gather time).
+        n_spectral = grid.n_spectral_coeffs
+        pack_idx = np.zeros(n_spectral, dtype=np.int32)
+        unpack_idx = np.full((max_len, max_len), n_spectral, dtype=np.int32)
         for m in range(t + 1):
             for k in range(t - m + 1):
-                mask = mask.at[m, k].set(1.0)
-        self._mask = mask  # (T+1, T+1)
+                flat_i = m * max_len - m * (m - 1) // 2 + k
+                pack_idx[flat_i] = m * max_len + k  # row-major into (T+1, T+1)
+                unpack_idx[m, k] = flat_i
+        self._pack_indices = jnp.array(pack_idx)  # (n_spectral,)
+        self._unpack_indices = jnp.array(unpack_idx)  # (T+1, T+1)
 
     def grid_to_spectral(self, field: jnp.ndarray) -> jnp.ndarray:
         """Forward transform: grid-point field -> spectral coefficients.
@@ -96,6 +114,7 @@ class SpectralTransform:
             field,
             self._weighted_legendre_3d,
             self._mask,
+            self._pack_indices,
             self.grid.truncation,
             self.grid.n_lon,
         )
@@ -116,16 +135,18 @@ class SpectralTransform:
         return _spectral_to_grid(
             coeffs,
             self._legendre_3d,
+            self._unpack_indices,
             self.grid.truncation,
             self.grid.n_lon,
         )
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4))
+@functools.partial(jax.jit, static_argnums=(4, 5))
 def _grid_to_spectral(
     field: jnp.ndarray,
     weighted_legendre_3d: jnp.ndarray,
     mask: jnp.ndarray,
+    pack_indices: jnp.ndarray,
     truncation: int,
     n_lon: int,
 ) -> jnp.ndarray:
@@ -152,14 +173,15 @@ def _grid_to_spectral(
     # Zero out invalid entries (k > T - m)
     result_3d *= mask
 
-    # Pack back to flat spectral array.
-    return _pack_spectral(result_3d, truncation)
+    # Pack to flat spectral array via pre-computed index gather.
+    return result_3d.ravel()[pack_indices]
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3))
+@functools.partial(jax.jit, static_argnums=(3, 4))
 def _spectral_to_grid(
     coeffs: jnp.ndarray,
     legendre_3d: jnp.ndarray,
+    unpack_indices: jnp.ndarray,
     truncation: int,
     n_lon: int,
 ) -> jnp.ndarray:
@@ -171,8 +193,11 @@ def _spectral_to_grid(
     """
     max_len = truncation + 1
 
-    # Unpack flat spectral array to 3D: (T+1, T+1) indexed [m, k=n-m]
-    coeffs_3d = _unpack_spectral(coeffs, truncation)  # (T+1, T+1)
+    # Unpack flat spectral to (T+1, T+1) via pre-computed index gather.
+    # Invalid entries in unpack_indices point to index n_spectral (past the
+    # end of coeffs), which fetches the appended zero.
+    padded = jnp.append(coeffs, jnp.zeros(1, dtype=coeffs.dtype))
+    coeffs_3d = padded[unpack_indices]  # (T+1, T+1)
 
     # Inverse Legendre: fourier[j, m] = sum_k coeffs[m, k] * P[m, j, k]
     fourier = jnp.einsum("mk,mjk->jm", coeffs_3d, legendre_3d)  # (n_lat, T+1)
@@ -182,68 +207,9 @@ def _spectral_to_grid(
     fourier_full = jnp.zeros((fourier.shape[0], n_rfft), dtype=jnp.complex128)
     fourier_full = fourier_full.at[:, :max_len].set(fourier)
 
-    # The forward transform divided by (2*N_lon), so inverse multiplies by (2*N_lon).
-    # jnp.fft.irfft computes: (1/N) * sum c_m * exp(i*m*lambda) * N = sum c_m * exp(...)
-    # Wait — jnp.fft.irfft expects unnormalized FFT output.
-    # rfft(x)[m] = sum_k x[k] * exp(-2*pi*i*m*k/N)  (unnormalized)
-    # irfft(X)[k] = (1/N) * sum_m X[m] * exp(2*pi*i*m*k/N)
-    # Our forward gave: coeff = FFT / (2*N) * (Legendre stuff)
-    # So spectral -> fourier gives: fourier[j,m] = sum_n coeffs_n^m * P_n^m
-    # We want: f(lambda_k, phi_j) = sum_m fourier[j,m] * exp(i*m*lambda_k)
-    # Using irfft: f = irfft(X, N) = (1/N) * sum X[m] * exp(i*m*...)
-    # ... no, irfft actually does: sum X[m] * exp(2*pi*i*m*k/N) / N
-    # So we need X[m] = fourier[j,m] * N ... wait.
-    # Let's just think about it end-to-end:
-    # Forward: fft gives sum f*exp(-i*m*lam) with lam = 2*pi*k/N.
-    # We then divide by (2*N_lon).
-    # Inverse: we reconstruct fourier[j,m] from spectral coefficients.
-    # Then irfft(X, N) = (1/N) * sum_{m=0}^{N/2} X[m] * exp(i*2*pi*m*k/N) * weight
-    # where weight accounts for conjugate symmetry.
-    # To recover the original field: irfft(rfft(field)) = field * N ... no.
-    # Actually jnp.fft.irfft(jnp.fft.rfft(x)) = x (they are mutual inverses).
-    # So rfft(x)[m] / (2*N) was stored. To invert: multiply by (2*N) and irfft.
-    # The synthesis is: f(λ_k, φ_j) = Σ_m g_m(φ_j) · e^{imλ_k}
-    # irfft computes: x[k] = (1/N) Σ_m X[m] · e^{2πi·m·k/N}
-    # So we need to multiply by N to cancel the 1/N in irfft.
-    # (The forward divided by 2N; the factor of 2 accounts for the
-    # longitude integral normalization 2π/(4π) = 1/2, which is already
-    # absorbed into the spectral coefficients and doesn't need undoing.)
+    # Normalization: the forward transform divided by (2·N_lon).  The factor
+    # of 2 absorbs the longitude integral weight 2π/(4π) = 1/2, which is
+    # baked into the spectral coefficients permanently.  The factor of N_lon
+    # compensates jnp.fft.rfft being unnormalized, and must be undone here:
+    # irfft divides by N_lon internally, so we pre-multiply by N_lon.
     return jnp.fft.irfft(fourier_full * n_lon, n=n_lon, axis=1)
-
-
-def _pack_spectral(arr_3d: jnp.ndarray, truncation: int) -> jnp.ndarray:
-    """Pack (T+1, T+1) array [m, k=n-m] into flat spectral (n_spectral,).
-
-    We use a padded flat buffer of size (T+1)^2 to ensure dynamic_update_slice
-    never goes out of bounds (JAX silently shifts start indices otherwise).
-    """
-    max_len = truncation + 1
-    n_spectral = max_len * (max_len + 1) // 2
-    # Padded buffer: large enough that writing max_len at any valid start is safe.
-    padded_size = n_spectral + max_len
-    flat = jnp.zeros(padded_size, dtype=arr_3d.dtype)
-
-    def body(m: int, flat: jnp.ndarray) -> jnp.ndarray:
-        start = m * max_len - m * (m - 1) // 2
-        row = arr_3d[m, :]  # (T+1,) — zero-padded beyond valid k
-        return jax.lax.dynamic_update_slice(flat, row, (start,))
-
-    return jax.lax.fori_loop(0, max_len, body, flat)[:n_spectral]
-
-
-def _unpack_spectral(flat: jnp.ndarray, truncation: int) -> jnp.ndarray:
-    """Unpack flat spectral (n_spectral,) into (T+1, T+1) array [m, k=n-m].
-
-    Pads the input so dynamic_slice never goes out of bounds.
-    """
-    max_len = truncation + 1
-    # Pad the flat array so slicing max_len from any valid start is safe.
-    padded = jnp.pad(flat, (0, max_len), mode="constant")
-    arr = jnp.zeros((max_len, max_len), dtype=flat.dtype)
-
-    def body(m: int, arr: jnp.ndarray) -> jnp.ndarray:
-        start = m * max_len - m * (m - 1) // 2
-        row = jax.lax.dynamic_slice(padded, (start,), (max_len,))
-        return arr.at[m, :].set(row)
-
-    return jax.lax.fori_loop(0, max_len, body, arr)

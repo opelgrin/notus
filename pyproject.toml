@@ -91,10 +91,10 @@ extend-ignore = [
 ]
 allowed-confusables = [
     "φ", "λ", "μ", "ζ", "δ", "ψ", "χ", "Ω", "Σ", "Δ",  # Greek letters for math
-    "π", "κ", "ν", "σ", "τ",
+    "π", "κ", "ν", "σ", "τ", "α", "β",
     "²", "³", "⁴", "⁻", "ⁱ",  # Superscripts for equations
     "ₙ", "ₘ", "ₛ", "ₖ", "ᵐ",  # Subscripts
-    "→", "·", "∂", "∇", "∫",  # Math operators
+    "→", "·", "×", "∂", "∇", "∫", "−", "√",  # Math operators
     "≤", "≥",
 ]
 
