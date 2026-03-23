@@ -246,3 +246,60 @@ def sigma_dot(
     internal_sigma_dot = internal_sigma * c_total - internal_cumulative
 
     return jnp.concatenate([zero_boundary, internal_sigma_dot, zero_boundary], axis=0)
+
+
+def vertical_advection(
+    sigma_dot_half: jnp.ndarray,
+    field: jnp.ndarray,
+    levels: SigmaLevels,
+) -> jnp.ndarray:
+    """Compute vertical advection tendency using centered 2nd-order differences.
+
+    Returns ``-σ̇ · ∂f/∂σ`` at full levels, following Dinosaur's centered
+    vertical advection scheme.  The computation:
+
+    1. ∂f/∂σ at internal half levels via centered differences, with
+       ∂f/∂σ = 0 at top and bottom boundaries.
+    2. Multiply by σ̇ at each half level.
+    3. Average the product to full levels.
+
+    Parameters
+    ----------
+    sigma_dot_half : jnp.ndarray
+        Sigma-dot at half levels (interfaces), shape ``(n_levels + 1, ...)``.
+        Includes boundary values (typically zero at top and bottom).
+    field : jnp.ndarray
+        Field at full levels, shape ``(n_levels, ...)``.
+    levels : SigmaLevels
+        Sigma vertical coordinate.
+
+    Returns
+    -------
+    jnp.ndarray
+        Vertical advection tendency ``-σ̇ · ∂f/∂σ`` at full levels,
+        shape ``(n_levels, ...)``.
+    """
+    # ∂f/∂σ at internal half levels (n_levels - 1 values)
+    # Uses center-to-center distances for the denominator
+    sigma_full = levels.sigma_full
+    center_to_center = sigma_full[1:] - sigma_full[:-1]  # (n_levels - 1,)
+
+    # Broadcast center_to_center to match field dimensions
+    extra_dims = field.ndim - 1
+    c2c_bc = jnp.reshape(center_to_center, (-1,) + (1,) * extra_dims)
+
+    df = field[1:] - field[:-1]  # (n_levels - 1, ...)
+    df_dsigma_internal = df / c2c_bc  # (n_levels - 1, ...)
+
+    # Pad with zero boundary conditions for ∂f/∂σ at top and bottom
+    trailing_shape = field.shape[1:]
+    zero_bc = jnp.zeros((1, *trailing_shape))
+    df_dsigma = jnp.concatenate(
+        [zero_bc, df_dsigma_internal, zero_bc], axis=0
+    )  # (n_levels + 1, ...)
+
+    # Product σ̇ · ∂f/∂σ at all half levels
+    product = sigma_dot_half * df_dsigma  # (n_levels + 1, ...)
+
+    # Average to full levels and negate (tendency = -σ̇ · ∂f/∂σ)
+    return -0.5 * (product[1:] + product[:-1])

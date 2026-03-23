@@ -11,6 +11,7 @@ from notus.vertical import (
     sigma_dot,
     sigma_ratios,
     surface_pressure_tendency,
+    vertical_advection,
 )
 
 
@@ -331,3 +332,129 @@ class TestSigmaDot:
         assert float(jnp.abs(tend[0])) > 0
         # But σ̇ at surface is exactly 0
         np.testing.assert_allclose(float(sd[-1, 0]), 0.0, atol=1e-13)
+
+
+class TestVerticalAdvection:
+    """Tests for vertical advection (-σ̇ · ∂f/∂σ)."""
+
+    def test_constant_field(self) -> None:
+        """Constant f → ∂f/∂σ = 0 → advection = 0 regardless of σ̇."""
+        levels = uniform_sigma_levels(5)
+        field = jnp.full((5, 3), 42.0)
+        sd = jnp.ones((6, 3)) * 0.5  # nonzero σ̇
+
+        result = vertical_advection(sd, field, levels)
+
+        np.testing.assert_allclose(result, 0.0, atol=1e-14)
+
+    def test_zero_sigma_dot(self) -> None:
+        """σ̇ = 0 → advection = 0 regardless of f."""
+        levels = uniform_sigma_levels(5)
+        field = jnp.linspace(200.0, 300.0, 5)[:, None]
+        sd = jnp.zeros((6, 1))
+
+        result = vertical_advection(sd, field, levels)
+
+        np.testing.assert_allclose(result, 0.0, atol=1e-14)
+
+    def test_linear_field_uniform_levels(self) -> None:
+        """Linear f(σ) = a·σ + b with uniform levels.
+
+        ∂f/∂σ = a at all internal half levels (exact for linear).
+        Boundary ∂f/∂σ = 0.
+
+        At full level k, the averaged product is:
+          -0.5 · (σ̇[k] · (∂f/∂σ)[k] + σ̇[k+1] · (∂f/∂σ)[k+1])
+
+        For the interior levels (not edge levels), (∂f/∂σ) = a
+        on both sides, so result = -a · 0.5 · (σ̇[k] + σ̇[k+1]).
+
+        For edge levels (k=0 and k=L-1), one side has ∂f/∂σ = 0
+        from the boundary condition.
+        """
+        n_levels = 4
+        levels = uniform_sigma_levels(n_levels)
+        a = 100.0
+        b = 200.0
+        sigma_full = levels.sigma_full
+        field = (a * sigma_full + b)[:, None]  # (4, 1)
+
+        # Use a known σ̇ profile
+        sd = jnp.array([0.0, 0.3, -0.2, 0.1, 0.0])[:, None]  # (5, 1)
+
+        result = vertical_advection(sd, field, levels)
+
+        # Compute expected by hand
+        # ∂f/∂σ at half levels: [0, a, a, a, 0]
+        df_half = jnp.array([0.0, a, a, a, 0.0])[:, None]
+        product = sd * df_half
+        expected = -0.5 * (product[1:] + product[:-1])
+
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
+    def test_hand_computed_3_levels(self) -> None:
+        """3 uniform levels with specific values.
+
+        Uniform Δσ = 1/3, centers at [1/6, 1/2, 5/6]
+        center_to_center = [1/3, 1/3]
+
+        f = [10, 40, 70]  →  ∂f/∂σ at internal = [90, 90]
+        ∂f/∂σ at half levels = [0, 90, 90, 0]
+
+        σ̇ = [0, -0.6, 0.3, 0]
+
+        product = [0, -54, 27, 0]
+
+        result[0] = -0.5·(product[0] + product[1]) = -0.5·(-54) = 27
+        result[1] = -0.5·(product[1] + product[2]) = -0.5·(-54+27) = 13.5
+        result[2] = -0.5·(product[2] + product[3]) = -0.5·(27) = -13.5
+        """
+        levels = uniform_sigma_levels(3)
+        field = jnp.array([[10.0], [40.0], [70.0]])
+        sd = jnp.array([[0.0], [-0.6], [0.3], [0.0]])
+
+        result = vertical_advection(sd, field, levels)
+
+        expected = jnp.array([[27.0], [13.5], [-13.5]])
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
+    def test_shape(self) -> None:
+        """(n_levels+1, ...) σ̇ + (n_levels, ...) f → (n_levels, ...) output."""
+        levels = uniform_sigma_levels(8)
+        field = jnp.ones((8, 20))
+        sd = jnp.zeros((9, 20))
+
+        result = vertical_advection(sd, field, levels)
+
+        assert result.shape == (8, 20)
+
+    def test_single_level(self) -> None:
+        """Single level: no internal interfaces, σ̇ = [0, 0] → advection = 0."""
+        levels = uniform_sigma_levels(1)
+        field = jnp.array([[300.0]])
+        sd = jnp.array([[0.0], [0.0]])
+
+        result = vertical_advection(sd, field, levels)
+
+        assert result.shape == (1, 1)
+        np.testing.assert_allclose(result, 0.0, atol=1e-15)
+
+    def test_boundary_df_zero(self) -> None:
+        """Top level only feels the half level below; bottom only above.
+
+        With ∂f/∂σ = 0 at boundaries, the top level tendency is:
+          -0.5 · (σ̇[0]·0 + σ̇[1]·(∂f/∂σ)[1]) = -0.5 · σ̇[1] · (∂f/∂σ)[1]
+        """
+        levels = uniform_sigma_levels(3)
+        field = jnp.array([[10.0], [40.0], [70.0]])
+        # σ̇ with nonzero at internal boundaries
+        sd = jnp.array([[0.0], [1.0], [1.0], [0.0]])
+
+        result = vertical_advection(sd, field, levels)
+
+        # ∂f/∂σ at half levels: [0, 90, 90, 0], product with σ̇: [0, 90, 90, 0]
+        # Top level: only lower half contributes → -0.5·90 = -45
+        # Mid level: both contribute → -0.5·(90+90) = -90
+        # Bottom level: only upper half contributes → -0.5·90 = -45
+        expected = jnp.array([[-45.0], [-90.0], [-45.0]])
+        np.testing.assert_allclose(result, expected, atol=1e-10)

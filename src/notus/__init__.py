@@ -28,7 +28,12 @@ from notus.operators import (
 from notus.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
-from notus.vertical import geopotential, sigma_dot, surface_pressure_tendency
+from notus.vertical import (
+    geopotential,
+    sigma_dot,
+    surface_pressure_tendency,
+    vertical_advection,
+)
 
 
 __all__ = [
@@ -51,5 +56,6 @@ __all__ = [
     "surface_pressure_tendency",
     "uniform_sigma_levels",
     "uv_from_vordiv",
+    "vertical_advection",
     "zonal_derivative",
 ]
