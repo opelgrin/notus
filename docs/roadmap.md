@@ -49,24 +49,46 @@ where zeta_a = zeta + f (absolute vorticity), Phi = g*h (geopotential), E = kine
 - The 1/cos^2(phi) grid-point multiplication for spectral flux computation creates aliasing at the truncation wavenumber; the exponential filter (not just hyperdiffusion) is essential for stability
 - The IMEX formulation (explicit tendencies exclude linear gravity-wave coupling) is cleaner and more stable than the Temperton post-correction approach
 
-## Phase 3 — Primitive Equations (next)
+## Phase 3 — Primitive Equations (complete)
 
-Extend to 3D with sigma (p/ps) vertical coordinate.
+Full 3D hydrostatic primitive equations on sigma (p/ps) vertical coordinate with Lorenz staggering.
 
-**Plan:**
-- Sigma-coordinate vertical discretization (finite differences in the vertical, spectral in the horizontal)
-- Hydrostatic equation: geopotential from temperature via vertical integration
-- Thermodynamic equation: temperature tendency with adiabatic heating
-- Vertical advection using the continuity equation for sigma-dot
-- Semi-implicit treatment extended to the 3D Helmholtz problem (vertical coupling makes it tridiagonal per spectral mode)
-- Vertical diffusion / sponge layer near model top
+**What was built:**
+- Sigma-coordinate vertical discretization (finite differences in the vertical, spectral in the horizontal) with uniform and stretched level options
+- Hydrostatic geopotential from temperature via log-sigma vertical integration (Durran §8.6.5)
+- Thermodynamic equation with advective-form horizontal advection, vertical advection, and adiabatic heating (κ·T·ω/p)
+- Sigma-dot vertical velocity from the continuity equation, surface pressure tendency
+- 3D semi-implicit Helmholtz solver: Schur complement reduction to L×L system per spectral mode, eigen-decomposed for O(L²) per-mode performance
+- IMEX leapfrog time stepper with backward-forward Euler initialization
+- Exponential spectral filter (Hou & Li 2007, matching Dinosaur/NeuralGCM conventions)
+- Jablonowski-Williamson (2006) analytic initial conditions (balanced steady state + perturbation)
+- Conservation diagnostics: global mass, kinetic/internal/potential energy, angular momentum via Gaussian quadrature and sigma integration
 
-**Validation targets:**
-- 3D solid-body rotation (Jablonowski & Williamson 2006 test case)
-- Baroclinic wave development from analytic initial conditions
-- Conservation of mass, energy, angular momentum
+**Key equations (vorticity-divergence form, explicit tendencies):**
+```
+dζ/dt = -curl(F) + diffusion
+dδ/dt = -div(F) - ∇²E - ∇²(g·zs) + diffusion
+dT/dt = -v·∇T + σ̇·∂T/∂σ + κ·T·(ω/p) + diffusion
+d(ln ps)/dt = -Σ (D + v·∇ln ps)·Δσ
+```
+where F = (ζ+f)(k̂×v) + σ̇·∂v/∂σ + R·T'·∇ln(ps). Implicit terms (-∇²Φ, -H·δ, -Δσᵀ·δ) handled by the 3D Helmholtz solver.
 
-## Phase 4 — Held-Suarez Benchmark
+**Validation — Jablonowski & Williamson (2006) baroclinic instability:**
+- Balanced steady state stationary to < 1e-3 divergence after 6 hours (T21 L20)
+- 10-day baroclinic wave integration at T42 L20, dt = 600s:
+  - Surface pressure minimum deepens to ~950 hPa by day 9 (reference: ~960 hPa)
+  - Monotonic deepening during growth phase (days 4-9)
+  - Stable for 15+ days with wave breaking and occlusion
+- Mass conserved to < 10⁻⁶ relative error over 10 days
+- Total energy conserved to < 0.1% over 10 days
+- Angular momentum conserved to < 0.1% over 10 days
+
+**Lessons learned:**
+- The temperature advection MUST use the advective form (-v·∇T') for consistency with the semi-implicit splitting. The flux divergence form (-∇·(T'v)) differs by T'·δ, which creates a destabilizing feedback in the explicit/implicit coupling that grows exponentially — the balanced state blows up after ~3 days at T42. Adding the +T'·δ correction to convert to advective form completely stabilizes the integration.
+- The exponential filter nondimensional timestep must use 2Ω (matching Dinosaur's time scale), and the wavenumber normalization must use T+1 (total_wavenumbers), not T. Getting either wrong changes the filter strength significantly at the truncation wavenumber.
+- No vertical diffusion or sponge layer is needed for stability — Dinosaur/NeuralGCM also omit these, relying entirely on the spectral filter and Robert-Asselin filter for damping.
+
+## Phase 4 — Held-Suarez Benchmark (next)
 
 Newtonian relaxation forcing + Rayleigh friction. The standard dry dynamical core intercomparison.
 
