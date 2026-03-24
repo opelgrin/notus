@@ -38,12 +38,7 @@ from notus.operators import (
     uv_from_vordiv,
     zonal_derivative,
 )
-from notus.operators.caches import (
-    _laplacian_eigenvalues,
-    _m_index_array,
-    _meridional_coupling,
-    _mu_derivative_coupling,
-)
+from notus.operators.arrays import OperatorArrays
 from notus.state import PrimitiveEquationState
 from notus.transforms import SpectralTransform
 from notus.vertical import (
@@ -89,25 +84,17 @@ def primitive_equation_tendencies(
     Callable[[PrimitiveEquationState], PrimitiveEquationState]
         JIT-compiled function mapping state to explicit tendencies.
     """
-    grid = transform.grid
-    t = grid.truncation
-    a = planet.radius
+    arrays = transform.arrays
     rotation_rate = planet.rotation_rate
     gas_constant = planet.gas_constant
     kappa = planet.kappa
-    sin_lat = grid.sin_lat
-    cos_lat = grid.cos_lat
-
-    # Pre-fetch cached operator coefficients
-    _laplacian_eigenvalues(t, a)
-    _m_index_array(t)
-    _meridional_coupling(t)
-    _mu_derivative_coupling(t)
+    sin_lat = transform.grid.sin_lat
+    cos_lat = transform.grid.cos_lat
 
     # Pre-compute the orography tendency (constant in time)
-    orography_tend = -laplacian(surface_geopotential, t, a)
+    orography_tend = -laplacian(surface_geopotential, arrays)
 
-    # Reference temperature for broadcasting: (n_levels, 1, 1)
+    # Reference temperature for broadcasting
     t_ref_grid = jnp.asarray(reference_temperature)
 
     @jax.jit
@@ -116,8 +103,7 @@ def primitive_equation_tendencies(
             state,
             transform,
             levels,
-            t,
-            a,
+            arrays,
             rotation_rate,
             gas_constant,
             kappa,
@@ -136,8 +122,7 @@ def _tendency_impl(
     state: PrimitiveEquationState,
     transform: SpectralTransform,
     levels: SigmaLevels,
-    t: int,
-    a: float,
+    arrays: OperatorArrays,
     rotation_rate: float,
     gas_constant: float,
     kappa: float,
@@ -154,7 +139,7 @@ def _tendency_impl(
     # Step 1: Reconstruct winds at each level (spectral)
     def _uv_at_level(vort_div: jnp.ndarray) -> jnp.ndarray:
         vort, div = vort_div[0], vort_div[1]
-        u, v = uv_from_vordiv(vort, div, t, a)
+        u, v = uv_from_vordiv(vort, div, arrays)
         return jnp.stack([u, v])
 
     # Shape: (n_levels, 2, n_spectral) — vmap maps over the level axis
@@ -164,13 +149,9 @@ def _tendency_impl(
     v_cos_spec = uv_spec[:, 1, :]
 
     # Step 2: Surface pressure gradient in spectral space
-    # The physical gradient on the sphere is ∇f = (1/(a·cosφ))·∂f/∂λ ê_λ
-    # + (1/a)·∂f/∂φ ê_φ.  zonal_derivative gives ∂f/∂λ and
-    # meridional_derivative gives cosφ·∂f/∂φ — both WITHOUT the 1/a factor.
-    # We include 1/a here so that v⃗·∇(lnps) and RT'∇(lnps) are physical.
-    inv_a = 1.0 / a
-    dlnps_dlam_spec = zonal_derivative(state.log_surface_pressure, t) * inv_a
-    cosphi_dlnps_dphi_spec = meridional_derivative(state.log_surface_pressure, t) * inv_a
+    inv_a = 1.0 / arrays.radius
+    dlnps_dlam_spec = zonal_derivative(state.log_surface_pressure, arrays) * inv_a
+    cosphi_dlnps_dphi_spec = meridional_derivative(state.log_surface_pressure, arrays) * inv_a
 
     # Step 3: Transform to grid (batched)
     all_spec = jnp.concatenate(
@@ -231,8 +212,7 @@ def _tendency_impl(
         lnps_tend_spec,
         orography_tend,
         n_levels,
-        t,
-        a,
+        arrays,
         diffusion_order,
         diffusion_timescale,
     )
@@ -284,19 +264,12 @@ def _grid_point_tendencies(
     column_div = div_grid + v_dot_grad_lnps
     sd = sigma_dot(column_div, levels)
 
-    # Vertical advection of temperature, split for semi-implicit scheme:
-    # - T' part uses full σ̇ (D-dependent): fully explicit
-    # - T_ref part uses σ̇_explicit (D-free): the D-dependent part is implicit
-    #   (captured by the K terms in the temperature implicit weights matrix H)
     sd_explicit = sigma_dot(v_dot_grad_lnps, levels)
     t_ref_field = jnp.broadcast_to(t_ref_bc, t_prime_grid.shape)
     vert_adv_temp = vertical_advection(sd, t_prime_grid, levels) + vertical_advection(
         sd_explicit, t_ref_field, levels
     )
 
-    # Adiabatic heating κ·T·(ω/p), split for semi-implicit scheme:
-    # - T_ref part uses g_term = v⃗·∇ln(ps) only (D-dependent part is implicit)
-    # - T' part uses g_term = D + v⃗·∇ln(ps) (full explicit contribution)
     omega_p_explicit = omega_over_pressure(v_dot_grad_lnps, v_dot_grad_lnps, levels)
     omega_p_full = omega_over_pressure(column_div, v_dot_grad_lnps, levels)
     adiabatic = kappa * (t_ref_bc * omega_p_explicit + t_prime_grid * omega_p_full)
@@ -307,16 +280,11 @@ def _grid_point_tendencies(
     rt_grad_u = gas_constant * t_prime_grid * dlnps_dlam_bc
     rt_grad_v = gas_constant * t_prime_grid * cosphi_dlnps_dphi_bc
 
-    # Combined momentum flux (Dinosaur convention for curl/div)
     combined_u = -flux_b + (vert_mom_u + rt_grad_u) * cos2_inv
     combined_v = flux_a + (vert_mom_v + rt_grad_v) * cos2_inv
 
     lnps_tend_grid = surface_pressure_tendency(v_dot_grad_lnps, levels)
 
-    # Advective-form correction: the spectral temperature tendency uses the
-    # flux divergence -∇·(T'v), but the semi-implicit splitting assumes the
-    # advective form -v·∇T'.  These differ by T'·δ, which must be added as
-    # a nodal term so the total equals -v·∇T' = -∇·(T'v) + T'·δ.
     advective_correction = t_prime_grid * div_grid
     nodal_temp_tend = vert_adv_temp + adiabatic + advective_correction
 
@@ -341,8 +309,7 @@ def _assemble_spectral_tendencies(
     lnps_tend_spec: jnp.ndarray,
     orography_tend: jnp.ndarray,
     n_levels: int,
-    t: int,
-    a: float,
+    arrays: OperatorArrays,
     diffusion_order: int,
     diffusion_timescale: float,
 ) -> PrimitiveEquationState:
@@ -366,14 +333,14 @@ def _assemble_spectral_tendencies(
             args[7],
             args[8],
         )
-        vort_tend = spectral_curl(cu, cv, t, a)
-        div_tend = -spectral_divergence(cu, cv, t, a) - laplacian(ke, t, a) + orography_tend
-        temp_tend = -spectral_divergence(tfa, tfb, t, a) + nodal_t
+        vort_tend = spectral_curl(cu, cv, arrays)
+        div_tend = -spectral_divergence(cu, cv, arrays) - laplacian(ke, arrays) + orography_tend
+        temp_tend = -spectral_divergence(tfa, tfb, arrays) + nodal_t
 
         if diffusion_order > 0:
-            vort_tend += hyperdiffusion(vort_k, t, a, diffusion_order, diffusion_timescale)
-            div_tend += hyperdiffusion(div_k, t, a, diffusion_order, diffusion_timescale)
-            temp_tend += hyperdiffusion(temp_k, t, a, diffusion_order, diffusion_timescale)
+            vort_tend += hyperdiffusion(vort_k, arrays, diffusion_order, diffusion_timescale)
+            div_tend += hyperdiffusion(div_k, arrays, diffusion_order, diffusion_timescale)
+            temp_tend += hyperdiffusion(temp_k, arrays, diffusion_order, diffusion_timescale)
 
         return jnp.stack([vort_tend, div_tend, temp_tend])
 

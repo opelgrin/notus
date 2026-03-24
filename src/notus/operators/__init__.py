@@ -1,11 +1,6 @@
 """Spectral differential operators on the sphere."""
 
-from notus.operators.caches import (
-    _laplacian_eigenvalues,
-    _m_index_array,
-    _meridional_coupling,
-    _mu_derivative_coupling,
-)
+from notus.operators.arrays import OperatorArrays
 from notus.operators.core import (
     exponential_filter,
     hyperdiffusion,
@@ -18,12 +13,7 @@ from notus.operators.vector import spectral_curl, spectral_divergence, uv_from_v
 
 
 __all__ = [
-    # Private cache names re-exported for internal consumers
-    "_laplacian_eigenvalues",
-    "_m_index_array",
-    "_meridional_coupling",
-    "_mu_derivative_coupling",
-    # Public operators
+    "OperatorArrays",
     "exponential_filter",
     "hyperdiffusion",
     "inverse_laplacian",

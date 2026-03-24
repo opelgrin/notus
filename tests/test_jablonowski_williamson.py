@@ -23,9 +23,9 @@ from notus.initial_conditions import (
     jablonowski_williamson_steady_state,
 )
 from notus.operators import exponential_filter
-from notus.vertical.sigma import uniform_sigma_levels
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
+from notus.vertical.sigma import uniform_sigma_levels
 
 
 # Enable float64 for precision
@@ -126,7 +126,7 @@ class TestGridPointFields:
         evaluates the J-W formula correctly.
         """
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
         config = JWConfig()
 
@@ -163,7 +163,7 @@ class TestGridPointFields:
     def test_temperature_matches_analytic(self) -> None:
         """Grid-point temperature should match T_ref + T'(lat, η) after roundtrip."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
         config = JWConfig()
 
@@ -207,7 +207,7 @@ class TestGridPointFields:
     def test_divergence_is_zero(self) -> None:
         """Initial divergence should be identically zero."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
         state, _, _ = jablonowski_williamson_steady_state(transform, EARTH, levels)
         np.testing.assert_allclose(np.asarray(state.divergence), 0.0, atol=1e-30)
@@ -215,7 +215,7 @@ class TestGridPointFields:
     def test_log_surface_pressure_is_zero(self) -> None:
         """Initial ln(ps/p0) should be zero (uniform surface pressure)."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
         state, _, _ = jablonowski_williamson_steady_state(transform, EARTH, levels)
         np.testing.assert_allclose(np.asarray(state.log_surface_pressure), 0.0, atol=1e-30)
@@ -223,7 +223,7 @@ class TestGridPointFields:
     def test_vorticity_is_zonally_symmetric(self) -> None:
         """Steady-state vorticity should have no longitude dependence (m=0 only)."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
         state, _, _ = jablonowski_williamson_steady_state(transform, EARTH, levels)
         vort_grid = _notus_to_grid(transform, state.vorticity)
@@ -239,7 +239,7 @@ class TestGridPointFields:
     def test_surface_geopotential_nonzero(self) -> None:
         """Surface geopotential Φ_s should be nonzero (balanced orography)."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
         _, _, surface_phi = jablonowski_williamson_steady_state(transform, EARTH, levels)
         phi_grid = np.asarray(transform.spectral_to_grid(surface_phi))
@@ -251,7 +251,7 @@ class TestGridPointFields:
     def test_reference_temperatures_physical_range(self) -> None:
         """Reference temperatures should be in a physically reasonable range."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(20)
         _, ref_temps, _ = jablonowski_williamson_steady_state(transform, EARTH, levels)
         assert np.all(ref_temps > 180.0), "T_ref should be > 180 K everywhere"
@@ -262,7 +262,7 @@ class TestGridPointFields:
     def test_perturbation_is_localized(self) -> None:
         """Perturbation vorticity should be localized near (lon_c, lat_c)."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
         config_lon = np.pi / 9.0
         config_lat = 2.0 * np.pi / 9.0
@@ -288,7 +288,7 @@ class TestGridPointFields:
     def test_perturbation_is_level_independent(self) -> None:
         """Perturbation should be the same at all levels."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
 
         pert = jablonowski_williamson_perturbation(transform, EARTH, levels)
@@ -318,7 +318,7 @@ class TestStationarity:
         tropopause at η ≈ 0.2.
         """
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(20)
         dt = 600.0
         n_steps = 36  # 6 hours
@@ -327,7 +327,7 @@ class TestStationarity:
             transform, EARTH, levels
         )
 
-        filt = exponential_filter(grid.truncation, dt)
+        filt = exponential_filter(transform.arrays, dt)
         init_fn, step_fn = build_pe_stepper(
             transform=transform,
             planet=EARTH,
@@ -382,7 +382,7 @@ class TestBaroclinicWave:
     def test_perturbation_breaks_symmetry(self) -> None:
         """The perturbation should introduce longitude-dependent structure."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
 
         pert = jablonowski_williamson_perturbation(transform, EARTH, levels)
@@ -400,7 +400,7 @@ class TestBaroclinicWave:
         initial perturbation, indicating baroclinic wave growth.
         """
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(5)
         dt = 600.0
         n_steps = 144  # 1 day
@@ -413,7 +413,7 @@ class TestBaroclinicWave:
         # Add perturbation to steady state
         perturbed = jax.tree.map(jnp.add, state, pert)
 
-        filt = exponential_filter(grid.truncation, dt)
+        filt = exponential_filter(transform.arrays, dt)
         init_fn, step_fn = build_pe_stepper(
             transform=transform,
             planet=EARTH,

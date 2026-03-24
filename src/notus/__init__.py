@@ -27,6 +27,7 @@ from notus.initial_conditions import (
     jablonowski_williamson_steady_state,
 )
 from notus.operators import (
+    OperatorArrays,
     hyperdiffusion,
     inverse_laplacian,
     laplacian,
@@ -53,6 +54,7 @@ __all__ = [
     "ConservationDiagnostics",
     "GaussianGrid",
     "JWConfig",
+    "OperatorArrays",
     "PlanetaryConstants",
     "PrimitiveEquationState",
     "ShallowWaterState",

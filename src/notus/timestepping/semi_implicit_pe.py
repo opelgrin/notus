@@ -25,7 +25,7 @@ import dataclasses
 import jax.numpy as jnp
 import numpy as np
 
-from notus.operators.caches import _laplacian_eigenvalues
+from notus.operators.arrays import OperatorArrays
 from notus.state import PrimitiveEquationState
 from notus.vertical.operators import geopotential_weights, sigma_ratios
 from notus.vertical.sigma import SigmaLevels
@@ -243,8 +243,7 @@ def build_pe_semi_implicit_config(
 def pe_implicit_terms(
     state: PrimitiveEquationState,
     config: PESemiImplicitConfig,
-    truncation: int,
-    radius: float,
+    arrays: OperatorArrays,
 ) -> PrimitiveEquationState:
     """Evaluate the linear implicit tendency L(x) for the primitive equations.
 
@@ -262,10 +261,8 @@ def pe_implicit_terms(
         Current state (spectral).
     config : PESemiImplicitConfig
         Pre-computed semi-implicit matrices.
-    truncation : int
-        Triangular truncation.
-    radius : float
-        Planet radius [m].
+    arrays : OperatorArrays
+        Pre-computed operator arrays.
 
     Returns
     -------
@@ -278,7 +275,7 @@ def pe_implicit_terms(
     t_ref = config.reference_temperature
     r_gas = config.gas_constant
 
-    eigenvalues = _laplacian_eigenvalues(truncation, radius)  # (n_spec,)
+    eigenvalues = arrays.laplacian_eigenvalues  # (n_spec,)
 
     # L_δ = -∇²(G @ T' + R·T_ref·lnps) where T' = T - T_ref
     # T_ref is spatially constant → only mode (0,0) in spectral space
@@ -304,8 +301,7 @@ def pe_implicit_inverse(
     state: PrimitiveEquationState,
     step_size: float,
     config: PESemiImplicitConfig,
-    truncation: int,
-    radius: float,
+    arrays: OperatorArrays,
 ) -> PrimitiveEquationState:
     """Apply (I - step_size · L)⁻¹ to the PE state.
 
@@ -332,10 +328,8 @@ def pe_implicit_inverse(
         Implicit step size, typically ``2·dt·α`` [s].
     config : PESemiImplicitConfig
         Pre-computed semi-implicit matrices.
-    truncation : int
-        Triangular truncation.
-    radius : float
-        Planet radius [m].
+    arrays : OperatorArrays
+        Pre-computed operator arrays.
 
     Returns
     -------
@@ -354,7 +348,7 @@ def pe_implicit_inverse(
     p_inv = config.coupling_p_inv  # (L, L)
     mu = config.coupling_eigvals  # (L,)
 
-    eigenvalues = _laplacian_eigenvalues(truncation, radius)  # (n_spec,)
+    eigenvalues = arrays.laplacian_eigenvalues  # (n_spec,)
 
     # --- Step 1: geopotential intermediate ---
     # Φ* = G @ T'* + R·T_ref·lnps*   where T'* = T* - T_ref

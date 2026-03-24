@@ -26,7 +26,7 @@ import dataclasses
 
 import jax.numpy as jnp
 
-from notus.operators.caches import _laplacian_eigenvalues
+from notus.operators.arrays import OperatorArrays
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -50,15 +50,13 @@ def implicit_terms(
     divergence: jnp.ndarray,
     geopotential: jnp.ndarray,
     config: SemiImplicitConfig,
-    truncation: int,
-    radius: float,
+    arrays: OperatorArrays,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Evaluate the linear implicit tendency L(x).
 
     Returns (L_δ, L_Φ) = (-∇²Φ, -Φ₀·δ).
     """
-    eigenvalues = _laplacian_eigenvalues(truncation, radius)
-    l_div = -eigenvalues * geopotential
+    l_div = -arrays.laplacian_eigenvalues * geopotential
     l_phi = -config.mean_geopotential * divergence
     return l_div, l_phi
 
@@ -68,8 +66,7 @@ def implicit_inverse(
     geopotential: jnp.ndarray,
     step_size: float,
     config: SemiImplicitConfig,
-    truncation: int,
-    radius: float,
+    arrays: OperatorArrays,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Apply (I - step_size · L)⁻¹ to (divergence, geopotential).
 
@@ -91,17 +88,15 @@ def implicit_inverse(
         implicit weighting from :class:`SemiImplicitConfig`.
     config : SemiImplicitConfig
         Semi-implicit configuration (provides Φ₀).
-    truncation : int
-        Triangular truncation.
-    radius : float
-        Planet radius [m].
+    arrays : OperatorArrays
+        Pre-computed operator arrays.
 
     Returns
     -------
     tuple[jnp.ndarray, jnp.ndarray]
         Solved (δ_out, Φ_out), each shape ``(n_spectral,)``.
     """
-    eigenvalues = _laplacian_eigenvalues(truncation, radius)  # -n(n+1)/a²
+    eigenvalues = arrays.laplacian_eigenvalues  # -n(n+1)/a²
     phi0 = config.mean_geopotential
 
     # Schur complement: 1 - step_size² · Φ₀ · eigenvalues

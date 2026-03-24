@@ -148,21 +148,20 @@ def compute_conservation_diagnostics(
         Global mass, energy, and angular momentum.
     """
     grid = transform.grid
-    truncation = grid.truncation
-    radius = planet.radius
+    arrays = transform.arrays
 
     # --- Surface pressure on grid ---
     lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
     ps_grid = planet.reference_pressure * jnp.exp(lnps_grid)  # (n_lat, n_lon)
 
     # --- Mass: M = (1/g) ∫ ps dA  where dA = a²·cosφ·dφ·dλ ---
-    a2 = radius**2
+    a2 = arrays.radius**2
     mass = a2 * spherical_integral(ps_grid, grid) / planet.gravity
 
     # --- Per-level grid-point fields (vectorized) ---
     # Reconstruct winds: vmap over levels
     def _uv_at_level(vort: jnp.ndarray, div: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-        return uv_from_vordiv(vort, div, truncation, radius)
+        return uv_from_vordiv(vort, div, arrays)
 
     u_cos_spec, v_cos_spec = jax.vmap(_uv_at_level)(state.vorticity, state.divergence)
 
@@ -181,8 +180,8 @@ def compute_conservation_diagnostics(
 
     ke_levels = 0.5 * (u**2 + v**2)
     ie_levels = planet.specific_heat_cp * t_grid
-    omega_a_cos = planet.rotation_rate * radius * cos_lat
-    am_levels = (u + omega_a_cos) * radius * cos_lat
+    omega_a_cos = planet.rotation_rate * arrays.radius * cos_lat
+    am_levels = (u + omega_a_cos) * arrays.radius * cos_lat
 
     # --- Surface geopotential on grid ---
     phi_s_grid = transform.spectral_to_grid(surface_geopotential)

@@ -30,23 +30,30 @@ import jax.numpy as jnp
 import numpy as np
 
 from notus.grid import GaussianGrid
+from notus.operators.arrays import OperatorArrays
 from notus.spherical_harmonics import compute_legendre_polynomials
 
 
 class SpectralTransform:
-    """Pre-computed transform state for a given grid.
+    """Pre-computed transform state for a given grid and planet radius.
 
     Caches the Legendre polynomials reorganized for efficient JIT-compiled
-    transforms.  All heavy computation happens at construction time.
+    transforms, and pre-computes all spectral operator arrays via
+    :class:`~notus.operators.arrays.OperatorArrays`.  All heavy computation
+    happens at construction time.
 
     Parameters
     ----------
     grid : GaussianGrid
         The Gaussian grid defining resolution and truncation.
+    radius : float
+        Planet radius [m].  Used to build the operator arrays (Laplacian
+        eigenvalues, etc.).
     """
 
-    def __init__(self, grid: GaussianGrid) -> None:
+    def __init__(self, grid: GaussianGrid, radius: float) -> None:
         self.grid = grid
+        self.arrays = OperatorArrays.build(grid.truncation, radius)
         t = grid.truncation
 
         # Flat Legendre: (n_lat, n_spectral) — used for operators/diagnostics
