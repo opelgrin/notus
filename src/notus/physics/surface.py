@@ -114,9 +114,11 @@ def surface_sensible_heat_flux(
     # where p_sfc ~ sigma_lowest * ps.
     # Tendency: dT/dt = g * H / (dp * cp), with H = rho * cp * C_D * |v| * (T_s - T_a).
     sigma_lowest = 1.0 - 0.5 * dsigma_lowest
-    rho_sfc = surface_pressure * sigma_lowest / (gas_constant * t_air)
+    t_air_safe = jnp.maximum(t_air, 1.0)
+    dp_safe = jnp.maximum(dp, 1.0)
+    rho_sfc = surface_pressure * sigma_lowest / (gas_constant * t_air_safe)
     flux = rho_sfc * specific_heat_cp * drag_coefficient * wind_speed * (
         t_surface[:, None] - t_air
     )
 
-    return gravity * flux / (dp * specific_heat_cp)
+    return gravity * flux / (dp_safe * specific_heat_cp)

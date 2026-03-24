@@ -38,8 +38,6 @@ class SimplePhysicsConfig:
         Fraction of LW optical depth with linear pressure dependence.
     alpha : float
         Pressure exponent for the nonlinear part of LW optical depth.
-    sw_delta_s : float
-        Insolation distribution parameter (P2 amplitude).
     sst_t_min : float
         Minimum SST (temperature floor) [K].
     sst_t_delta : float
@@ -63,7 +61,6 @@ class SimplePhysicsConfig:
     tau_pole: float = 0.1
     linear_fraction: float = 0.1
     alpha: float = 4.0
-    sw_delta_s: float = 1.4
     sst_t_min: float = 271.0
     sst_t_delta: float = 29.0
     sst_phi_w: float = 26.0 * jnp.pi / 180.0
@@ -72,6 +69,15 @@ class SimplePhysicsConfig:
     c_d: float = 0.0015
     n_adjustment_iterations: int = 3
     tau_adjustment: float = 43200.0
+
+    def __post_init__(self) -> None:
+        """Validate parameter ranges."""
+        if self.sigma_b >= 1.0:
+            msg = f"sigma_b must be < 1.0, got {self.sigma_b}"
+            raise ValueError(msg)
+        if self.tau_adjustment <= 0.0:
+            msg = f"tau_adjustment must be > 0, got {self.tau_adjustment}"
+            raise ValueError(msg)
 
 
 class SimplePhysics:

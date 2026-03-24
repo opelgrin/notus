@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Frierson et al. (2006) simple physics aquaplanet integration.
 
-Runs an aquaplanet with gray radiation (longwave + shortwave), dry convective
-adjustment, Rayleigh boundary-layer drag, and prescribed SST.  Starts from
+Runs an aquaplanet with gray longwave radiation, dry convective adjustment,
+bulk surface sensible heat flux, Rayleigh boundary-layer drag, and prescribed
+SST.  No atmospheric shortwave absorption (Frierson convention).  Starts from
 an isothermal rest state at T21 L20.
 
 After a spinup period, accumulates time-averaged zonal-mean fields and prints
