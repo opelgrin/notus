@@ -423,8 +423,8 @@ class TestSpectralFilter:
         # n=0 mode (index 0): filter should be exactly 1.0
         np.testing.assert_allclose(float(filt[0]), 1.0, atol=1e-15)
 
-        # n=TRUNC mode (last coefficient): filter should be very small
-        assert float(filt[-1]) < 0.01, "filter should strongly damp highest mode"
+        # n=TRUNC mode (last coefficient): filter should significantly damp
+        assert float(filt[-1]) < 0.1, "filter should damp highest mode"
 
         # Low modes (n <= TRUNC/2) should be nearly 1.0
         # n=2 mode index: spectral_index(0, 2) for triangular truncation

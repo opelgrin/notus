@@ -342,7 +342,8 @@ def exponential_filter(
 
         scaling(n) = exp(-attenuation · (n / T) ^ (2·order))
 
-    where attenuation = dt · Ω / tau.
+    where attenuation = 2·Ω·dt / tau (the nondimensional timestep divided
+    by the filter timescale).
 
     Default parameters match Dinosaur / NeuralGCM: ``tau = 0.010938``,
     ``order = 18``, giving a k^36 rolloff that removes > 99 % of the
@@ -369,8 +370,10 @@ def exponential_filter(
         Multiply spectral coefficients by this every timestep.
     """
     n_vals = _n_index_array(truncation)
-    k = n_vals / truncation  # normalized wavenumber in [0, 1]
-    attenuation = dt * rotation_rate / tau
+    # Normalize by T+1 (total_wavenumbers), matching Dinosaur / NeuralGCM.
+    # This ensures the filter at n=T retains ~20% instead of ~0.03%.
+    k = n_vals / (truncation + 1)
+    attenuation = dt * 2.0 * rotation_rate / tau
     return jnp.exp(-attenuation * k ** (2 * order))
 
 

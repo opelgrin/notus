@@ -9,7 +9,7 @@ The equations (explicit tendencies only):
 
     dζ/dt = -curl(F) + diffusion
     dδ/dt = -div(F) - ∇²E - ∇²(g·z_s) + diffusion
-    dT/dt = -div(T·v⃗) + vertical_advection + κ·T·(ω/p) + diffusion
+    dT/dt = -v⃗·∇T + vertical_advection + κ·T·(ω/p) + diffusion
     d(ln ps)/dt = -Σ (v⃗·∇ln ps)·Δσ
 
 where F = (ζ+f)(k̂×v) + σ̇·∂v/∂σ + R·T'·∇ln(ps), the combined momentum
@@ -309,7 +309,13 @@ def _grid_point_tendencies(
     combined_v = flux_a + (vert_mom_v + rt_grad_v) * cos2_inv
 
     lnps_tend_grid = surface_pressure_tendency(v_dot_grad_lnps, levels)
-    nodal_temp_tend = vert_adv_temp + adiabatic
+
+    # Advective-form correction: the spectral temperature tendency uses the
+    # flux divergence -∇·(T'v), but the semi-implicit splitting assumes the
+    # advective form -v·∇T'.  These differ by T'·δ, which must be added as
+    # a nodal term so the total equals -v·∇T' = -∇·(T'v) + T'·δ.
+    advective_correction = t_prime_grid * div_grid
+    nodal_temp_tend = vert_adv_temp + adiabatic + advective_correction
 
     products_grid = jnp.concatenate(
         [
