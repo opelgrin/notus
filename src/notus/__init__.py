@@ -28,6 +28,7 @@ from notus.initial_conditions import (
     held_suarez_initial_state,
     jablonowski_williamson_perturbation,
     jablonowski_williamson_steady_state,
+    moist_aquaplanet_initial_state,
     simple_physics_initial_state,
 )
 from notus.operators import (
@@ -79,6 +80,7 @@ __all__ = [
     "jablonowski_williamson_steady_state",
     "laplacian",
     "meridional_derivative",
+    "moist_aquaplanet_initial_state",
     "omega_over_pressure",
     "sigma_dot",
     "sigma_integral",

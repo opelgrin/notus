@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from notus.constants import PlanetaryConstants
+from notus.physics.moisture import saturation_specific_humidity
 from notus.state import PrimitiveEquationState
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import SigmaLevels
@@ -420,3 +421,95 @@ def simple_physics_initial_state(
         perturbation_amplitude=perturbation_amplitude,
         seed=seed,
     )
+
+
+def moist_aquaplanet_initial_state(
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+    levels: SigmaLevels,
+    *,
+    initial_temperature: float = 264.0,
+    perturbation_amplitude: float = 1.0,
+    initial_rh: float = 0.7,
+    rh_stratosphere: float = 0.0,
+    sigma_tropopause: float = 0.3,
+    seed: int = 0,
+) -> tuple[PrimitiveEquationState, np.ndarray, jnp.ndarray]:
+    """Construct an initial condition with humidity for moist aquaplanet.
+
+    Starts from the dry simple-physics initial state and adds a specific
+    humidity profile based on a prescribed relative humidity that decays
+    above the tropopause.
+
+    Parameters
+    ----------
+    transform : SpectralTransform
+        Pre-computed spectral transform.
+    planet : PlanetaryConstants
+        Planetary constants.
+    levels : SigmaLevels
+        Sigma vertical coordinate.
+    initial_temperature : float
+        Uniform initial temperature [K].
+    perturbation_amplitude : float
+        Amplitude of random temperature perturbation [K].
+    initial_rh : float
+        Tropospheric relative humidity (0-1).
+    rh_stratosphere : float
+        Stratospheric relative humidity (0-1).
+    sigma_tropopause : float
+        Sigma level of the tropopause (RH transitions above this).
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    state : PrimitiveEquationState
+        Initial state in spectral space (with humidity).
+    reference_temperatures : np.ndarray
+        Reference temperature profile, shape ``(n_levels,)``.
+    surface_geopotential : jnp.ndarray
+        Surface geopotential, shape ``(n_spectral,)``.
+    """
+    state, ref_temps, surf_geo = simple_physics_initial_state(
+        transform, planet, levels,
+        initial_temperature=initial_temperature,
+        perturbation_amplitude=perturbation_amplitude,
+        seed=seed,
+    )
+
+    # Build RH profile: initial_rh in troposphere, decaying above
+    sigma_full = np.asarray(levels.sigma_full)
+    rh_profile = np.where(
+        sigma_full > sigma_tropopause,
+        initial_rh,
+        rh_stratosphere + (initial_rh - rh_stratosphere)
+        * (sigma_full / sigma_tropopause),
+    )
+
+    # Compute q = RH * q_sat(T, p) at each level, capped at the
+    # surface value to avoid unphysically large q at low pressures
+    # (where q_sat diverges for isothermal atmospheres).
+    p_ref = planet.reference_pressure
+    p_levels = sigma_full * p_ref
+    q_sat_profile = saturation_specific_humidity(
+        jnp.array(np.full_like(sigma_full, initial_temperature)),
+        jnp.array(p_levels),
+        planet.epsilon_moisture,
+    )
+    q_sat_surface = float(q_sat_profile[-1])
+    q_sat_capped = np.minimum(np.asarray(q_sat_profile), q_sat_surface)
+    q_profile = np.asarray(rh_profile) * q_sat_capped
+
+    # Put the horizontally-uniform q profile into spectral space
+    # Mode (0,0) coefficient = value * sqrt(4π)
+    n_spec = transform.grid.n_spectral_coeffs
+    n_levels = levels.n_levels
+    sqrt4pi = np.sqrt(4.0 * np.pi)
+    q_spec = jnp.zeros((n_levels, n_spec), dtype=jnp.complex128)
+    q_spec = q_spec.at[:, 0].set(
+        jnp.array(q_profile * sqrt4pi, dtype=jnp.complex128)
+    )
+
+    moist_state = state.replace(humidity=q_spec)
+    return moist_state, ref_temps, surf_geo

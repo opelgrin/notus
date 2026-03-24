@@ -14,7 +14,7 @@ import pytest
 
 from notus.constants import EARTH
 from notus.grid import GaussianGrid
-from notus.initial_conditions import held_suarez_initial_state
+from notus.initial_conditions import held_suarez_initial_state, moist_aquaplanet_initial_state
 from notus.operators import exponential_filter
 from notus.physics.convection import (
     betts_miller_convection,
@@ -26,7 +26,7 @@ from notus.physics.moisture import (
     saturation_specific_humidity,
     saturation_vapor_pressure,
 )
-from notus.physics.simple_physics import SimplePhysicsConfig
+from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.surface import surface_latent_heat_flux
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
@@ -691,20 +691,21 @@ class TestBettsMillerConvection:
         assert float(jnp.max(jnp.abs(dq))) < 1e-12
 
     def test_unstable_column_produces_tendencies(self) -> None:
-        """Moist column warmer than moist adiabat should trigger BM."""
+        """Column with steep lapse rate should trigger BM convection."""
         n_levels, n_lat, n_lon = 20, 4, 8
         sigma = jnp.linspace(0.025, 0.975, n_levels)
         p = jnp.broadcast_to(
             sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
         ).copy()
-        # Nearly isothermal warm column — much warmer than a moist
-        # adiabat at upper levels, so q = q_sat(T) >> q_ref(T_ref)
+        # Steep lapse rate: warm surface (300K), cold aloft (220K).
+        # The moist adiabat from 300K cools to ~230K at the top,
+        # so the environment (220K) is colder → parcel is buoyant.
         t = jnp.broadcast_to(
-            (295.0 - 5.0 * (1.0 - sigma))[:, None, None],
+            (300.0 - 80.0 * (1.0 - sigma))[:, None, None],
             (n_levels, n_lat, n_lon),
         ).copy()
         q_sat = saturation_specific_humidity(t, p, EARTH.epsilon_moisture)
-        q = q_sat * 0.95  # near-saturated throughout
+        q = q_sat * 0.95
         dsigma = jnp.full(n_levels, 1.0 / n_levels)
 
         dt, dq = betts_miller_convection(
@@ -726,7 +727,7 @@ class TestBettsMillerConvection:
             sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
         ).copy()
         t = jnp.broadcast_to(
-            (295.0 - 5.0 * (1.0 - sigma))[:, None, None],
+            (300.0 - 80.0 * (1.0 - sigma))[:, None, None],
             (n_levels, n_lat, n_lon),
         ).copy()
         q_sat = saturation_specific_humidity(t, p, EARTH.epsilon_moisture)
@@ -766,7 +767,7 @@ class TestBettsMillerConvection:
             sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
         ).copy()
         t = jnp.broadcast_to(
-            (295.0 - 5.0 * (1.0 - sigma))[:, None, None],
+            (300.0 - 80.0 * (1.0 - sigma))[:, None, None],
             (n_levels, n_lat, n_lon),
         ).copy()
         q_sat = saturation_specific_humidity(t, p, EARTH.epsilon_moisture)
@@ -795,6 +796,35 @@ class TestBettsMillerConvection:
             jnp.max(jnp.abs(dt_fast)) / jnp.max(jnp.abs(dt_slow))
         )
         np.testing.assert_allclose(ratio, 2.0, rtol=0.1)
+
+    def test_no_tendencies_above_lzb(self) -> None:
+        """Tendencies should be zero above the level of zero buoyancy."""
+        n_levels, n_lat, n_lon = 20, 4, 8
+        sigma = jnp.linspace(0.025, 0.975, n_levels)
+        p = jnp.broadcast_to(
+            sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
+        ).copy()
+        # Steep lapse rate — buoyant only in lower troposphere
+        t = jnp.broadcast_to(
+            (300.0 - 80.0 * (1.0 - sigma))[:, None, None],
+            (n_levels, n_lat, n_lon),
+        ).copy()
+        q_sat = saturation_specific_humidity(t, p, EARTH.epsilon_moisture)
+        q = q_sat * 0.95
+        dsigma = jnp.full(n_levels, 1.0 / n_levels)
+
+        dt, dq = betts_miller_convection(
+            t, q, p, dsigma,
+            EARTH.epsilon_moisture,
+            EARTH.latent_heat_vaporization,
+            EARTH.specific_heat_cp,
+            EARTH.gas_constant,
+        )
+
+        # Upper levels (σ < 0.2) should have zero tendencies
+        upper = sigma < 0.2
+        assert float(jnp.max(jnp.abs(dt[upper]))) < 1e-15
+        assert float(jnp.max(jnp.abs(dq[upper]))) < 1e-15
 
 
 # ---------------------------------------------------------------------------
@@ -829,3 +859,158 @@ class TestSimplePhysicsConfigValidation:
             n_condensation_iterations=5, rh_condensation=0.95,
         )
         np.testing.assert_allclose(cfg.tau_bm, 3600.0)
+
+
+# ---------------------------------------------------------------------------
+# Moist aquaplanet initial conditions
+# ---------------------------------------------------------------------------
+
+
+class TestMoistInitialConditions:
+    def test_has_humidity(
+        self,
+        transform: SpectralTransform,
+        levels: SigmaLevels,
+    ) -> None:
+        """Moist initial condition should have humidity field."""
+        state, _ref, _geo = moist_aquaplanet_initial_state(
+            transform, EARTH, levels,
+        )
+        assert state.has_humidity
+        assert state.humidity is not None
+        assert state.humidity.shape == state.temperature.shape
+
+    def test_humidity_positive_in_troposphere(
+        self,
+        transform: SpectralTransform,
+        levels: SigmaLevels,
+    ) -> None:
+        """Humidity should be positive in the troposphere."""
+        state, _ref, _geo = moist_aquaplanet_initial_state(
+            transform, EARTH, levels,
+        )
+        assert state.humidity is not None
+        q_grid = jax.vmap(transform.spectral_to_grid)(state.humidity)
+
+        # Lower troposphere (sigma > 0.5) should have positive q
+        sigma = np.asarray(levels.sigma_full)
+        tropo_mask = sigma > 0.5
+        q_tropo = q_grid[tropo_mask]
+        # Mean should be positive (some Gibbs ringing possible)
+        assert float(jnp.mean(q_tropo.real)) > 0
+
+    def test_humidity_bounded_and_positive_mean(
+        self,
+        transform: SpectralTransform,
+        levels: SigmaLevels,
+    ) -> None:
+        """Global mean humidity should be positive and bounded."""
+        state, _ref, _geo = moist_aquaplanet_initial_state(
+            transform, EARTH, levels,
+        )
+        assert state.humidity is not None
+        q_grid = jax.vmap(transform.spectral_to_grid)(state.humidity)
+
+        global_mean = float(jnp.mean(q_grid.real))
+        assert global_mean > 0
+        assert global_mean < 0.05  # < 50 g/kg
+
+
+# ---------------------------------------------------------------------------
+# Moist aquaplanet integration
+# ---------------------------------------------------------------------------
+
+
+class TestMoistAquaplanetIntegration:
+    def test_10_day_stability(
+        self,
+        transform: SpectralTransform,
+        levels: SigmaLevels,
+    ) -> None:
+        """Moist aquaplanet should remain stable for 10 days at T21 L20."""
+        state, ref_temps, surf_geo = moist_aquaplanet_initial_state(
+            transform, EARTH, levels,
+        )
+        dt = 600.0
+        filt = exponential_filter(transform.arrays, dt)
+        forcing = SimplePhysics(transform, EARTH, levels)
+        init_fn, step_fn = build_pe_stepper(
+            transform, EARTH, levels, ref_temps, surf_geo,
+            dt=dt, spectral_filter=filt, forcing=forcing,
+        )
+
+        prev, curr = init_fn(state)
+        n_steps = int(10 * 86400 / dt)  # 10 days
+        for _ in range(n_steps):
+            prev, curr = step_fn(prev, curr)
+
+        # All fields should be finite
+        assert jnp.all(jnp.isfinite(curr.temperature))
+        assert jnp.all(jnp.isfinite(curr.vorticity))
+        assert curr.humidity is not None
+        assert jnp.all(jnp.isfinite(curr.humidity))
+
+        # Temperature should be in a reasonable range
+        t_grid = jax.vmap(transform.spectral_to_grid)(curr.temperature)
+        assert float(jnp.min(t_grid)) > 150.0  # not frozen
+        assert float(jnp.max(t_grid)) < 350.0  # not boiling
+
+    def test_humidity_physically_reasonable(
+        self,
+        transform: SpectralTransform,
+        levels: SigmaLevels,
+    ) -> None:
+        """After 10 days, humidity should remain physically plausible."""
+        state, ref_temps, surf_geo = moist_aquaplanet_initial_state(
+            transform, EARTH, levels,
+        )
+        dt = 600.0
+        filt = exponential_filter(transform.arrays, dt)
+        forcing = SimplePhysics(transform, EARTH, levels)
+        init_fn, step_fn = build_pe_stepper(
+            transform, EARTH, levels, ref_temps, surf_geo,
+            dt=dt, spectral_filter=filt, forcing=forcing,
+        )
+
+        prev, curr = init_fn(state)
+        n_steps = int(10 * 86400 / dt)
+        for _ in range(n_steps):
+            prev, curr = step_fn(prev, curr)
+
+        assert curr.humidity is not None
+        q_grid = jax.vmap(transform.spectral_to_grid)(curr.humidity)
+
+        # Humidity should not explode
+        assert float(jnp.max(jnp.abs(q_grid))) < 0.1  # < 100 g/kg
+
+        # Mean tropospheric humidity should be positive
+        sigma = np.asarray(levels.sigma_full)
+        tropo_mask = sigma > 0.5
+        q_tropo_mean = float(jnp.mean(q_grid[tropo_mask].real))
+        assert q_tropo_mean > 0
+
+    def test_dry_aquaplanet_still_works(
+        self,
+        transform: SpectralTransform,
+        levels: SigmaLevels,
+    ) -> None:
+        """Dry SimplePhysics (no humidity) still works after moist changes."""
+        from notus.initial_conditions import simple_physics_initial_state
+
+        state, ref_temps, surf_geo = simple_physics_initial_state(
+            transform, EARTH, levels,
+        )
+        dt = 600.0
+        filt = exponential_filter(transform.arrays, dt)
+        forcing = SimplePhysics(transform, EARTH, levels)
+        init_fn, step_fn = build_pe_stepper(
+            transform, EARTH, levels, ref_temps, surf_geo,
+            dt=dt, spectral_filter=filt, forcing=forcing,
+        )
+
+        prev, curr = init_fn(state)
+        for _ in range(50):
+            prev, curr = step_fn(prev, curr)
+
+        assert not curr.has_humidity
+        assert jnp.all(jnp.isfinite(curr.temperature))

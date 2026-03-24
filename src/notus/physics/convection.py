@@ -230,13 +230,11 @@ def betts_miller_convection(
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Simplified Betts-Miller convection (Frierson 2007).
 
-    Relaxes temperature and humidity toward a moist adiabatic reference
-    profile at a specified relative humidity, with a finite relaxation
-    timescale.  Only activates when the column is convectively unstable
-    (positive CAPE analogue: column-mean T exceeds reference).
-
-    Column-integrated moist enthalpy (cp*T + L*q) is conserved by
-    adjusting the reference temperature profile.
+    Lifts a parcel from the lowest level along a moist pseudoadiabat,
+    finds the level of zero buoyancy (LZB), and relaxes temperature and
+    humidity toward the reference profile only between the surface and
+    LZB.  Implements deep and shallow convection following the Frierson
+    (2007) qref formulation (SpeedyWeather.jl convention).
 
     Parameters
     ----------
@@ -268,15 +266,13 @@ def betts_miller_convection(
     dq_tend : jnp.ndarray
         Humidity tendency [kg/kg/s], shape ``(n_levels, n_lat, n_lon)``.
     """
-    dsigma_bc = dsigma[:, None, None]
-
-    # Compute reference moist adiabat from surface parcel
-    # Use column-bottom temperature as the surface parcel temperature
+    dsigma_bc = dsigma[:, None, None]  # (n_levels, 1, 1)
     n_levels = temperature.shape[0]
-    t_sfc = temperature[n_levels - 1]  # (n_lat, n_lon)
-    p_sfc = pressure[n_levels - 1]  # (n_lat, n_lon)
 
-    # Compute moist adiabat for each column — vectorize over lat/lon
+    # --- Step 1: Compute moist adiabat reference from lowest level ---
+    t_sfc = temperature[n_levels - 1]  # (n_lat, n_lon)
+    p_sfc = pressure[n_levels - 1]
+
     def _column_adiabat(
         t_s: jnp.ndarray, p_s: jnp.ndarray, p_col: jnp.ndarray
     ) -> jnp.ndarray:
@@ -285,54 +281,98 @@ def betts_miller_convection(
             epsilon, latent_heat, specific_heat_cp, gas_constant,
         )
 
-    # Flatten lat/lon, vmap over columns
     lat_lon_shape = t_sfc.shape
     n_cols = lat_lon_shape[0] * lat_lon_shape[1]
-    t_sfc_flat = t_sfc.reshape(n_cols)
-    p_sfc_flat = p_sfc.reshape(n_cols)
-    p_flat = pressure.reshape(n_levels, n_cols).T  # (n_cols, n_levels)
-
     t_ref_flat = jax.vmap(_column_adiabat)(
-        t_sfc_flat, p_sfc_flat, p_flat
+        t_sfc.reshape(n_cols),
+        p_sfc.reshape(n_cols),
+        pressure.reshape(n_levels, n_cols).T,
     )  # (n_cols, n_levels)
     t_ref = t_ref_flat.T.reshape(n_levels, *lat_lon_shape)
 
-    # Reference humidity: rh_ref * q_sat(T_ref, p)
-    q_ref = rh_ref * saturation_specific_humidity(t_ref, pressure, epsilon)
-
-    # Enthalpy conservation: adjust T_ref by a uniform offset so that
-    # column-integrated moist enthalpy is conserved.
-    # ∫(cp*T + L*q) dσ = ∫(cp*T_ref + L*q_ref) dσ
-    enthalpy_actual = jnp.sum(
-        (specific_heat_cp * temperature + latent_heat * humidity) * dsigma_bc,
-        axis=0,
-    )
-    enthalpy_ref = jnp.sum(
-        (specific_heat_cp * t_ref + latent_heat * q_ref) * dsigma_bc,
-        axis=0,
-    )
-    delta_h = enthalpy_actual - enthalpy_ref  # (n_lat, n_lon)
-    # Distribute offset uniformly in temperature
-    t_ref_adjusted = t_ref + delta_h / (
-        specific_heat_cp * jnp.sum(dsigma_bc, axis=0)
+    # Reference humidity
+    q_ref = rh_ref * saturation_specific_humidity(
+        t_ref, pressure, epsilon
     )
 
-    # Convective trigger (Frierson 2007): only activate when the column
-    # is both drying (Pq > 0) and cooling at the surface (relaxation warms
-    # aloft, cools below).  The drying criterion is the standard deep
-    # convection trigger in simplified Betts-Miller schemes.
-    pq = jnp.sum((humidity - q_ref) * dsigma_bc, axis=0)  # > 0 → drying
-    convecting = pq > 0  # (n_lat, n_lon)
+    # --- Step 2: Find level of zero buoyancy (LZB) per column ---
+    # Virtual temperature: T_v = T * (1 + (1/ε - 1) * q)
+    eps_inv_m1 = 1.0 / epsilon - 1.0
+    tv_env = temperature * (1.0 + eps_inv_m1 * humidity)
+    q_sat_ref = saturation_specific_humidity(t_ref, pressure, epsilon)
+    tv_ref = t_ref * (1.0 + eps_inv_m1 * q_sat_ref)
 
-    # Relaxation tendencies
+    # Parcel is buoyant where T_v_ref > T_v_env (levels ordered top→bottom)
+    buoyant = tv_ref > tv_env  # (n_levels, n_lat, n_lon)
+
+    # LZB mask: True at levels between LZB and surface (inclusive).
+    # A level is below LZB if it and all levels below it are buoyant,
+    # or more practically: scan from the surface upward and mask all
+    # buoyant levels until the first non-buoyant level.
+    # We use cumulative product from the bottom: a level is in the
+    # convective column if all levels from the surface up to it are buoyant.
+    buoyant_from_bottom = jnp.cumprod(buoyant[::-1], axis=0)[::-1]
+    below_lzb = buoyant_from_bottom.astype(jnp.bool_)
+
+    # Require at least 2 levels of buoyancy for convection to activate
+    min_buoyant_levels = 2
+    n_buoyant_levels = jnp.sum(below_lzb, axis=0)  # (n_lat, n_lon)
+    has_convection = n_buoyant_levels >= min_buoyant_levels
+
+    # --- Step 3: Compute Pq and PT integrals (surface to LZB only) ---
+    masked_dsigma = jnp.where(below_lzb, dsigma_bc, 0.0)
+
+    # Pq = ∫(q - q_ref) dσ over convective column (positive → drying)
+    pq = jnp.sum((humidity - q_ref) * masked_dsigma, axis=0)
+
+    # PT = -∫(T - T_ref) dσ over convective column (positive → cooling)
+    pt = -jnp.sum((temperature - t_ref) * masked_dsigma, axis=0)
+
+    # Depth of convective column in σ
+    dsigma_lzb = jnp.sum(masked_dsigma, axis=0)
+    dsigma_lzb_safe = jnp.maximum(dsigma_lzb, 1e-10)
+
+    # --- Step 4: Deep vs. shallow classification ---
+    deep = has_convection & (pq > 0) & (pt > 0)
+    shallow = has_convection & (pq <= 0) & (pt > 0)
+
+    # --- Step 5: Enthalpy-conserving T offset (Frierson 2007 eq. 5-6) ---
+    # Deep: enthalpy conservation requires ΔT offset over convective depth
+    delta_t_deep = (pt - pq * latent_heat / specific_heat_cp) / dsigma_lzb_safe
+
+    # Shallow (qref formulation, Frierson 2007 eq. 11-15):
+    # Rescale q_ref so Pq → 0, then ΔT = PT / Δσ_LZB
+    q_ref_sum = jnp.sum(q_ref * masked_dsigma, axis=0)
+    q_ref_sum_safe = jnp.maximum(jnp.abs(q_ref_sum), 1e-20)
+    fq = 1.0 - pq / q_ref_sum_safe  # scaling factor
+    # Apply fq only for shallow convection
+    fq_applied = jnp.where(shallow, fq, 1.0)[None, :, :]
+    q_ref_adjusted = q_ref * fq_applied
+
+    delta_t_shallow = pt / dsigma_lzb_safe
+
+    # Select the appropriate ΔT
+    delta_t = jnp.where(deep, delta_t_deep, 0.0)
+    delta_t = jnp.where(shallow, delta_t_shallow, delta_t)
+
+    # Adjust T_ref
+    t_ref_adjusted = t_ref - delta_t[None, :, :]
+
+    # Use adjusted q_ref (only differs for shallow)
+    q_ref_final = jnp.where(shallow[None, :, :], q_ref_adjusted, q_ref)
+
+    # --- Step 6: Compute tendencies (only below LZB) ---
+    active = (deep | shallow)[None, :, :]  # (1, n_lat, n_lon)
+    level_mask = below_lzb & active  # (n_levels, n_lat, n_lon)
+
     dt_tend = jnp.where(
-        convecting[None, :, :],
+        level_mask,
         (t_ref_adjusted - temperature) / tau_bm,
         0.0,
     )
     dq_tend = jnp.where(
-        convecting[None, :, :],
-        (q_ref - humidity) / tau_bm,
+        level_mask,
+        (q_ref_final - humidity) / tau_bm,
         0.0,
     )
 
