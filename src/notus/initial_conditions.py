@@ -1,13 +1,17 @@
 """Analytic initial conditions for dynamical core validation.
 
 Implements the Jablonowski & Williamson (2006) baroclinic instability
-test case — the standard 3D dycore validation benchmark.
+test case and the Held-Suarez (1994) isothermal rest state.
 
-Reference
----------
+References
+----------
 Jablonowski, C., & Williamson, D. L. (2006). A baroclinic instability
 test case for atmospheric model dynamical cores. Quarterly Journal of
 the Royal Meteorological Society, 132(621C), 2943-2975.
+
+Held, I. M. & Suarez, M. J. (1994). A proposal for the intercomparison
+of the dynamical cores of atmospheric general circulation models.
+BAMS 75(10), 1825-1830.
 """
 
 from __future__ import annotations
@@ -299,3 +303,72 @@ def jablonowski_williamson_perturbation(
         temperature=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
         log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
     )
+
+
+def held_suarez_initial_state(
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+    levels: SigmaLevels,
+    *,
+    initial_temperature: float = 264.0,
+    perturbation_amplitude: float = 1.0,
+    seed: int = 0,
+) -> tuple[PrimitiveEquationState, np.ndarray, jnp.ndarray]:
+    """Construct an isothermal rest-state initial condition for Held-Suarez.
+
+    The atmosphere starts at rest with a uniform temperature profile and
+    a small random temperature perturbation to break hemispheric symmetry.
+
+    Parameters
+    ----------
+    transform : SpectralTransform
+        Pre-computed spectral transform.
+    planet : PlanetaryConstants
+        Planetary constants.
+    levels : SigmaLevels
+        Sigma vertical coordinate.
+    initial_temperature : float
+        Uniform initial temperature [K].
+    perturbation_amplitude : float
+        Amplitude of random temperature perturbation [K].
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    state : PrimitiveEquationState
+        Initial state in spectral space.
+    reference_temperatures : np.ndarray
+        Reference temperature profile, shape ``(n_levels,)``.
+    surface_geopotential : jnp.ndarray
+        Surface geopotential (zero for flat surface), shape ``(n_spectral,)``.
+    """
+    grid = transform.grid
+    n_levels = levels.n_levels
+    n_spec = grid.n_spectral_coeffs
+    n_lat = grid.n_lat
+    n_lon = grid.n_lon
+
+    # Uniform reference temperature
+    reference_temperatures = np.full(n_levels, initial_temperature)
+
+    # Flat surface
+    surface_geopotential = jnp.zeros(n_spec, dtype=jnp.complex128)
+
+    # Uniform temperature in spectral space + small random perturbation
+    key = jax.random.PRNGKey(seed)
+    t_pert_grid = perturbation_amplitude * jax.random.normal(
+        key, (n_levels, n_lat, n_lon), dtype=jnp.float64
+    )
+    t_uniform_grid = jnp.full((n_levels, n_lat, n_lon), initial_temperature)
+    t_grid = t_uniform_grid + t_pert_grid
+    t_spec = jax.vmap(transform.grid_to_spectral)(t_grid)
+
+    state = PrimitiveEquationState(
+        vorticity=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
+        divergence=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
+        temperature=t_spec,
+        log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
+    )
+
+    return state, reference_temperatures, surface_geopotential

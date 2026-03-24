@@ -88,22 +88,34 @@ where F = (ζ+f)(k̂×v) + σ̇·∂v/∂σ + R·T'·∇ln(ps). Implicit terms (
 - The exponential filter nondimensional timestep must use 2Ω (matching Dinosaur's time scale), and the wavenumber normalization must use T+1 (total_wavenumbers), not T. Getting either wrong changes the filter strength significantly at the truncation wavenumber.
 - No vertical diffusion or sponge layer is needed for stability — Dinosaur/NeuralGCM also omit these, relying entirely on the spectral filter and Robert-Asselin filter for damping.
 
-## Phase 4 — Held-Suarez Benchmark (next)
+## Phase 4 — Held-Suarez Benchmark (complete)
 
 Newtonian relaxation forcing + Rayleigh friction. The standard dry dynamical core intercomparison.
 
-**Plan:**
-- Newtonian temperature relaxation toward a prescribed equilibrium profile (equator-to-pole gradient, stratospheric cap)
-- Rayleigh friction in the planetary boundary layer (lowest ~700 hPa)
-- 1200-day integration at T42 L20 (after 200-day spinup)
+**What was built:**
+- Newtonian temperature relaxation toward a prescribed equilibrium profile T_eq(phi, p) with equator-to-pole gradient and stratospheric temperature floor (200 K)
+- Latitude- and level-dependent relaxation rate k_T (k_a in free atmosphere, enhanced to k_s at equatorial surface)
+- Rayleigh friction k_v in the planetary boundary layer (sigma > 0.7), applied directly in spectral space (equivalent to velocity-space friction since k_v is level-only)
+- Pluggable forcing via `Forcing` protocol, composed with dynamics in `build_pe_stepper`
+- Isothermal rest-state initial conditions (264 K + random perturbation) for symmetry breaking
+- Zonal-mean diagnostic framework (`ZonalMeanState`, `compute_zonal_mean_state`) for climatological analysis
+- Benchmark validation script with 10 two-sided climatological checks
+- Five-panel diagnostic visualization (zonal-mean U, T, EKE; spinup timeseries; surface pressure map)
 
-**Validation targets (Held & Suarez 1994):**
-- Zonal-mean zonal wind: subtropical jets at ~30 deg, ~30 m/s
-- Zonal-mean temperature: realistic tropospheric lapse rate, tropopause height
-- Eddy kinetic energy: midlatitude storm tracks
-- Meridional heat and momentum fluxes
+**Validation — Held & Suarez (1994) climatology (T21 L20, 300 days):**
+- Subtropical jets: ~32 m/s at ~40° latitude (reference: 25-30 m/s at ~30°)
+- Surface westerlies: ~8.5 m/s in midlatitudes
+- Equatorial surface temperature: ~309 K, polar surface: ~264 K (ΔT ≈ 44 K)
+- Cold tropopause: ~196 K
+- Midlatitude eddy kinetic energy: storm tracks in both hemispheres
+- Near-perfect hemispheric symmetry (NH/SH jet ratio ≈ 1.0)
 
-## Phase 5 — Simple Physics
+**Lessons learned:**
+- Rayleigh friction on vorticity/divergence can be computed directly in spectral space (-k_v * zeta, -k_v * delta) when k_v depends only on sigma level — this is mathematically equivalent to Dinosaur's velocity-space approach but saves two spectral/grid round-trips per timestep
+- The forcing protocol composing with explicit dynamics via `jax.tree.map(add, dyn_tend, phys_tend)` inside the JIT boundary is clean and adds negligible overhead
+- 100 days of spinup is sufficient for the gross climate features to develop at T21; the full 1200-day T42 benchmark uses 200-day spinup per H&S convention
+
+## Phase 5 — Simple Physics (next)
 
 Gray radiation and dry convective adjustment — the minimum physics needed for a self-consistent climate.
 

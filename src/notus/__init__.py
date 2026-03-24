@@ -16,13 +16,16 @@ Core components
 from notus.constants import EARTH, PlanetaryConstants
 from notus.diagnostics import (
     ConservationDiagnostics,
+    ZonalMeanState,
     compute_conservation_diagnostics,
+    compute_zonal_mean_state,
     sigma_integral,
     spherical_integral,
 )
 from notus.grid import GaussianGrid
 from notus.initial_conditions import (
     JWConfig,
+    held_suarez_initial_state,
     jablonowski_williamson_perturbation,
     jablonowski_williamson_steady_state,
 )
@@ -37,6 +40,7 @@ from notus.operators import (
     uv_from_vordiv,
     zonal_derivative,
 )
+from notus.physics import HeldSuarez
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
 from notus.vertical import (
@@ -53,6 +57,7 @@ __all__ = [
     "EARTH",
     "ConservationDiagnostics",
     "GaussianGrid",
+    "HeldSuarez",
     "JWConfig",
     "OperatorArrays",
     "PlanetaryConstants",
@@ -60,8 +65,11 @@ __all__ = [
     "ShallowWaterState",
     "SigmaLevels",
     "SpectralTransform",
+    "ZonalMeanState",
     "compute_conservation_diagnostics",
+    "compute_zonal_mean_state",
     "geopotential",
+    "held_suarez_initial_state",
     "hyperdiffusion",
     "inverse_laplacian",
     "jablonowski_williamson_perturbation",

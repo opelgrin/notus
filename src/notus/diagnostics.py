@@ -1,18 +1,14 @@
-"""Conservation diagnostics for the primitive equations.
+"""Diagnostics for the primitive equations.
 
-Computes global integrals of mass, total energy, and angular momentum
-from the model state.  These quantities should be approximately conserved
-by the adiabatic dynamics (no forcing or dissipation).
+Provides:
 
-All integrals use exact Gaussian quadrature in the horizontal and
-midpoint-rule sigma integration in the vertical, matching the accuracy
-of the spectral transform and continuity equation.
+- **Conservation diagnostics**: global integrals of mass, total energy,
+  and angular momentum (should be conserved by adiabatic dynamics).
+- **Zonal-mean diagnostics**: time-averaged zonal-mean fields for
+  climatological analysis (zonal wind, temperature, eddy statistics).
 
-Formulas (per unit area, then integrated over the sphere):
-
-- **Mass**: M = (1/g) ∫ pₛ dA
-- **Total energy**: E = (1/g) ∫ pₛ ∫₀¹ (½|v|² + cₚT + Φₛ) dσ dA
-- **Angular momentum**: L = (1/g) ∫ pₛ ∫₀¹ (u + Ωa cosφ) a cosφ dσ dA
+All horizontal integrals use exact Gaussian quadrature and midpoint-rule
+sigma integration in the vertical.
 
 References
 ----------
@@ -215,4 +211,116 @@ def compute_conservation_diagnostics(
         kinetic_energy=float(kinetic_energy),
         internal_energy=float(internal_energy),
         potential_energy=float(potential_energy),
+    )
+
+
+# =====================================================================
+# Zonal-mean diagnostics
+# =====================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class ZonalMeanState:
+    """Zonal-mean fields on the latitude-sigma grid.
+
+    All arrays have shape ``(n_levels, n_lat)``.
+
+    Attributes
+    ----------
+    u : ndarray
+        Zonal-mean zonal wind [m/s].
+    v : ndarray
+        Zonal-mean meridional wind [m/s].
+    temperature : ndarray
+        Zonal-mean temperature [K].
+    u_prime_sq : ndarray
+        Eddy zonal kinetic energy [u'²] [m²/s²].
+    v_prime_sq : ndarray
+        Eddy meridional kinetic energy [v'²] [m²/s²].
+    uv_prime : ndarray
+        Eddy momentum flux [u'v'] [m²/s²].
+    vt_prime : ndarray
+        Eddy heat flux [v'T'] [K·m/s].
+    """
+
+    u: jnp.ndarray
+    v: jnp.ndarray
+    temperature: jnp.ndarray
+    u_prime_sq: jnp.ndarray
+    v_prime_sq: jnp.ndarray
+    uv_prime: jnp.ndarray
+    vt_prime: jnp.ndarray
+
+
+def compute_zonal_mean_state(
+    state: PrimitiveEquationState,
+    transform: SpectralTransform,
+) -> ZonalMeanState:
+    """Compute instantaneous zonal-mean fields from spectral state.
+
+    Reconstructs winds from vorticity/divergence, transforms to grid space,
+    and computes zonal means and eddy statistics.
+
+    Parameters
+    ----------
+    state : PrimitiveEquationState
+        Model state in spectral space.
+    transform : SpectralTransform
+        Spectral transform (for grid conversion).
+
+    Returns
+    -------
+    ZonalMeanState
+        Zonal-mean fields and eddy statistics.
+    """
+    grid = transform.grid
+    arrays = transform.arrays
+    n_levels = state.n_levels
+    cos_lat = grid.cos_lat
+
+    # Reconstruct winds and temperature on grid
+    def _uv_at_level(
+        vort: jnp.ndarray,
+        div: jnp.ndarray,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return uv_from_vordiv(vort, div, arrays)
+
+    u_cos_spec, v_cos_spec = jax.vmap(_uv_at_level)(
+        state.vorticity,
+        state.divergence,
+    )
+    all_spec = jnp.concatenate(
+        [u_cos_spec, v_cos_spec, state.temperature],
+        axis=0,
+    )
+    all_grid = jax.vmap(transform.spectral_to_grid)(all_spec)
+
+    u_cos_grid = all_grid[:n_levels]
+    v_cos_grid = all_grid[n_levels : 2 * n_levels]
+    t_grid = all_grid[2 * n_levels : 3 * n_levels]
+
+    # u*cos(lat) -> u
+    cos_lat_bc = cos_lat[None, :, None]
+    u_grid = u_cos_grid / cos_lat_bc
+    v_grid = v_cos_grid / cos_lat_bc
+
+    # Zonal means: average over longitude
+    u_zm = jnp.mean(u_grid, axis=-1)
+    v_zm = jnp.mean(v_grid, axis=-1)
+    t_zm = jnp.mean(t_grid, axis=-1)
+
+    # Eddy fields (deviation from zonal mean)
+    u_prime = u_grid - u_zm[:, :, None]
+    v_prime = v_grid - v_zm[:, :, None]
+    t_prime = t_grid - t_zm[:, :, None]
+
+    # Eddy statistics (zonal mean of products)
+    return ZonalMeanState(
+        u=u_zm,
+        v=v_zm,
+        temperature=t_zm,
+        u_prime_sq=jnp.mean(u_prime**2, axis=-1),
+        v_prime_sq=jnp.mean(v_prime**2, axis=-1),
+        uv_prime=jnp.mean(u_prime * v_prime, axis=-1),
+        vt_prime=jnp.mean(v_prime * t_prime, axis=-1),
     )

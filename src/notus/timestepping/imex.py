@@ -35,6 +35,7 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.dynamics.primitive_equations import primitive_equation_tendencies
+from notus.physics.forcing import Forcing
 from notus.state import PrimitiveEquationState
 from notus.timestepping.semi_implicit_pe import (
     build_pe_semi_implicit_config,
@@ -176,6 +177,7 @@ def build_pe_stepper(
     diffusion_timescale: float = 2.0 * 3600.0,
     robert_coeff: float = 0.05,
     alpha: float = 0.5,
+    forcing: Forcing | None = None,
 ) -> tuple[
     Callable[[PrimitiveEquationState], tuple[PrimitiveEquationState, PrimitiveEquationState]],
     Callable[
@@ -210,6 +212,10 @@ def build_pe_stepper(
         Robert-Asselin filter coefficient (0.05 standard).
     alpha : float
         Implicit weighting (0.5 = centred).
+    forcing : Forcing or None
+        Physics forcing callable (e.g. Held-Suarez).  When provided,
+        its tendencies are added to the explicit dynamics tendencies
+        at each time step.  None disables physics forcing.
 
     Returns
     -------
@@ -230,6 +236,17 @@ def build_pe_stepper(
         diffusion_order=diffusion_order,
         diffusion_timescale=diffusion_timescale,
     )
+
+    # Compose dynamics + physics forcing if provided
+    if forcing is not None:
+        dynamics_fn = explicit_fn
+
+        def explicit_fn(state: PrimitiveEquationState) -> PrimitiveEquationState:
+            dyn_tend = dynamics_fn(state)
+            lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
+            ps_grid = planet.reference_pressure * jnp.exp(lnps_grid)
+            phys_tend = forcing(state, ps_grid)
+            return jax.tree.map(jnp.add, dyn_tend, phys_tend)
 
     # Build the semi-implicit config (precomputes G, H, M matrices)
     si_config = build_pe_semi_implicit_config(
