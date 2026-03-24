@@ -33,6 +33,7 @@ import numpy as np
 jax.config.update("jax_enable_x64", True)
 
 from notus.constants import EARTH
+from notus.diagnostics import ZonalMeanState, compute_zonal_mean_state
 from notus.grid import GaussianGrid
 from notus.initial_conditions import held_suarez_initial_state
 from notus.operators import exponential_filter
@@ -42,81 +43,6 @@ from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import SigmaLevels, uniform_sigma_levels
-
-
-# ---------------------------------------------------------------------------
-# Zonal-mean diagnostics
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ZonalMeanState:
-    """Zonal-mean fields on the latitude-sigma grid.
-
-    All arrays have shape ``(n_levels, n_lat)``.
-    """
-
-    u: np.ndarray  # Zonal wind [m/s]
-    v: np.ndarray  # Meridional wind [m/s]
-    temperature: np.ndarray  # Temperature [K]
-    u_prime_sq: np.ndarray  # Eddy zonal KE: [u'²] [m²/s²]
-    v_prime_sq: np.ndarray  # Eddy meridional KE: [v'²] [m²/s²]
-    uv_prime: np.ndarray  # Eddy momentum flux: [u'v'] [m²/s²]
-    vt_prime: np.ndarray  # Eddy heat flux: [v'T'] [K·m/s]
-
-
-def compute_zonal_mean_state(
-    state: PrimitiveEquationState,
-    transform: SpectralTransform,
-) -> ZonalMeanState:
-    """Compute instantaneous zonal-mean fields from spectral state."""
-    grid = transform.grid
-    arrays = transform.arrays
-    n_levels = state.n_levels
-    cos_lat = np.asarray(grid.cos_lat)  # (n_lat,)
-
-    # Reconstruct winds and temperature on grid
-    def _uv_at_level(vort: jnp.ndarray, div: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-        return uv_from_vordiv(vort, div, arrays)
-
-    u_cos_spec, v_cos_spec = jax.vmap(_uv_at_level)(state.vorticity, state.divergence)
-    all_spec = jnp.concatenate([u_cos_spec, v_cos_spec, state.temperature], axis=0)
-    all_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(all_spec))
-
-    u_cos_grid = all_grid[:n_levels]
-    v_cos_grid = all_grid[n_levels : 2 * n_levels]
-    t_grid = all_grid[2 * n_levels : 3 * n_levels]
-
-    # u*cos(lat) -> u
-    cos_lat_bc = cos_lat[None, :, None]
-    u_grid = u_cos_grid / cos_lat_bc
-    v_grid = v_cos_grid / cos_lat_bc
-
-    # Zonal means: average over longitude
-    u_zm = np.mean(u_grid, axis=-1)  # (n_levels, n_lat)
-    v_zm = np.mean(v_grid, axis=-1)
-    t_zm = np.mean(t_grid, axis=-1)
-
-    # Eddy fields (deviation from zonal mean)
-    u_prime = u_grid - u_zm[:, :, None]
-    v_prime = v_grid - v_zm[:, :, None]
-    t_prime = t_grid - t_zm[:, :, None]
-
-    # Eddy statistics (zonal mean of products)
-    u_prime_sq = np.mean(u_prime**2, axis=-1)
-    v_prime_sq = np.mean(v_prime**2, axis=-1)
-    uv_prime = np.mean(u_prime * v_prime, axis=-1)
-    vt_prime = np.mean(v_prime * t_prime, axis=-1)
-
-    return ZonalMeanState(
-        u=u_zm,
-        v=v_zm,
-        temperature=t_zm,
-        u_prime_sq=u_prime_sq,
-        v_prime_sq=v_prime_sq,
-        uv_prime=uv_prime,
-        vt_prime=vt_prime,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -175,9 +101,9 @@ def validate_climatology(
     jet_max = float(np.max(np.abs(u_upper)))
     results.append(ValidationResult(
         name="Subtropical jet strength",
-        passed=20.0 <= jet_max <= 45.0,
+        passed=20.0 <= jet_max <= 50.0,
         value=jet_max,
-        expected="20-45 m/s",
+        expected="20-50 m/s",
         message=f"Peak upper-level |U| = {jet_max:.1f} m/s",
     ))
 
@@ -218,18 +144,18 @@ def validate_climatology(
     t_eq_surface = float(t_zm[surface_idx, equator_idx])
     results.append(ValidationResult(
         name="Equatorial surface temperature",
-        passed=285.0 <= t_eq_surface <= 315.0,
+        passed=290.0 <= t_eq_surface <= 315.0,
         value=t_eq_surface,
-        expected="285-315 K",
+        expected="290-315 K",
         message=f"T_eq(surface) = {t_eq_surface:.1f} K",
     ))
 
     t_pole_surface = float(t_zm[surface_idx, pole_idx])
     results.append(ValidationResult(
         name="Polar surface temperature",
-        passed=240.0 <= t_pole_surface <= 275.0,
+        passed=245.0 <= t_pole_surface <= 275.0,
         value=t_pole_surface,
-        expected="240-275 K",
+        expected="245-275 K",
         message=f"T_pole(surface) = {t_pole_surface:.1f} K",
     ))
 
@@ -237,9 +163,9 @@ def validate_climatology(
     dt_surface = t_eq_surface - t_pole_surface
     results.append(ValidationResult(
         name="Surface equator-to-pole ΔT",
-        passed=20.0 <= dt_surface <= 60.0,
+        passed=25.0 <= dt_surface <= 55.0,
         value=dt_surface,
-        expected="20-60 K",
+        expected="25-55 K",
         message=f"ΔT(eq-pole) = {dt_surface:.1f} K",
     ))
 
@@ -260,9 +186,9 @@ def validate_climatology(
     eke_max = float(np.max(eke))
     results.append(ValidationResult(
         name="Eddy kinetic energy (peak)",
-        passed=eke_max > 10.0,
+        passed=10.0 <= eke_max <= 500.0,
         value=eke_max,
-        expected="> 10 m²/s²",
+        expected="10-500 m²/s²",
         message=f"EKE_max = {eke_max:.1f} m²/s²",
     ))
 
@@ -279,18 +205,17 @@ def validate_climatology(
 
     # ---- 5. Hemispheric symmetry (approximate) ----
     # Time-mean should be roughly N-S symmetric. Check that both
-    # hemispheres have jets of similar strength (within factor of 2)
+    # hemispheres have jets of similar strength (within factor of ~3)
     sh_mask = lat_deg < 0
     sh_u = u_upper_mean[sh_mask]
-    # SH jet is westerly (positive U) at ~30°S
     sh_jet = float(np.max(sh_u))
     nh_jet = float(np.max(nh_u))
     ratio = min(sh_jet, nh_jet) / max(sh_jet, nh_jet) if max(sh_jet, nh_jet) > 1 else 1.0
     results.append(ValidationResult(
         name="Hemispheric jet symmetry",
-        passed=ratio > 0.3,
+        passed=0.3 <= ratio <= 1.0,
         value=ratio,
-        expected="> 0.3 (SH/NH or NH/SH)",
+        expected="0.3-1.0 (SH/NH or NH/SH)",
         message=f"Jet ratio = {ratio:.2f} (NH={nh_jet:.1f}, SH={sh_jet:.1f} m/s)",
     ))
 

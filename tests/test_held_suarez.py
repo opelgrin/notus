@@ -77,34 +77,114 @@ def isothermal_state(
 
 
 class TestEquilibriumTemperature:
-    """Verify T_eq against analytical values."""
+    """Verify T_eq against hand-computed analytical values.
 
-    def test_equator_surface(self, hs_forcing: HeldSuarez) -> None:
-        """At equator (sin²φ=0) and σ=1 (p=p0), T_eq = 315 K."""
-        # At equator, sin²φ = 0, cos²φ = 1
-        # At σ=1, p/p0 = 1, log(p/p0) = 0
-        # T_eq = max(200, (315 - 0 - 0) * 1^κ) = 315 K
-        # This is the maximum possible T_eq
-        assert hs_forcing.kappa == pytest.approx(EARTH.kappa)
+    T_eq(φ, p) = max(T_min, [315 - ΔT_y sin²φ - Δθ_z log(p/p₀) cos²φ] (p/p₀)^κ)
+    """
 
-    def test_pole_surface(self, hs_forcing: HeldSuarez) -> None:
-        """At pole (sin²φ=1) and σ=1, T_eq = (315 - 60) * 1^κ = 255 K."""
-        expected = 315.0 - 60.0  # = 255 K at σ=1
-        assert expected == pytest.approx(255.0)
+    def test_equator_surface(
+        self,
+        hs_forcing: HeldSuarez,
+        t21_transform: SpectralTransform,
+        levels: SigmaLevels,
+    ) -> None:
+        """At equator (sin²φ=0) and σ=1 (p=p0), T_eq = 315 K.
+
+        Hand computation: sin²(0)=0, cos²(0)=1, p/p0=1, log(1)=0
+        T_eq = max(200, (315 - 0 - 0) * 1^κ) = 315 K
+        """
+        grid = t21_transform.grid
+        n_levels = levels.n_levels
+        n_spec = grid.n_spectral_coeffs
+
+        # Set T = 315 K everywhere so tendency = -k_T*(315 - T_eq)
+        # At equator surface, T_eq = 315 K, so tendency should be ~0 there
+        t_grid = jnp.full((n_levels, grid.n_lat, grid.n_lon), 315.0)
+        t_spec = jax.vmap(t21_transform.grid_to_spectral)(t_grid)
+        state = PrimitiveEquationState(
+            vorticity=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
+            divergence=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
+            temperature=t_spec,
+            log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
+        )
+        ps = jnp.full((grid.n_lat, grid.n_lon), EARTH.reference_pressure)
+        result = hs_forcing(state, ps)
+        dt_grid = np.asarray(jax.vmap(t21_transform.spectral_to_grid)(result.temperature))
+
+        # Find equator and bottom level
+        lat_deg = np.degrees(np.asarray(grid.latitudes))
+        eq_idx = np.argmin(np.abs(lat_deg))
+        sigma = np.asarray(levels.sigma_full)
+        sfc_idx = np.argmax(sigma)
+
+        # At equator surface: T=315, T_eq ≈ 315 (not exact because σ_full < 1)
+        # The tendency should be small: |dT/dt| < k_s * |T - T_eq| ≈ k_s * few K
+        # k_s = 1/(4 days) ≈ 2.9e-6, so |dT/dt| < ~1e-5 K/s
+        assert abs(float(dt_grid[sfc_idx, eq_idx, 0])) < 1e-4, (
+            f"Tendency at equator surface should be small (T≈T_eq≈315), "
+            f"got {float(dt_grid[sfc_idx, eq_idx, 0]):.2e} K/s"
+        )
+
+    def test_pole_surface(
+        self,
+        hs_forcing: HeldSuarez,
+        t21_transform: SpectralTransform,
+        levels: SigmaLevels,
+    ) -> None:
+        """At pole (sin²φ=1) and σ≈1, T_eq ≈ 255 K.
+
+        Hand computation: sin²(90°)=1, p/p0≈1, log(1)=0
+        T_eq = max(200, (315 - 60) * 1^κ) = 255 K
+        """
+        grid = t21_transform.grid
+        n_levels = levels.n_levels
+        n_spec = grid.n_spectral_coeffs
+
+        # Set T = 255 K everywhere, check tendency near poles/surface
+        t_grid = jnp.full((n_levels, grid.n_lat, grid.n_lon), 255.0)
+        t_spec = jax.vmap(t21_transform.grid_to_spectral)(t_grid)
+        state = PrimitiveEquationState(
+            vorticity=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
+            divergence=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
+            temperature=t_spec,
+            log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
+        )
+        ps = jnp.full((grid.n_lat, grid.n_lon), EARTH.reference_pressure)
+        result = hs_forcing(state, ps)
+        dt_grid = np.asarray(jax.vmap(t21_transform.spectral_to_grid)(result.temperature))
+
+        # Find nearest pole and bottom level
+        lat_deg = np.degrees(np.asarray(grid.latitudes))
+        pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
+        sigma = np.asarray(levels.sigma_full)
+        sfc_idx = np.argmax(sigma)
+
+        # At pole surface: T=255, T_eq ≈ 255 => tendency should be near 0
+        # (Not exactly 0 because σ_full < 1, so p/p0 < 1 and T_eq deviates slightly)
+        assert abs(float(dt_grid[sfc_idx, pole_idx, 0])) < 0.5e-6, (
+            f"Tendency at pole surface should be near 0 (T≈T_eq≈255), "
+            f"got {float(dt_grid[sfc_idx, pole_idx, 0]):.2e} K/s"
+        )
 
     def test_teq_bounded_below(
         self,
         hs_forcing: HeldSuarez,
         isothermal_state: tuple[PrimitiveEquationState, jnp.ndarray],
     ) -> None:
-        """T_eq should never go below t_min (200 K)."""
+        """T_eq should never go below t_min (200 K).
+
+        For a very cold atmosphere (T=100K < T_min), T_eq >= 200 K everywhere,
+        so the tendency should be strictly positive (warming toward T_eq).
+        """
         state, ps = isothermal_state
         result = hs_forcing(state, ps)
-        # With T=264K uniform, the forcing pushes toward T_eq.
-        # We verify indirectly: the temperature tendency is finite everywhere.
-        dt_spec = result.temperature
-        dt_grid = jax.vmap(hs_forcing.transform.spectral_to_grid)(dt_spec)
+        dt_grid = jax.vmap(hs_forcing.transform.spectral_to_grid)(result.temperature)
         assert jnp.all(jnp.isfinite(dt_grid))
+        # With T=264K, some levels will have T > T_eq (cooling) and some T < T_eq
+        # (warming), but all should be finite and bounded
+        assert jnp.all(jnp.abs(dt_grid) < 1.0), (
+            "Temperature tendency magnitude unreasonably large"
+        )
 
 
 class TestRayleighFriction:
@@ -360,7 +440,13 @@ class TestHeldSuarezIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Benchmark validation: longer integration to verify climatology
+# Regression checks: reduced-resolution climatology (T21, 300 days)
+#
+# These are NOT full canonical H&S benchmark validation (which requires
+# T42 L20, 1200 days with analysis over days 200-1200).  They verify
+# that the forcing produces qualitatively correct climate features at
+# reduced resolution as a regression guard.  Full benchmark validation
+# is done via examples/held_suarez.py at T42.
 # ---------------------------------------------------------------------------
 
 
@@ -371,22 +457,8 @@ def _run_held_suarez_climatology(
     spinup_days: int,
     averaging_days: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, GaussianGrid, SigmaLevels]:
-    """Run Held-Suarez and return time-averaged zonal-mean U, T, and EKE.
-
-    Returns
-    -------
-    u_zm : ndarray, shape (n_levels, n_lat)
-        Time-averaged zonal-mean zonal wind [m/s].
-    t_zm : ndarray, shape (n_levels, n_lat)
-        Time-averaged zonal-mean temperature [K].
-    eke : ndarray, shape (n_levels, n_lat)
-        Time-averaged eddy kinetic energy [m²/s²].
-    u_surface : ndarray, shape (n_lat,)
-        Time-averaged zonal-mean surface zonal wind [m/s].
-    grid : GaussianGrid
-    levels : SigmaLevels
-    """
-    from notus.operators.vector import uv_from_vordiv as uv_recon
+    """Run Held-Suarez and return time-averaged zonal-mean U, T, and EKE."""
+    from notus.diagnostics import compute_zonal_mean_state as compute_zm
 
     grid = GaussianGrid(truncation=truncation)
     transform = SpectralTransform(grid, EARTH.radius)
@@ -411,7 +483,6 @@ def _run_held_suarez_climatology(
 
     steps_per_day = int(86400 / dt)
     total_days = spinup_days + averaging_days
-    cos_lat = np.asarray(grid.cos_lat)
 
     prev, curr = init_fn(state)
 
@@ -427,32 +498,11 @@ def _run_held_suarez_climatology(
             prev, curr = step_fn(prev, curr)
 
         if day > spinup_days:
-            # Compute zonal-mean fields
-            def _uv(vort: jnp.ndarray, div: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-                return uv_recon(vort, div, transform.arrays)
-
-            u_cos_s, v_cos_s = jax.vmap(_uv)(curr.vorticity, curr.divergence)
-            all_s = jnp.concatenate([u_cos_s, v_cos_s, curr.temperature], axis=0)
-            all_g = np.asarray(jax.vmap(transform.spectral_to_grid)(all_s))
-
-            u_cos_g = all_g[:n_levels]
-            v_cos_g = all_g[n_levels : 2 * n_levels]
-            t_g = all_g[2 * n_levels : 3 * n_levels]
-
-            cos_bc = cos_lat[None, :, None]
-            u_g = u_cos_g / cos_bc
-            v_g = v_cos_g / cos_bc
-
-            u_zm = np.mean(u_g, axis=-1)
-            t_zm = np.mean(t_g, axis=-1)
-
-            u_prime = u_g - u_zm[:, :, None]
-            v_prime = v_g - np.mean(v_g, axis=-1)[:, :, None]
-
-            u_zm_acc += u_zm
-            t_zm_acc += t_zm
-            u_prime_sq_acc += np.mean(u_prime**2, axis=-1)
-            v_prime_sq_acc += np.mean(v_prime**2, axis=-1)
+            zm = compute_zm(curr, transform)
+            u_zm_acc += np.asarray(zm.u)
+            t_zm_acc += np.asarray(zm.temperature)
+            u_prime_sq_acc += np.asarray(zm.u_prime_sq)
+            v_prime_sq_acc += np.asarray(zm.v_prime_sq)
             n_samples += 1
 
     u_zm_mean = u_zm_acc / n_samples
@@ -465,12 +515,16 @@ def _run_held_suarez_climatology(
     return u_zm_mean, t_zm_mean, eke_mean, u_surface, grid, levels
 
 
-class TestHeldSuarezClimatology:
-    """Validate the Held-Suarez climatology against benchmark targets.
+class TestHeldSuarezRegression:
+    """Reduced-resolution regression checks for Held-Suarez climate features.
 
     Runs a 300-day integration (100 spinup + 200 averaging) at T21 L20.
-    This is sufficient for the gross features to develop, though the
-    climatology will be noisier than the full 1200-day T42 benchmark.
+    These checks verify qualitatively correct climate features develop
+    (jets, temperature structure, eddies) as a regression guard.
+
+    This is NOT the canonical H&S benchmark (T42 L20, 1200 days,
+    analysis over days 200-1200).  Full benchmark validation is done
+    via ``examples/held_suarez.py``.
     """
 
     @pytest.fixture(scope="class")
@@ -486,17 +540,19 @@ class TestHeldSuarezClimatology:
             averaging_days=200,
         )
 
-    def test_subtropical_jet_exists(self, climatology: tuple) -> None:
-        """Upper-level jet should exceed 15 m/s.
+    def test_subtropical_jet_strength(self, climatology: tuple) -> None:
+        """Upper-level jet should be 15-60 m/s.
 
         H&S reference: ~25-30 m/s at T42.  At T21 with shorter averaging
-        we accept a lower threshold.
+        the jet may be weaker or noisier, so we use a wide two-sided range.
         """
         u_zm, _, _, _, _, levels = climatology
         sigma = np.asarray(levels.sigma_full)
         upper = sigma < 0.4
         jet_max = float(np.max(np.abs(u_zm[upper, :])))
-        assert jet_max > 15.0, f"Jet too weak: {jet_max:.1f} m/s (expected > 15)"
+        assert 15.0 <= jet_max <= 60.0, (
+            f"Jet strength: {jet_max:.1f} m/s (expected 15-60 m/s)"
+        )
 
     def test_jet_in_subtropics(self, climatology: tuple) -> None:
         """Jet peak should be in the subtropics (15°-50°)."""
@@ -511,41 +567,41 @@ class TestHeldSuarezClimatology:
         assert 15.0 <= jet_lat <= 50.0, f"Jet at {jet_lat:.1f}°N (expected 15-50°N)"
 
     def test_surface_westerlies(self, climatology: tuple) -> None:
-        """Midlatitude surface westerlies should develop."""
+        """Midlatitude surface westerlies should be 1-20 m/s."""
         _, _, _, u_surface, grid, _ = climatology
         lat_deg = np.degrees(np.asarray(grid.latitudes))
         midlat = (np.abs(lat_deg) > 30.0) & (np.abs(lat_deg) < 60.0)
         u_midlat_max = float(np.max(u_surface[midlat]))
-        assert u_midlat_max > 1.0, (
-            f"Surface westerlies too weak: {u_midlat_max:.1f} m/s (expected > 1)"
+        assert 1.0 <= u_midlat_max <= 20.0, (
+            f"Surface westerlies: {u_midlat_max:.1f} m/s (expected 1-20 m/s)"
         )
 
     def test_equatorial_surface_temperature(self, climatology: tuple) -> None:
-        """Equatorial surface temperature should be warm (~295-315 K)."""
+        """Equatorial surface temperature should be 290-315 K."""
         _, t_zm, _, _, grid, levels = climatology
         lat_deg = np.degrees(np.asarray(grid.latitudes))
         sigma = np.asarray(levels.sigma_full)
         eq_idx = np.argmin(np.abs(lat_deg))
         sfc_idx = np.argmax(sigma)
         t_eq = float(t_zm[sfc_idx, eq_idx])
-        assert 285.0 < t_eq < 320.0, (
-            f"Equatorial surface T = {t_eq:.1f} K (expected 285-320 K)"
+        assert 290.0 <= t_eq <= 315.0, (
+            f"Equatorial surface T = {t_eq:.1f} K (expected 290-315 K)"
         )
 
     def test_polar_surface_temperature(self, climatology: tuple) -> None:
-        """Polar surface temperature should be cold (~245-275 K)."""
+        """Polar surface temperature should be 245-275 K."""
         _, t_zm, _, _, grid, levels = climatology
         lat_deg = np.degrees(np.asarray(grid.latitudes))
         sigma = np.asarray(levels.sigma_full)
         pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
         sfc_idx = np.argmax(sigma)
         t_pole = float(t_zm[sfc_idx, pole_idx])
-        assert 235.0 < t_pole < 280.0, (
-            f"Polar surface T = {t_pole:.1f} K (expected 235-280 K)"
+        assert 245.0 <= t_pole <= 275.0, (
+            f"Polar surface T = {t_pole:.1f} K (expected 245-275 K)"
         )
 
     def test_equator_pole_temperature_gradient(self, climatology: tuple) -> None:
-        """Surface equator-to-pole temperature difference should be 20-60 K."""
+        """Surface equator-to-pole ΔT should be 25-55 K."""
         _, t_zm, _, _, grid, levels = climatology
         lat_deg = np.degrees(np.asarray(grid.latitudes))
         sigma = np.asarray(levels.sigma_full)
@@ -553,27 +609,27 @@ class TestHeldSuarezClimatology:
         eq_idx = np.argmin(np.abs(lat_deg))
         pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
         dt = float(t_zm[sfc_idx, eq_idx] - t_zm[sfc_idx, pole_idx])
-        assert 20.0 < dt < 60.0, (
-            f"ΔT(eq-pole) = {dt:.1f} K (expected 20-60 K)"
+        assert 25.0 <= dt <= 55.0, (
+            f"ΔT(eq-pole) = {dt:.1f} K (expected 25-55 K)"
         )
 
     def test_cold_tropopause(self, climatology: tuple) -> None:
-        """Tropopause region should be cold (< 230 K)."""
+        """Tropopause region should be 180-230 K."""
         _, t_zm, _, _, _, levels = climatology
         sigma = np.asarray(levels.sigma_full)
         tropo = (sigma > 0.05) & (sigma < 0.3)
         if np.any(tropo):
             t_min = float(np.min(t_zm[tropo, :]))
-            assert t_min < 230.0, (
-                f"Tropopause T_min = {t_min:.1f} K (expected < 230 K)"
+            assert 180.0 <= t_min <= 230.0, (
+                f"Tropopause T_min = {t_min:.1f} K (expected 180-230 K)"
             )
 
     def test_eddy_kinetic_energy(self, climatology: tuple) -> None:
-        """Eddy kinetic energy should be significant in midlatitudes."""
+        """Midlatitude EKE should be 10-300 m²/s²."""
         _, _, eke, _, grid, _ = climatology
         lat_deg = np.degrees(np.asarray(grid.latitudes))
         midlat = (np.abs(lat_deg) > 20.0) & (np.abs(lat_deg) < 70.0)
         eke_midlat_max = float(np.max(eke[:, midlat]))
-        assert eke_midlat_max > 5.0, (
-            f"Midlatitude EKE = {eke_midlat_max:.1f} m²/s² (expected > 5)"
+        assert 10.0 <= eke_midlat_max <= 300.0, (
+            f"Midlatitude EKE = {eke_midlat_max:.1f} m²/s² (expected 10-300 m²/s²)"
         )

@@ -16,7 +16,9 @@ Core components
 from notus.constants import EARTH, PlanetaryConstants
 from notus.diagnostics import (
     ConservationDiagnostics,
+    ZonalMeanState,
     compute_conservation_diagnostics,
+    compute_zonal_mean_state,
     sigma_integral,
     spherical_integral,
 )
@@ -63,7 +65,9 @@ __all__ = [
     "ShallowWaterState",
     "SigmaLevels",
     "SpectralTransform",
+    "ZonalMeanState",
     "compute_conservation_diagnostics",
+    "compute_zonal_mean_state",
     "geopotential",
     "held_suarez_initial_state",
     "hyperdiffusion",
