@@ -1,8 +1,9 @@
 """Simple physics forcing following Frierson et al. (2006).
 
-Composes gray longwave/shortwave radiation, dry convective adjustment,
-prescribed SST, and Rayleigh boundary-layer drag into a single ``Forcing``
-implementation suitable for aquaplanet experiments.
+Composes gray longwave radiation, dry convective adjustment, bulk
+surface sensible heat flux, prescribed SST, and Rayleigh boundary-layer
+drag into a single ``Forcing`` implementation suitable for aquaplanet
+experiments.
 """
 
 from __future__ import annotations
@@ -14,9 +15,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from notus.constants import PlanetaryConstants
+from notus.operators.vector import uv_from_vordiv
 from notus.physics.convection import dry_convective_adjustment
-from notus.physics.radiation import longwave_heating, shortwave_heating
-from notus.physics.surface import PrescribedSST, compute_sst
+from notus.physics.radiation import longwave_heating
+from notus.physics.surface import PrescribedSST, compute_sst, surface_sensible_heat_flux
 from notus.state import PrimitiveEquationState
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import SigmaLevels
@@ -32,39 +34,42 @@ class SimplePhysicsConfig:
         Equatorial longwave optical depth.
     tau_pole : float
         Polar longwave optical depth.
+    linear_fraction : float
+        Fraction of LW optical depth with linear pressure dependence.
     alpha : float
-        Pressure exponent for LW optical depth profile.
-    sw_tau_0 : float
-        Shortwave optical depth.
-    sw_exponent : float
-        Shortwave pressure exponent.
-    delta_s : float
-        Insolation distribution parameter.
-    sst_t_max : float
-        Maximum (equatorial) SST [K].
-    sst_delta_t : float
-        Equator-to-pole SST difference [K].
+        Pressure exponent for the nonlinear part of LW optical depth.
+    sw_delta_s : float
+        Insolation distribution parameter (P2 amplitude).
+    sst_t_min : float
+        Minimum SST (temperature floor) [K].
+    sst_t_delta : float
+        Equator-to-floor SST difference [K].
+    sst_phi_w : float
+        SST latitude width parameter [rad].
     k_f : float
-        Boundary-layer Rayleigh friction rate [s⁻¹].
+        Boundary-layer Rayleigh friction rate [s-1].
     sigma_b : float
-        Boundary-layer top (σ coordinate).
+        Boundary-layer top (sigma coordinate).
+    c_d : float
+        Surface drag coefficient for sensible heat flux.
     n_adjustment_iterations : int
         Number of dry convective adjustment sweeps.
     tau_adjustment : float
         Relaxation timescale for convective adjustment tendency [s].
-        Must exceed 2·dt to avoid leapfrog instability.
+        Must exceed 2*dt to avoid leapfrog instability.
     """
 
-    tau_equator: float = 7.2
-    tau_pole: float = 1.8
+    tau_equator: float = 6.0
+    tau_pole: float = 0.1
+    linear_fraction: float = 0.1
     alpha: float = 4.0
-    sw_tau_0: float = 0.22
-    sw_exponent: float = 2.0
-    delta_s: float = 1.4
-    sst_t_max: float = 285.0
-    sst_delta_t: float = 40.0
+    sw_delta_s: float = 1.4
+    sst_t_min: float = 271.0
+    sst_t_delta: float = 29.0
+    sst_phi_w: float = 26.0 * jnp.pi / 180.0
     k_f: float = 1.0 / (1.0 * 86400.0)
     sigma_b: float = 0.7
+    c_d: float = 0.0015
     n_adjustment_iterations: int = 3
     tau_adjustment: float = 43200.0
 
@@ -72,9 +77,12 @@ class SimplePhysicsConfig:
 class SimplePhysics:
     """Frierson et al. (2006) simple physics forcing.
 
-    Composes gray radiation (longwave + shortwave), dry convective
-    adjustment, and Rayleigh boundary-layer drag for an aquaplanet
-    with prescribed SST.
+    Composes gray longwave radiation, dry convective adjustment, bulk
+    surface sensible heat flux, and Rayleigh boundary-layer drag for
+    an aquaplanet with prescribed SST.
+
+    Shortwave radiation is applied as a prescribed surface flux (no
+    atmospheric absorption), following the Frierson convention.
 
     Implements the ``Forcing`` protocol.
 
@@ -83,7 +91,7 @@ class SimplePhysics:
     transform : SpectralTransform
         Pre-computed spectral transform.
     planet : PlanetaryConstants
-        Planetary constants (provides gravity, c_p, κ, solar constant).
+        Planetary constants (provides gravity, c_p, kappa, solar constant).
     levels : SigmaLevels
         Sigma vertical coordinate.
     config : SimplePhysicsConfig | None
@@ -104,10 +112,11 @@ class SimplePhysics:
 
         # Pre-compute prescribed SST profile: (n_lat,)
         sst_config = PrescribedSST(
-            t_max=self.config.sst_t_max,
-            delta_t=self.config.sst_delta_t,
+            t_min=self.config.sst_t_min,
+            t_delta=self.config.sst_t_delta,
+            phi_w=self.config.sst_phi_w,
         )
-        self.sst = compute_sst(sst_config, transform.grid.sin_lat)
+        self.sst = compute_sst(sst_config, transform.grid.latitudes)
 
         # Pre-compute Rayleigh friction coefficient per level
         sigma_full = np.asarray(levels.sigma_full)
@@ -115,6 +124,15 @@ class SimplePhysics:
             0.0, (sigma_full - self.config.sigma_b) / (1.0 - self.config.sigma_b),
         )
         self.k_v = jnp.array(self.config.k_f * sigma_frac)  # (n_levels,)
+
+        # Pre-compute lowest-level dsigma as a Python float (JIT-safe)
+        self.dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
+
+        # Pre-compute insolation profile for SW surface flux: (n_lat,)
+        sin_lat = transform.grid.sin_lat
+        self.insolation = planet.solar_constant / 4.0 * (
+            1.0 + self.config.sw_delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0
+        )
 
     def __call__(
         self,
@@ -128,7 +146,7 @@ class SimplePhysics:
         state : PrimitiveEquationState
             Current model state (spectral coefficients).
         surface_pressure : jnp.ndarray
-            Surface pressure field pₛ (grid space), shape ``(n_lat, n_lon)``.
+            Surface pressure field ps (grid space), shape ``(n_lat, n_lon)``.
 
         Returns
         -------
@@ -151,7 +169,7 @@ class SimplePhysics:
             state.temperature,
         )  # (n_levels, n_lat, n_lon)
 
-        # Longwave heating rate
+        # Longwave heating rate (no atmospheric SW — Frierson convention)
         q_lw = longwave_heating(
             t_grid,
             self.sst,
@@ -163,21 +181,35 @@ class SimplePhysics:
             planet.specific_heat_cp,
             tau_equator=cfg.tau_equator,
             tau_pole=cfg.tau_pole,
+            linear_fraction=cfg.linear_fraction,
             alpha=cfg.alpha,
         )
 
-        # Shortwave heating rate
-        q_sw = shortwave_heating(
-            levels.sigma_half,
-            levels.dsigma,
-            sin_lat,
+        # Surface sensible heat flux (lowest level only)
+        # Recover wind speed at the lowest level
+        lowest = levels.n_levels - 1
+        u_cos_spec, v_cos_spec = uv_from_vordiv(
+            state.vorticity[lowest],
+            state.divergence[lowest],
+            self.transform.arrays,
+        )
+        u_cos_grid = self.transform.spectral_to_grid(u_cos_spec)
+        v_cos_grid = self.transform.spectral_to_grid(v_cos_spec)
+        cos_lat = self.transform.grid.cos_lat[:, None]  # (n_lat, 1)
+        u_grid = u_cos_grid / cos_lat
+        v_grid = v_cos_grid / cos_lat
+        wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
+
+        q_sfc = surface_sensible_heat_flux(
+            self.sst,
+            t_grid[lowest],
+            wind_speed,
             surface_pressure,
-            planet.solar_constant,
             planet.gravity,
             planet.specific_heat_cp,
-            sw_tau_0=cfg.sw_tau_0,
-            sw_exponent=cfg.sw_exponent,
-            delta_s=cfg.delta_s,
+            planet.gas_constant,
+            self.dsigma_lowest,
+            drag_coefficient=cfg.c_d,
         )
 
         # Dry convective adjustment
@@ -190,8 +222,9 @@ class SimplePhysics:
         )
         q_adj = (t_adjusted - t_grid) / cfg.tau_adjustment
 
-        # Total temperature tendency
-        dt_grid = q_lw + q_sw + q_adj
+        # Total temperature tendency: LW + convective adjustment + surface flux
+        dt_grid = q_lw + q_adj
+        dt_grid = dt_grid.at[lowest].add(q_sfc)
 
         # Transform to spectral
         dt_spec = jax.vmap(self.transform.grid_to_spectral)(dt_grid)

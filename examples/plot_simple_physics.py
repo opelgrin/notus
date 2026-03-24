@@ -287,7 +287,7 @@ def main() -> None:
     parser.add_argument("--spinup", type=int, default=100, help="Spinup days")
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
-    parser.add_argument("--dt", type=float, default=1200.0, help="Timestep [s]")
+    parser.add_argument("--dt", type=float, default=600.0, help="Timestep [s]")
     parser.add_argument("--output", type=str, default="simple_physics.png", help="Output filename")
     parser.add_argument("--dpi", type=int, default=200, help="Output DPI")
     args = parser.parse_args()

@@ -24,24 +24,32 @@ def longwave_optical_depth(
     *,
     tau_equator: float,
     tau_pole: float,
+    linear_fraction: float,
     alpha: float,
 ) -> jnp.ndarray:
     """Compute longwave optical depth at half-levels.
 
-    tau(sigma, phi) = [tau_e + (tau_p - tau_e) sin^2(phi)] * sigma^alpha
+    Frierson et al. (2006) mixed linear + power-law pressure dependence::
+
+        tau_0(phi) = tau_e + (tau_p - tau_e) sin^2(phi)
+        tau(sigma, phi) = tau_0 * [f_l * sigma + (1 - f_l) * sigma^alpha]
+
+    where ``f_l`` is ``linear_fraction``.
 
     Parameters
     ----------
     sigma_half : jnp.ndarray
-        Half-level σ values (0 at top, 1 at surface), shape ``(n_levels+1,)``.
+        Half-level sigma values (0 at top, 1 at surface), shape ``(n_levels+1,)``.
     sin_lat : jnp.ndarray
         Sine of latitude, shape ``(n_lat,)``.
     tau_equator : float
         Equatorial longwave optical depth.
     tau_pole : float
         Polar longwave optical depth.
+    linear_fraction : float
+        Fraction of optical depth with linear pressure dependence (0-1).
     alpha : float
-        Pressure exponent for optical depth profile.
+        Pressure exponent for the nonlinear part.
 
     Returns
     -------
@@ -49,7 +57,9 @@ def longwave_optical_depth(
         Optical depth at half-levels, shape ``(n_levels+1, n_lat)``.
     """
     tau_0 = tau_equator + (tau_pole - tau_equator) * sin_lat**2  # (n_lat,)
-    return tau_0[None, :] * sigma_half[:, None] ** alpha  # (n_levels+1, n_lat)
+    sigma = sigma_half[:, None]  # (n_levels+1, 1)
+    pressure_profile = linear_fraction * sigma + (1.0 - linear_fraction) * sigma**alpha
+    return tau_0[None, :] * pressure_profile  # (n_levels+1, n_lat)
 
 
 def longwave_heating(
@@ -64,6 +74,7 @@ def longwave_heating(
     *,
     tau_equator: float,
     tau_pole: float,
+    linear_fraction: float,
     alpha: float,
 ) -> jnp.ndarray:
     """Compute longwave radiative heating rate using two-stream gray model.
@@ -93,8 +104,10 @@ def longwave_heating(
         Equatorial longwave optical depth.
     tau_pole : float
         Polar longwave optical depth.
+    linear_fraction : float
+        Fraction of optical depth with linear pressure dependence.
     alpha : float
-        Pressure exponent for optical depth profile.
+        Pressure exponent for the nonlinear part.
 
     Returns
     -------
@@ -104,7 +117,8 @@ def longwave_heating(
     # Optical depth at half-levels: (n_levels+1, n_lat)
     tau_half = longwave_optical_depth(
         sigma_half, sin_lat,
-        tau_equator=tau_equator, tau_pole=tau_pole, alpha=alpha,
+        tau_equator=tau_equator, tau_pole=tau_pole,
+        linear_fraction=linear_fraction, alpha=alpha,
     )
 
     # Layer optical thickness and transmissivity: (n_levels, n_lat)
