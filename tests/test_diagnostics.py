@@ -24,9 +24,9 @@ from notus.initial_conditions import (
     jablonowski_williamson_steady_state,
 )
 from notus.operators import exponential_filter
-from notus.vertical.sigma import uniform_sigma_levels
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
+from notus.vertical.sigma import uniform_sigma_levels
 
 
 jax.config.update("jax_enable_x64", True)
@@ -138,7 +138,7 @@ class TestConservationDiagnostics:
     def test_diagnostics_have_physical_values(self) -> None:
         """Mass, energy, and angular momentum should be in reasonable ranges."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(20)
         state, _, surface_phi = jablonowski_williamson_steady_state(transform, EARTH, levels)
 
@@ -158,7 +158,7 @@ class TestConservationDiagnostics:
     def test_steady_state_mass_conserved(self) -> None:
         """Mass should be conserved to machine precision for the steady state."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(20)
         dt = 600.0
         n_steps = 36  # 6 hours
@@ -166,7 +166,7 @@ class TestConservationDiagnostics:
         state, ref_temps, surface_phi = jablonowski_williamson_steady_state(
             transform, EARTH, levels
         )
-        filt = exponential_filter(grid.truncation, dt)
+        filt = exponential_filter(transform.arrays, dt)
         init_fn, step_fn = build_pe_stepper(
             transform=transform,
             planet=EARTH,
@@ -197,7 +197,7 @@ class TestConservationDiagnostics:
         but should hold to within a few percent over 1 day.
         """
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         levels = uniform_sigma_levels(20)
         dt = 600.0
         n_steps = 144  # 1 day
@@ -208,7 +208,7 @@ class TestConservationDiagnostics:
         pert = jablonowski_williamson_perturbation(transform, EARTH, levels)
         perturbed = jax.tree.map(jnp.add, state, pert)
 
-        filt = exponential_filter(grid.truncation, dt)
+        filt = exponential_filter(transform.arrays, dt)
         init_fn, step_fn = build_pe_stepper(
             transform=transform,
             planet=EARTH,

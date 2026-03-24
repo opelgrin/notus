@@ -80,13 +80,10 @@ def _run_shallow_water(
     tendency_fn = shallow_water_tendencies(transform, EARTH)
 
     si_config = SemiImplicitConfig(mean_geopotential=mean_phi)
-    grid = transform.grid
-    t = grid.truncation
-    a = EARTH.radius
     alpha = si_config.alpha
 
     # Exponential spectral filter (Hou & Li 2007)
-    exp_filter = exponential_filter(t, dt)
+    exp_filter = exponential_filter(transform.arrays, dt)
 
     def _apply_filter(s: ShallowWaterState) -> ShallowWaterState:
         return s.replace(
@@ -104,8 +101,7 @@ def _run_shallow_water(
         intermediate.geopotential,
         dt,
         si_config,
-        t,
-        a,
+        transform.arrays,
     )
     current = _apply_filter(intermediate.replace(divergence=delta_new, geopotential=phi_new))
     lf_state = LeapfrogState(current=current, previous=state)
@@ -122,8 +118,7 @@ def _run_shallow_water(
             lf_state.previous.divergence,
             lf_state.previous.geopotential,
             si_config,
-            t,
-            a,
+            transform.arrays,
         )
 
         # Leapfrog: intermediate = x_{n-1} + 2dt*(F(x_n) + (1-α)*L(x_{n-1}))
@@ -142,8 +137,7 @@ def _run_shallow_water(
             intermediate.geopotential,
             eta,
             si_config,
-            t,
-            a,
+            transform.arrays,
         )
         future = intermediate.replace(divergence=delta_new, geopotential=phi_new)
 
@@ -172,7 +166,7 @@ class TestWilliamsonCase2:
     def test_steady_state_1day(self):
         """After 1 day, the state should not have drifted significantly."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         initial = _williamson2_initial_state(grid, transform)
 
         dt = 1200.0  # 20-minute timestep
@@ -190,7 +184,7 @@ class TestWilliamsonCase2:
     def test_steady_state_5days(self):
         """After 5 days, the state should still be close to initial."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         initial = _williamson2_initial_state(grid, transform)
 
         dt = 1200.0
@@ -211,7 +205,7 @@ class TestConservation:
     def test_mass_conservation(self):
         """Global mean geopotential (total mass) should be conserved."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         initial = _williamson2_initial_state(grid, transform)
 
         dt = 1200.0
@@ -229,7 +223,7 @@ class TestConservation:
     def test_no_blowup(self):
         """Model should not blow up after 10 days."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         initial = _williamson2_initial_state(grid, transform)
 
         dt = 1200.0

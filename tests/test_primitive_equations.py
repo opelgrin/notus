@@ -9,9 +9,9 @@ from notus.dynamics.primitive_equations import primitive_equation_tendencies
 from notus.dynamics.shallow_water import shallow_water_tendencies
 from notus.grid import GaussianGrid
 from notus.operators import laplacian
-from notus.vertical.sigma import uniform_sigma_levels
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
+from notus.vertical.sigma import uniform_sigma_levels
 
 
 jax.config.update("jax_enable_x64", True)
@@ -37,7 +37,7 @@ class TestRestingState:
 
     def test_all_tendencies_zero(self) -> None:
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         t_ref = jnp.full(n_levels, 250.0)
@@ -86,7 +86,7 @@ class TestShapeCorrectness:
 
     def test_shapes(self) -> None:
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         t_ref = jnp.full(n_levels, 250.0)
@@ -116,7 +116,7 @@ class TestBarotropicState:
     def test_vertical_advection_zero(self) -> None:
         """Vertically uniform fields → zero vertical advection."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         n_spec = grid.n_spectral_coeffs
@@ -164,7 +164,7 @@ class TestVorticityMatchesSW:
         """With ln(ps)=const and barotropic state, PE vorticity tendency
         at each level should match the SW vorticity tendency."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 3
         levels = uniform_sigma_levels(n_levels)
         n_spec = grid.n_spectral_coeffs
@@ -225,7 +225,7 @@ class TestOrographyTerm:
         """With non-zero orography and zero state, only orography
         contributes to the divergence tendency."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 3
         levels = uniform_sigma_levels(n_levels)
         n_spec = grid.n_spectral_coeffs
@@ -249,7 +249,7 @@ class TestOrographyTerm:
         tend = tendency_fn(state)
 
         # Expected: -∇²(g·z_s) at each level
-        expected = -laplacian(surface_phi, grid.truncation, EARTH.radius)
+        expected = -laplacian(surface_phi, transform.arrays)
 
         for k in range(n_levels):
             np.testing.assert_allclose(
@@ -266,7 +266,7 @@ class TestHyperdiffusion:
     def test_diffusion_on_vort_div_temp_not_lnps(self) -> None:
         """Hyperdiffusion should act on ζ, δ, T but NOT on ln(ps)."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 3
         levels = uniform_sigma_levels(n_levels)
         n_spec = grid.n_spectral_coeffs
@@ -344,7 +344,7 @@ class TestNonzeroLnpsGradient:
         """With O(1e-4) lnps perturbation, tendencies should be physically
         reasonable — not inflated by a factor of Earth radius."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         t_ref = jnp.full(n_levels, 250.0)
@@ -388,7 +388,7 @@ class TestNonzeroLnpsGradient:
         giving ratio ~2.0 when the radius doubles.
         """
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform_1 = SpectralTransform(grid, EARTH.radius)
         n_levels = 3
         levels = uniform_sigma_levels(n_levels)
         t_ref = jnp.full(n_levels, 250.0)
@@ -399,7 +399,7 @@ class TestNonzeroLnpsGradient:
 
         # Compute tendencies at standard radius
         tend_fn_1 = primitive_equation_tendencies(
-            transform,
+            transform_1,
             EARTH,
             levels,
             t_ref,
@@ -417,8 +417,9 @@ class TestNonzeroLnpsGradient:
             gas_constant=EARTH.gas_constant,
             specific_heat_cp=EARTH.specific_heat_cp,
         )
+        transform_2a = SpectralTransform(grid, planet_2a.radius)
         tend_fn_2 = primitive_equation_tendencies(
-            transform,
+            transform_2a,
             planet_2a,
             levels,
             t_ref,
@@ -444,7 +445,7 @@ class TestNonzeroLnpsGradient:
         """Surface pressure tendency from a Y_2^1 lnps field should have
         the correct spectral structure (not contain spurious modes)."""
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 3
         levels = uniform_sigma_levels(n_levels)
         t_ref = jnp.full(n_levels, 250.0)
@@ -488,7 +489,7 @@ class TestCombinedPerturbationStability:
         from notus.timestepping.imex import build_pe_stepper
 
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         t_ref = np.full(n_levels, 250.0)
@@ -497,7 +498,7 @@ class TestCombinedPerturbationStability:
         dt = 1200.0
 
         state = _make_perturbed_state(grid, n_levels)
-        filt = exponential_filter(grid.truncation, dt)
+        filt = exponential_filter(transform.arrays, dt)
 
         init_fn, step_fn = build_pe_stepper(
             transform=transform,
@@ -523,7 +524,7 @@ class TestCombinedPerturbationStability:
         from notus.timestepping.imex import build_pe_stepper
 
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         t_ref = np.linspace(300.0, 200.0, n_levels)
@@ -552,7 +553,7 @@ class TestCombinedPerturbationStability:
             log_surface_pressure=lnps,
         )
 
-        filt = exponential_filter(grid.truncation, dt)
+        filt = exponential_filter(transform.arrays, dt)
         init_fn, step_fn = build_pe_stepper(
             transform=transform,
             planet=EARTH,

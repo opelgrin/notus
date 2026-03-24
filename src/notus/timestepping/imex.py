@@ -217,8 +217,7 @@ def build_pe_stepper(
         ``init_fn(state) -> (previous, current)``
         ``step_fn(previous, current) -> (filtered_current, future)``
     """
-    truncation = transform.grid.truncation
-    radius = planet.radius
+    arrays = transform.arrays
     t_ref = np.asarray(reference_temperature)
 
     # Build the explicit tendency function (JIT-compiled internally)
@@ -243,13 +242,13 @@ def build_pe_stepper(
 
     # Wrap implicit functions with partially applied config
     def implicit_fn(state: PrimitiveEquationState) -> PrimitiveEquationState:
-        return pe_implicit_terms(state, si_config, truncation, radius)
+        return pe_implicit_terms(state, si_config, arrays)
 
     def inverse_fn(
         state: PrimitiveEquationState,
         step_size: float,
     ) -> PrimitiveEquationState:
-        return pe_implicit_inverse(state, step_size, si_config, truncation, radius)
+        return pe_implicit_inverse(state, step_size, si_config, arrays)
 
     # Spectral filter helper
     def _apply_filter(state: PrimitiveEquationState) -> PrimitiveEquationState:

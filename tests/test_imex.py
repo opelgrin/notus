@@ -15,8 +15,7 @@ import numpy as np
 from notus.constants import EARTH
 from notus.dynamics.primitive_equations import primitive_equation_tendencies
 from notus.grid import GaussianGrid
-from notus.operators import exponential_filter
-from notus.vertical.sigma import uniform_sigma_levels
+from notus.operators import OperatorArrays, exponential_filter
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import (
     build_pe_stepper,
@@ -28,6 +27,7 @@ from notus.timestepping.semi_implicit_pe import (
     pe_implicit_terms,
 )
 from notus.transforms import SpectralTransform
+from notus.vertical.sigma import uniform_sigma_levels
 
 
 jax.config.update("jax_enable_x64", True)
@@ -77,7 +77,7 @@ def _make_stepper(
 ) -> tuple:
     """Build (init_fn, step_fn, grid, t_ref)."""
     grid = GaussianGrid(truncation=TRUNC)
-    transform = SpectralTransform(grid)
+    transform = SpectralTransform(grid, EARTH.radius)
     levels = uniform_sigma_levels(n_levels)
 
     if t_ref_profile == "isothermal":
@@ -88,7 +88,7 @@ def _make_stepper(
     surface_phi = jnp.zeros(grid.n_spectral_coeffs, dtype=jnp.complex128)
     filt = None
     if with_filter:
-        filt = exponential_filter(TRUNC, dt)
+        filt = exponential_filter(transform.arrays, dt)
 
     init_fn, step_fn = build_pe_stepper(
         transform=transform,
@@ -180,7 +180,7 @@ class TestEulerInit:
     def test_vorticity_unaffected_by_implicit(self) -> None:
         """Vorticity in Euler step = state + dt*F.vorticity (implicit doesn't touch it)."""
         grid = GaussianGrid(truncation=TRUNC)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         t_ref = np.full(n_levels, 250.0)
@@ -202,7 +202,7 @@ class TestEulerInit:
         )
 
         def inverse_fn(s: PrimitiveEquationState, step_size: float) -> PrimitiveEquationState:
-            return pe_implicit_inverse(s, step_size, si_config, TRUNC, EARTH.radius)
+            return pe_implicit_inverse(s, step_size, si_config, transform.arrays)
 
         state = _make_perturbed_state(grid, n_levels)
         tend = explicit_fn(state)
@@ -418,7 +418,7 @@ class TestSpectralFilter:
 
     def test_filter_damps_high_wavenumbers_directly(self) -> None:
         """The exponential filter array damps high-n modes and preserves low-n."""
-        filt = exponential_filter(TRUNC, DT)
+        filt = exponential_filter(OperatorArrays.build(TRUNC, EARTH.radius), DT)
 
         # n=0 mode (index 0): filter should be exactly 1.0
         np.testing.assert_allclose(float(filt[0]), 1.0, atol=1e-15)
@@ -519,7 +519,7 @@ class TestPhysicsConsistency:
     def test_explicit_plus_implicit_zero_for_resting(self) -> None:
         """F(x_rest) + L(x_rest) = 0 for a resting isothermal state."""
         grid = GaussianGrid(truncation=TRUNC)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         t_ref = np.full(n_levels, 250.0)
@@ -542,7 +542,7 @@ class TestPhysicsConsistency:
 
         state = _make_resting_state(grid, n_levels)
         f_x = explicit_fn(state)
-        l_x = pe_implicit_terms(state, si_config, TRUNC, EARTH.radius)
+        l_x = pe_implicit_terms(state, si_config, transform.arrays)
 
         for field in ("vorticity", "divergence", "temperature", "log_surface_pressure"):
             total = getattr(f_x, field) + getattr(l_x, field)
@@ -556,7 +556,7 @@ class TestPhysicsConsistency:
     def test_vorticity_independent_of_implicit_solver(self) -> None:
         """Vorticity result should be independent of implicit solver output."""
         grid = GaussianGrid(truncation=TRUNC)
-        transform = SpectralTransform(grid)
+        transform = SpectralTransform(grid, EARTH.radius)
         n_levels = 5
         levels = uniform_sigma_levels(n_levels)
         t_ref = np.full(n_levels, 250.0)
@@ -578,7 +578,7 @@ class TestPhysicsConsistency:
         )
 
         def real_inverse(s, step_size):
-            return pe_implicit_inverse(s, step_size, si_config, TRUNC, EARTH.radius)
+            return pe_implicit_inverse(s, step_size, si_config, transform.arrays)
 
         def identity_inverse(s, _step_size):
             return s  # don't solve, just pass through

@@ -25,7 +25,7 @@ class TestMeridionalDerivative:
         n_spec = grid.n_spectral_coeffs
         coeffs = jnp.zeros(n_spec, dtype=jnp.complex128)
         coeffs = coeffs.at[0].set(5.0)  # global mean only
-        result = meridional_derivative(coeffs, grid.truncation)
+        result = meridional_derivative(coeffs, t21_transform.arrays)
         assert jnp.allclose(result, 0.0, atol=1e-14)
 
     def test_y10_derivative(self, t21_transform: SpectralTransform):
@@ -43,7 +43,7 @@ class TestMeridionalDerivative:
         idx_10 = grid.spectral_index(0, 1)
         coeffs = coeffs.at[idx_10].set(1.0)
 
-        deriv_spec = meridional_derivative(coeffs, grid.truncation)
+        deriv_spec = meridional_derivative(coeffs, t21_transform.arrays)
         deriv_grid = t21_transform.spectral_to_grid(deriv_spec)
 
         # Expected: cos(φ)·d/dφ[P₁⁰(sinφ)] = √3·cos²(φ)
@@ -60,7 +60,7 @@ class TestMeridionalDerivative:
         idx_02 = grid.spectral_index(0, 2)
         coeffs = coeffs.at[idx_02].set(1.0)
 
-        result = meridional_derivative(coeffs, grid.truncation)
+        result = meridional_derivative(coeffs, t21_transform.arrays)
         # m=0 coefficients should remain real
         for n in range(grid.truncation + 1):
             idx = grid.spectral_index(0, n)
@@ -90,7 +90,7 @@ class TestUVFromVorDiv:
 
         div_spec = jnp.zeros(n_spec, dtype=jnp.complex128)
 
-        u_cos_spec, v_cos_spec = uv_from_vordiv(vort_spec, div_spec, grid.truncation, a)
+        u_cos_spec, v_cos_spec = uv_from_vordiv(vort_spec, div_spec, t21_transform.arrays)
 
         u_cos_grid = t21_transform.spectral_to_grid(u_cos_spec)
         v_cos_grid = t21_transform.spectral_to_grid(v_cos_spec)
@@ -111,10 +111,10 @@ class TestUVFromVorDiv:
         vort = vort.at[0].set(vort[0].real)
         div = jnp.zeros(n_spec, dtype=jnp.complex128)
 
-        _u_spec, _v_spec = uv_from_vordiv(vort, div, grid.truncation, earth.radius)
+        _u_spec, _v_spec = uv_from_vordiv(vort, div, t21_transform.arrays)
 
         # ∇²χ = δ = 0, so χ = 0 — the irrotational component is zero
-        chi = inverse_laplacian(div, grid.truncation, earth.radius)
+        chi = inverse_laplacian(div, t21_transform.arrays)
         assert jnp.allclose(chi, 0.0, atol=1e-30)
 
 
@@ -136,7 +136,7 @@ class TestSpectralCurlDivergence:
         vort_spec = vort_spec.at[idx_01].set(2.0 * u0 / (a * jnp.sqrt(3.0)))
         div_spec = jnp.zeros(n_spec, dtype=jnp.complex128)
 
-        u_spec, v_spec = uv_from_vordiv(vort_spec, div_spec, grid.truncation, a)
+        u_spec, v_spec = uv_from_vordiv(vort_spec, div_spec, t21_transform.arrays)
 
         u_grid = t21_transform.spectral_to_grid(u_spec)
         v_grid = t21_transform.spectral_to_grid(v_spec)
@@ -154,8 +154,8 @@ class TestSpectralCurlDivergence:
 
         # dζ/dt = -div(ζ_a·v⃗) = -spectral_divergence(A, B)
         # dδ/dt = +curl(ζ_a·v⃗) = -spectral_curl(A, B)  (flux part only)
-        vort_tend = -spectral_divergence(a_spec, b_spec, grid.truncation, a)
-        div_tend = -spectral_curl(a_spec, b_spec, grid.truncation, a)
+        vort_tend = -spectral_divergence(a_spec, b_spec, t21_transform.arrays)
+        div_tend = -spectral_curl(a_spec, b_spec, t21_transform.arrays)
 
         # For a balanced state, both should be near machine zero
         vort_tend_grid = t21_transform.spectral_to_grid(vort_tend)

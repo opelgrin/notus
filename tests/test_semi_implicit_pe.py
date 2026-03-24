@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from notus.constants import EARTH
-from notus.vertical.sigma import uniform_sigma_levels
+from notus.operators.arrays import OperatorArrays
 from notus.state import PrimitiveEquationState
 from notus.timestepping.semi_implicit_pe import (
     PESemiImplicitConfig,
@@ -28,6 +28,7 @@ from notus.timestepping.semi_implicit_pe import (
     temperature_implicit_weights,
 )
 from notus.vertical import geopotential_weights, sigma_ratios
+from notus.vertical.sigma import uniform_sigma_levels
 
 
 jax.config.update("jax_enable_x64", True)
@@ -38,6 +39,7 @@ kappa = R / 1004.64
 # Standard truncation and matching spectral size for implicit tests
 TRUNC = 5
 N_SPEC = (TRUNC + 1) * (TRUNC + 2) // 2  # 21
+ARRAYS = OperatorArrays.build(TRUNC, EARTH.radius)
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +306,7 @@ class TestPEImplicitTerms:
             temperature=jnp.zeros((n_levels, N_SPEC), dtype=jnp.complex128),
             log_surface_pressure=jnp.zeros(N_SPEC, dtype=jnp.complex128),
         )
-        tend = pe_implicit_terms(state, config, truncation=TRUNC, radius=EARTH.radius)
+        tend = pe_implicit_terms(state, config, ARRAYS)
 
         np.testing.assert_allclose(jnp.abs(tend.vorticity), 0.0, atol=1e-20)
         np.testing.assert_allclose(jnp.abs(tend.divergence), 0.0, atol=1e-20)
@@ -321,7 +323,7 @@ class TestPEImplicitTerms:
             temperature=jnp.ones((n_levels, N_SPEC), dtype=jnp.complex128),
             log_surface_pressure=jnp.ones(N_SPEC, dtype=jnp.complex128),
         )
-        tend = pe_implicit_terms(state, config, truncation=TRUNC, radius=EARTH.radius)
+        tend = pe_implicit_terms(state, config, ARRAYS)
         np.testing.assert_allclose(jnp.abs(tend.vorticity), 0.0, atol=1e-20)
 
     def test_shapes(self) -> None:
@@ -333,7 +335,7 @@ class TestPEImplicitTerms:
             temperature=jnp.ones((n_levels, N_SPEC), dtype=jnp.complex128),
             log_surface_pressure=jnp.ones(N_SPEC, dtype=jnp.complex128),
         )
-        tend = pe_implicit_terms(state, config, truncation=TRUNC, radius=EARTH.radius)
+        tend = pe_implicit_terms(state, config, ARRAYS)
         assert tend.vorticity.shape == (n_levels, N_SPEC)
         assert tend.divergence.shape == (n_levels, N_SPEC)
         assert tend.temperature.shape == (n_levels, N_SPEC)
@@ -352,8 +354,8 @@ class TestPEImplicitTerms:
         nonzero = zero.replace(
             temperature=jnp.ones((n_levels, N_SPEC), dtype=jnp.complex128),
         )
-        tend0 = pe_implicit_terms(zero, config, truncation=TRUNC, radius=EARTH.radius)
-        tend1 = pe_implicit_terms(nonzero, config, truncation=TRUNC, radius=EARTH.radius)
+        tend0 = pe_implicit_terms(zero, config, ARRAYS)
+        tend1 = pe_implicit_terms(nonzero, config, ARRAYS)
         # L_δ = -eigenvalues * (G @ T + ...), nonzero for n>0 modes
         diff = jnp.max(jnp.abs(tend1.divergence - tend0.divergence))
         assert float(diff) > 1e-15, "L_δ should change when T changes"
@@ -371,8 +373,8 @@ class TestPEImplicitTerms:
         nonzero = zero.replace(
             divergence=jnp.ones((n_levels, N_SPEC), dtype=jnp.complex128),
         )
-        tend0 = pe_implicit_terms(zero, config, truncation=TRUNC, radius=EARTH.radius)
-        tend1 = pe_implicit_terms(nonzero, config, truncation=TRUNC, radius=EARTH.radius)
+        tend0 = pe_implicit_terms(zero, config, ARRAYS)
+        tend1 = pe_implicit_terms(nonzero, config, ARRAYS)
         assert not jnp.allclose(tend0.temperature, tend1.temperature)
         assert not jnp.allclose(tend0.log_surface_pressure, tend1.log_surface_pressure)
 
@@ -393,7 +395,7 @@ class TestPEImplicitTerms:
             temperature=jnp.zeros((n_levels, N_SPEC), dtype=jnp.complex128),
             log_surface_pressure=jnp.zeros(N_SPEC, dtype=jnp.complex128),
         )
-        tend = pe_implicit_terms(state, config, truncation=TRUNC, radius=EARTH.radius)
+        tend = pe_implicit_terms(state, config, ARRAYS)
 
         # L_lnps = -Σ Δσ_k · δ_k; uniform → Δσ = 1/3
         expected = -(div[0] + div[1] + div[2]) / 3.0
@@ -421,7 +423,7 @@ class TestPEImplicitInverse:
             temperature=jnp.ones((n_levels, N_SPEC), dtype=jnp.complex128),
             log_surface_pressure=jnp.ones(N_SPEC, dtype=jnp.complex128),
         )
-        result = pe_implicit_inverse(state, 0.0, config, TRUNC, EARTH.radius)
+        result = pe_implicit_inverse(state, 0.0, config, ARRAYS)
 
         np.testing.assert_allclose(result.vorticity, state.vorticity, atol=1e-14)
         np.testing.assert_allclose(result.divergence, state.divergence, atol=1e-14)
@@ -441,7 +443,7 @@ class TestPEImplicitInverse:
             temperature=jnp.zeros((n_levels, N_SPEC), dtype=jnp.complex128),
             log_surface_pressure=jnp.zeros(N_SPEC, dtype=jnp.complex128),
         )
-        result = pe_implicit_inverse(state, 100.0, config, TRUNC, EARTH.radius)
+        result = pe_implicit_inverse(state, 100.0, config, ARRAYS)
 
         np.testing.assert_allclose(jnp.abs(result.divergence), 0.0, atol=1e-14)
         np.testing.assert_allclose(jnp.abs(result.temperature), 0.0, atol=1e-14)
@@ -460,7 +462,7 @@ class TestPEImplicitInverse:
             temperature=jnp.ones((n_levels, N_SPEC), dtype=jnp.complex128),
             log_surface_pressure=jnp.ones(N_SPEC, dtype=jnp.complex128),
         )
-        result = pe_implicit_inverse(state, 100.0, config, TRUNC, EARTH.radius)
+        result = pe_implicit_inverse(state, 100.0, config, ARRAYS)
 
         assert result.vorticity.shape == (n_levels, N_SPEC)
         assert result.divergence.shape == (n_levels, N_SPEC)
@@ -485,7 +487,7 @@ class TestPEImplicitInverse:
         )
 
         # Compute L(x₁)
-        lx1 = pe_implicit_terms(x1, config, TRUNC, EARTH.radius)
+        lx1 = pe_implicit_terms(x1, config, ARRAYS)
 
         # x₀ = x₁ - s·L(x₁)
         x0 = PrimitiveEquationState(
@@ -496,7 +498,7 @@ class TestPEImplicitInverse:
         )
 
         # (I - s·L)⁻¹ · x₀ should recover x₁
-        recovered = pe_implicit_inverse(x0, s, config, TRUNC, EARTH.radius)
+        recovered = pe_implicit_inverse(x0, s, config, ARRAYS)
 
         np.testing.assert_allclose(recovered.divergence, x1.divergence, rtol=1e-10)
         np.testing.assert_allclose(recovered.temperature, x1.temperature, rtol=1e-10)
@@ -525,7 +527,7 @@ class TestPEImplicitInverse:
             log_surface_pressure=jnp.zeros(N_SPEC, dtype=jnp.complex128),
         )
 
-        result = pe_implicit_inverse(state, 100.0, config, TRUNC, EARTH.radius)
+        result = pe_implicit_inverse(state, 100.0, config, ARRAYS)
 
         # n=0 divergence should be unchanged
         np.testing.assert_allclose(
@@ -550,7 +552,7 @@ class TestPEImplicitInverse:
 
         @jax.jit
         def solve(s: PrimitiveEquationState) -> PrimitiveEquationState:
-            return pe_implicit_inverse(s, 100.0, config, TRUNC, EARTH.radius)
+            return pe_implicit_inverse(s, 100.0, config, ARRAYS)
 
         result = solve(state)
         assert jnp.all(jnp.isfinite(result.divergence))
@@ -569,7 +571,7 @@ class TestPEImplicitInverse:
             log_surface_pressure=0.01 * jnp.ones(N_SPEC, dtype=jnp.complex128),
         )
 
-        result = pe_implicit_inverse(state, 100.0, config, TRUNC, EARTH.radius)
+        result = pe_implicit_inverse(state, 100.0, config, ARRAYS)
 
         assert jnp.all(jnp.isfinite(result.divergence))
         assert jnp.all(jnp.isfinite(result.temperature))
@@ -592,7 +594,7 @@ class TestPEImplicitInverse:
             log_surface_pressure=0.005 * jnp.ones(N_SPEC, dtype=jnp.complex128),
         )
 
-        lx1 = pe_implicit_terms(x1, config, TRUNC, EARTH.radius)
+        lx1 = pe_implicit_terms(x1, config, ARRAYS)
         x0 = PrimitiveEquationState(
             vorticity=x1.vorticity - s * lx1.vorticity,
             divergence=x1.divergence - s * lx1.divergence,
@@ -600,7 +602,7 @@ class TestPEImplicitInverse:
             log_surface_pressure=x1.log_surface_pressure - s * lx1.log_surface_pressure,
         )
 
-        recovered = pe_implicit_inverse(x0, s, config, TRUNC, EARTH.radius)
+        recovered = pe_implicit_inverse(x0, s, config, ARRAYS)
 
         np.testing.assert_allclose(recovered.divergence, x1.divergence, rtol=1e-10)
         np.testing.assert_allclose(recovered.temperature, x1.temperature, rtol=1e-10)
@@ -625,7 +627,7 @@ class TestPEImplicitInverse:
             log_surface_pressure=1e-3 * jnp.ones(N_SPEC, dtype=jnp.complex128),
         )
 
-        lx1 = pe_implicit_terms(x1, config, TRUNC, EARTH.radius)
+        lx1 = pe_implicit_terms(x1, config, ARRAYS)
         x0 = PrimitiveEquationState(
             vorticity=x1.vorticity - s * lx1.vorticity,
             divergence=x1.divergence - s * lx1.divergence,
@@ -633,7 +635,7 @@ class TestPEImplicitInverse:
             log_surface_pressure=x1.log_surface_pressure - s * lx1.log_surface_pressure,
         )
 
-        recovered = pe_implicit_inverse(x0, s, config, TRUNC, EARTH.radius)
+        recovered = pe_implicit_inverse(x0, s, config, ARRAYS)
 
         np.testing.assert_allclose(recovered.divergence, x1.divergence, rtol=1e-9)
         np.testing.assert_allclose(recovered.temperature, x1.temperature, rtol=1e-9)

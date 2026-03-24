@@ -20,7 +20,7 @@ class TestLaplacian:
         idx_20 = grid.spectral_index(0, 2)
         coeffs = coeffs.at[idx_20].set(1.0 + 0j)
 
-        result = laplacian(coeffs, grid.truncation, earth.radius)
+        result = laplacian(coeffs, t21_transform.arrays)
 
         expected_eigenvalue = -2 * 3 / earth.radius**2
         assert jnp.isclose(result[idx_20], expected_eigenvalue, rtol=1e-12)
@@ -34,7 +34,7 @@ class TestLaplacian:
         coeffs = jnp.zeros(n_spec, dtype=jnp.complex128)
         coeffs = coeffs.at[0].set(5.0 + 0j)  # n=0 mode only
 
-        result = laplacian(coeffs, grid.truncation, earth.radius)
+        result = laplacian(coeffs, t21_transform.arrays)
         assert jnp.allclose(result, 0.0, atol=1e-30)
 
 
@@ -53,6 +53,6 @@ class TestInverseLaplacian:
             idx = grid.spectral_index(0, n)
             coeffs = coeffs.at[idx].set(coeffs[idx].real)
 
-        inv = inverse_laplacian(coeffs, grid.truncation, earth.radius)
-        recovered = laplacian(inv, grid.truncation, earth.radius)
+        inv = inverse_laplacian(coeffs, t21_transform.arrays)
+        recovered = laplacian(inv, t21_transform.arrays)
         assert jnp.allclose(recovered, coeffs, atol=1e-8)

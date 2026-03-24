@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from notus.vertical.sigma import uniform_sigma_levels
 from notus.vertical import (
     geopotential,
     geopotential_weights,
@@ -14,6 +13,7 @@ from notus.vertical import (
     surface_pressure_tendency,
     vertical_advection,
 )
+from notus.vertical.sigma import uniform_sigma_levels
 
 
 jax.config.update("jax_enable_x64", True)

@@ -28,16 +28,13 @@ import jax.numpy as jnp
 
 from notus.constants import PlanetaryConstants
 from notus.operators import (
-    _laplacian_eigenvalues,
-    _m_index_array,
-    _meridional_coupling,
-    _mu_derivative_coupling,
     hyperdiffusion,
     laplacian,
     spectral_curl,
     spectral_divergence,
     uv_from_vordiv,
 )
+from notus.operators.arrays import OperatorArrays
 from notus.state import ShallowWaterState
 from notus.transforms import SpectralTransform
 
@@ -50,54 +47,33 @@ def shallow_water_tendencies(
 ) -> Callable[[ShallowWaterState], ShallowWaterState]:
     """Build a JIT-compiled explicit tendency function for the shallow water equations.
 
-    All nonlinear products are evaluated on the Gaussian grid, then
-    transformed to spectral space for tendency assembly.  Includes
-    biharmonic hyperdiffusion for stability.
-
-    The transform arrays and planet constants are closed over so that
-    ``jax.jit`` sees only the ``ShallowWaterState`` pytree as input.
-    This lets XLA fuse all spectral transforms, grid-point products,
-    and operator evaluations into a single compiled kernel.
-
     Parameters
     ----------
     transform : SpectralTransform
         Pre-computed spectral transform (arrays captured by closure).
     planet : PlanetaryConstants
-        Planetary constants (radius, rotation_rate; captured by closure).
+        Planetary constants (rotation_rate; captured by closure).
     diffusion_order : int
         Order of hyperdiffusion (4 = del-8, default). Set to 0 to disable.
     diffusion_timescale : float
         E-folding damping time for the smallest resolved scale [s].
-        Default: 2 hours.
 
     Returns
     -------
     Callable[[ShallowWaterState], ShallowWaterState]
-        JIT-compiled function mapping state to tendencies
-        dζ/dt, dδ/dt, dΦ/dt in spectral space.
+        JIT-compiled function mapping state to tendencies.
     """
-    grid = transform.grid
-    t = grid.truncation
-    a = planet.radius
+    arrays = transform.arrays
     rotation_rate = planet.rotation_rate
-    sin_lat = grid.sin_lat
-    cos_lat = grid.cos_lat
-
-    # Pre-fetch cached operator coefficients at build time so that
-    # the JIT-compiled function captures only JAX arrays, not lru_cache lookups.
-    _laplacian_eigenvalues(t, a)
-    _m_index_array(t)
-    _meridional_coupling(t)
-    _mu_derivative_coupling(t)
+    sin_lat = transform.grid.sin_lat
+    cos_lat = transform.grid.cos_lat
 
     @jax.jit
     def tendency(state: ShallowWaterState) -> ShallowWaterState:
         return _tendency_impl(
             state,
             transform,
-            t,
-            a,
+            arrays,
             rotation_rate,
             sin_lat,
             cos_lat,
@@ -118,11 +94,7 @@ def shallow_water_tendencies_eager(
     """Compute explicit tendencies for the shallow water equations (eager).
 
     Convenience wrapper that evaluates tendencies immediately without
-    JIT compilation.  Useful for debugging, single-shot diagnostics,
-    or when the caller manages JIT boundaries externally.
-
-    For time-stepping loops, prefer :func:`shallow_water_tendencies`
-    which returns a JIT-compiled callable.
+    JIT compilation.
 
     Parameters
     ----------
@@ -131,27 +103,24 @@ def shallow_water_tendencies_eager(
     transform : SpectralTransform
         Pre-computed spectral transform.
     planet : PlanetaryConstants
-        Planetary constants (radius, rotation_rate).
+        Planetary constants (rotation_rate).
     diffusion_order : int
         Order of hyperdiffusion (4 = del-8, default). Set to 0 to disable.
     diffusion_timescale : float
         E-folding damping time for the smallest resolved scale [s].
-        Default: 2 hours.
 
     Returns
     -------
     ShallowWaterState
         Tendencies dζ/dt, dδ/dt, dΦ/dt in spectral space.
     """
-    grid = transform.grid
     return _tendency_impl(
         state,
         transform,
-        grid.truncation,
-        planet.radius,
+        transform.arrays,
         planet.rotation_rate,
-        grid.sin_lat,
-        grid.cos_lat,
+        transform.grid.sin_lat,
+        transform.grid.cos_lat,
         diffusion_order,
         diffusion_timescale,
     )
@@ -160,8 +129,7 @@ def shallow_water_tendencies_eager(
 def _tendency_impl(
     state: ShallowWaterState,
     transform: SpectralTransform,
-    t: int,
-    a: float,
+    arrays: OperatorArrays,
     rotation_rate: float,
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
@@ -170,7 +138,7 @@ def _tendency_impl(
 ) -> ShallowWaterState:
     """Core tendency computation shared by JIT and eager paths."""
     # --- Step 1: Reconstruct cosine-weighted winds (spectral) ---
-    u_cos_spec, v_cos_spec = uv_from_vordiv(state.vorticity, state.divergence, t, a)
+    u_cos_spec, v_cos_spec = uv_from_vordiv(state.vorticity, state.divergence, arrays)
 
     # --- Step 2: Transform to grid (batched) ---
     fields_spec = jnp.stack([state.vorticity, u_cos_spec, v_cos_spec, state.geopotential])
@@ -196,14 +164,14 @@ def _tendency_impl(
     ke_spec = products_spec[4]
 
     # --- Step 5: Assemble spectral tendencies ---
-    vort_tend = -spectral_divergence(flux_a_spec, flux_b_spec, t, a)
-    div_tend = -spectral_curl(flux_a_spec, flux_b_spec, t, a) - laplacian(ke_spec, t, a)
-    phi_tend = -spectral_divergence(phi_flux_a_spec, phi_flux_b_spec, t, a)
+    vort_tend = -spectral_divergence(flux_a_spec, flux_b_spec, arrays)
+    div_tend = -spectral_curl(flux_a_spec, flux_b_spec, arrays) - laplacian(ke_spec, arrays)
+    phi_tend = -spectral_divergence(phi_flux_a_spec, phi_flux_b_spec, arrays)
 
     # --- Step 6: Hyperdiffusion for numerical stability ---
     if diffusion_order > 0:
-        vort_tend += hyperdiffusion(state.vorticity, t, a, diffusion_order, diffusion_timescale)
-        div_tend += hyperdiffusion(state.divergence, t, a, diffusion_order, diffusion_timescale)
+        vort_tend += hyperdiffusion(state.vorticity, arrays, diffusion_order, diffusion_timescale)
+        div_tend += hyperdiffusion(state.divergence, arrays, diffusion_order, diffusion_timescale)
 
     return ShallowWaterState(
         vorticity=vort_tend,

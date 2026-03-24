@@ -22,13 +22,13 @@ def t42_grid() -> GaussianGrid:
 @pytest.fixture
 def t21_transform(t21_grid: GaussianGrid) -> SpectralTransform:
     """Spectral transform for T21."""
-    return SpectralTransform(t21_grid)
+    return SpectralTransform(t21_grid, EARTH.radius)
 
 
 @pytest.fixture
 def t42_transform(t42_grid: GaussianGrid) -> SpectralTransform:
     """Spectral transform for T42."""
-    return SpectralTransform(t42_grid)
+    return SpectralTransform(t42_grid, EARTH.radius)
 
 
 @pytest.fixture

@@ -32,9 +32,9 @@ from notus.initial_conditions import (
     jablonowski_williamson_steady_state,
 )
 from notus.operators import exponential_filter
-from notus.vertical.sigma import uniform_sigma_levels
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
+from notus.vertical.sigma import uniform_sigma_levels
 
 
 jax.config.update("jax_enable_x64", True)
@@ -58,14 +58,14 @@ def _run_jw_integration(
         Daily relative conservation errors (dM/M, dE/E, dL/L).
     """
     grid = GaussianGrid(truncation=truncation)
-    transform = SpectralTransform(grid)
+    transform = SpectralTransform(grid, EARTH.radius)
     levels = uniform_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = jablonowski_williamson_steady_state(transform, EARTH, levels)
     pert = jablonowski_williamson_perturbation(transform, EARTH, levels)
     perturbed = jax.tree.map(jnp.add, state, pert)
 
-    filt = exponential_filter(grid.truncation, dt)
+    filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,
         planet=EARTH,
