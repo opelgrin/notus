@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from notus.constants import EARTH
+from notus.grid import GaussianGrid
 from notus.initial_conditions import simple_physics_initial_state
 from notus.operators import exponential_filter
 from notus.physics.convection import dry_convective_adjustment
@@ -50,6 +51,12 @@ def levels() -> SigmaLevels:
     return uniform_sigma_levels(20)
 
 
+@pytest.fixture(scope="module")
+def levels_module() -> SigmaLevels:
+    """Standard 20-level sigma coordinate (module-scoped)."""
+    return uniform_sigma_levels(20)
+
+
 @pytest.fixture
 def sp_forcing(
     t21_transform: SpectralTransform, levels: SigmaLevels,
@@ -79,6 +86,12 @@ def isothermal_state(
     )
     ps_grid = jnp.full((grid.n_lat, grid.n_lon), EARTH.reference_pressure)
     return state, ps_grid
+
+
+@pytest.fixture(scope="module")
+def t21_transform_module() -> SpectralTransform:
+    """T21 spectral transform (module-scoped)."""
+    return SpectralTransform(GaussianGrid(truncation=21), EARTH.radius)
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +369,41 @@ class TestSurfaceSensibleHeatFlux:
         q_kday = float(q[0, 0]) * 86400.0
         assert 1.0 < q_kday < 100.0, f"Heating rate {q_kday:.1f} K/day out of range"
 
+    def test_polar_wind_regularization_bounds_flux(self) -> None:
+        """Near-polar wind reconstruction should be finite and cap-amplified."""
+        # Mimic recovery of (u, v) from cosine-weighted winds in SimplePhysics.
+        u_cos = jnp.array([[1.0e-3], [1.0e-3]])  # (n_lat=2, n_lon=1)
+        v_cos = jnp.zeros_like(u_cos)
+        cos_lat = jnp.array([1.0, 1.0e-12])[:, None]
+
+        wind_unregularized = jnp.sqrt((u_cos / cos_lat) ** 2 + (v_cos / cos_lat) ** 2)
+        cos_lat_safe = jnp.maximum(cos_lat, 1.0e-6)
+        wind_regularized = jnp.sqrt((u_cos / cos_lat_safe) ** 2 + (v_cos / cos_lat_safe) ** 2)
+
+        # Regularization should reduce extreme high-lat amplification by the cap ratio.
+        assert float(wind_unregularized[1, 0]) == pytest.approx(1.0e9)
+        assert float(wind_regularized[1, 0]) == pytest.approx(1.0e3)
+        assert float(wind_regularized[1, 0] / wind_unregularized[1, 0]) == pytest.approx(1.0e-6)
+        assert bool(jnp.all(jnp.isfinite(wind_regularized)))
+
+        t_surface = jnp.array([300.0, 300.0])
+        t_air = jnp.array([[280.0], [280.0]])
+        ps = jnp.array([[1.0e5], [1.0e5]])
+
+        q_unregularized = surface_sensible_heat_flux(
+            t_surface, t_air, wind_unregularized, ps,
+            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
+            dsigma_lowest=0.05, drag_coefficient=0.0015,
+        )
+        q_regularized = surface_sensible_heat_flux(
+            t_surface, t_air, wind_regularized, ps,
+            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
+            dsigma_lowest=0.05, drag_coefficient=0.0015,
+        )
+
+        assert bool(jnp.all(jnp.isfinite(q_regularized)))
+        assert float(q_regularized[1, 0] / q_unregularized[1, 0]) == pytest.approx(1.0e-6)
+
 
 # ---------------------------------------------------------------------------
 # Unit tests: dry convective adjustment
@@ -535,28 +583,28 @@ class TestSimplePhysicsForcing:
 class TestSimplePhysicsIntegration:
     """Short integration to verify stability and physical plausibility."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="module")
     def run_30_days(
         self,
-        t21_transform: SpectralTransform,
-        levels: SigmaLevels,
+        t21_transform_module: SpectralTransform,
+        levels_module: SigmaLevels,
     ) -> dict[str, float]:
         """Run a 30-day integration at T21 L20, dt=600s."""
         dt = 600.0
         n_steps = int(30 * 86400 / dt)
 
         state, ref_temps, surface_phi = simple_physics_initial_state(
-            t21_transform, EARTH, levels,
+            t21_transform_module, EARTH, levels_module,
             initial_temperature=264.0,
             perturbation_amplitude=1.0,
             seed=42,
         )
 
-        forcing = SimplePhysics(t21_transform, EARTH, levels)
-        spectral_filter = exponential_filter(t21_transform.arrays, dt)
+        forcing = SimplePhysics(t21_transform_module, EARTH, levels_module)
+        spectral_filter = exponential_filter(t21_transform_module.arrays, dt)
 
         init_fn, step_fn = build_pe_stepper(
-            t21_transform, EARTH, levels,
+            t21_transform_module, EARTH, levels_module,
             ref_temps, surface_phi,
             dt=dt,
             forcing=forcing,
@@ -569,8 +617,8 @@ class TestSimplePhysicsIntegration:
         for _ in range(n_steps):
             prev, curr = step_fn(prev, curr)
 
-        t_grid = jax.vmap(t21_transform.spectral_to_grid)(curr.temperature)
-        lnps_grid = t21_transform.spectral_to_grid(curr.log_surface_pressure)
+        t_grid = jax.vmap(t21_transform_module.spectral_to_grid)(curr.temperature)
+        lnps_grid = t21_transform_module.spectral_to_grid(curr.log_surface_pressure)
         ps_grid = EARTH.reference_pressure * jnp.exp(lnps_grid)
 
         return {

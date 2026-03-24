@@ -121,18 +121,13 @@ class SimplePhysics:
         # Pre-compute Rayleigh friction coefficient per level
         sigma_full = np.asarray(levels.sigma_full)
         sigma_frac = np.maximum(
-            0.0, (sigma_full - self.config.sigma_b) / (1.0 - self.config.sigma_b),
+            0.0,
+            (sigma_full - self.config.sigma_b) / (1.0 - self.config.sigma_b),
         )
         self.k_v = jnp.array(self.config.k_f * sigma_frac)  # (n_levels,)
 
         # Pre-compute lowest-level dsigma as a Python float (JIT-safe)
         self.dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
-
-        # Pre-compute insolation profile for SW surface flux: (n_lat,)
-        sin_lat = transform.grid.sin_lat
-        self.insolation = planet.solar_constant / 4.0 * (
-            1.0 + self.config.sw_delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0
-        )
 
     def __call__(
         self,
@@ -196,8 +191,11 @@ class SimplePhysics:
         u_cos_grid = self.transform.spectral_to_grid(u_cos_spec)
         v_cos_grid = self.transform.spectral_to_grid(v_cos_spec)
         cos_lat = self.transform.grid.cos_lat[:, None]  # (n_lat, 1)
-        u_grid = u_cos_grid / cos_lat
-        v_grid = v_cos_grid / cos_lat
+        # Gaussian grids do not hit the poles exactly, but a small floor
+        # limits numerical amplification at very high latitudes.
+        cos_lat_safe = jnp.maximum(cos_lat, 1.0e-6)
+        u_grid = u_cos_grid / cos_lat_safe
+        v_grid = v_cos_grid / cos_lat_safe
         wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
 
         q_sfc = surface_sensible_heat_flux(

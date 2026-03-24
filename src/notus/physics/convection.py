@@ -50,16 +50,12 @@ def dry_convective_adjustment(
 
     def _single_sweep(t: jnp.ndarray, _: None) -> tuple[jnp.ndarray, None]:
         # Sweep from bottom (k = n_levels-2) to top (k = 0)
-        # Level k is above, level k+1 is below; σ increases downward.
-        for k in range(n_levels - 2, -1, -1):
-            t = _adjust_pair(
-                t, k,
-                sigma_kappa_above=sigma_kappa[k],
-                sigma_kappa_below=sigma_kappa[k + 1],
-                dsigma_above=dsigma[k],
-                dsigma_below=dsigma[k + 1],
-            )
-        return t, None
+        # using a JAX loop to avoid Python-loop unrolling in larger setups.
+        def _body(i: int, t_in: jnp.ndarray) -> jnp.ndarray:
+            k = (n_levels - 2) - i
+            return _adjust_pair(t_in, k, sigma_kappa=sigma_kappa, dsigma=dsigma)
+
+        return jax.lax.fori_loop(0, n_levels - 1, _body, t), None
 
     t_adjusted, _ = jax.lax.scan(_single_sweep, temperature, None, length=n_iterations)
     return t_adjusted
@@ -69,10 +65,8 @@ def _adjust_pair(
     temperature: jnp.ndarray,
     k: int,
     *,
-    sigma_kappa_above: jnp.ndarray,
-    sigma_kappa_below: jnp.ndarray,
-    dsigma_above: jnp.ndarray,
-    dsigma_below: jnp.ndarray,
+    sigma_kappa: jnp.ndarray,
+    dsigma: jnp.ndarray,
 ) -> jnp.ndarray:
     """Adjust a single pair of adjacent levels if statically unstable.
 
@@ -82,22 +76,22 @@ def _adjust_pair(
         Full temperature field, shape ``(n_levels, n_lat, n_lon)``.
     k : int
         Index of the upper level (k is above, k+1 is below).
-    sigma_kappa_above : jnp.ndarray
-        σ_k^κ for the upper level (scalar).
-    sigma_kappa_below : jnp.ndarray
-        σ_{k+1}^κ for the lower level (scalar).
-    dsigma_above : jnp.ndarray
-        Layer thickness Δσ_k (scalar).
-    dsigma_below : jnp.ndarray
-        Layer thickness Δσ_{k+1} (scalar).
+    sigma_kappa : jnp.ndarray
+        Precomputed σ^κ at all levels, shape ``(n_levels,)``.
+    dsigma : jnp.ndarray
+        Layer thicknesses Δσ at all levels, shape ``(n_levels,)``.
 
     Returns
     -------
     jnp.ndarray
         Temperature field with the pair adjusted if unstable.
     """
-    t_above = temperature[k]  # (n_lat, n_lon)
-    t_below = temperature[k + 1]  # (n_lat, n_lon)
+    t_above = jax.lax.dynamic_index_in_dim(temperature, k, axis=0, keepdims=False)
+    t_below = jax.lax.dynamic_index_in_dim(temperature, k + 1, axis=0, keepdims=False)
+    sigma_kappa_above = jax.lax.dynamic_index_in_dim(sigma_kappa, k, axis=0, keepdims=False)
+    sigma_kappa_below = jax.lax.dynamic_index_in_dim(sigma_kappa, k + 1, axis=0, keepdims=False)
+    dsigma_above = jax.lax.dynamic_index_in_dim(dsigma, k, axis=0, keepdims=False)
+    dsigma_below = jax.lax.dynamic_index_in_dim(dsigma, k + 1, axis=0, keepdims=False)
 
     # Potential temperature: θ = T / σ^κ
     theta_above = t_above / sigma_kappa_above
@@ -114,4 +108,5 @@ def _adjust_pair(
     t_above_new = jnp.where(unstable, theta_new * sigma_kappa_above, t_above)
     t_below_new = jnp.where(unstable, theta_new * sigma_kappa_below, t_below)
 
-    return temperature.at[k].set(t_above_new).at[k + 1].set(t_below_new)
+    updated = jax.lax.dynamic_update_index_in_dim(temperature, t_above_new, k, axis=0)
+    return jax.lax.dynamic_update_index_in_dim(updated, t_below_new, k + 1, axis=0)
