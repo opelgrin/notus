@@ -16,7 +16,7 @@ The model is planet-agnostic — it can simulate any rotating planet with an ide
 - **Vertical coordinate**: sigma (p/ps) on a Lorenz grid
 - **Time stepping**: IMEX leapfrog with Robert-Asselin filter + semi-implicit 3D Helmholtz solver
 - **Filtering**: exponential spectral filter (Hou & Li 2007) + del-8 hyperdiffusion
-- **Physics**: Held-Suarez forcing (Newtonian relaxation + Rayleigh friction), pluggable via `Forcing` protocol
+- **Physics**: Held-Suarez forcing, Frierson (2006) simple physics (gray radiation, convective adjustment, bulk surface flux), pluggable via `Forcing` protocol
 - **Computation**: JAX (JIT compilation, GPU support, autodiff)
 
 ## Installation
@@ -62,6 +62,18 @@ uv run python examples/held_suarez.py
 uv run python examples/plot_held_suarez.py
 ```
 
+### Frierson aquaplanet
+
+Run the gray-radiation aquaplanet with surface fluxes (Frierson et al. 2006):
+
+```bash
+# Quick demo (T21, 300 days)
+uv run python examples/simple_physics_aquaplanet.py
+
+# Generate diagnostic plots
+uv run python examples/plot_simple_physics.py
+```
+
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
@@ -70,10 +82,10 @@ See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
 - [x] **Phase 2 — Shallow water**: 2D shallow water equations on the sphere, Williamson et al. (1992) test case 2 (steady-state 10 days, mass conservation)
 - [x] **Phase 3 — Primitive equations**: 3D hydrostatic dycore on sigma levels, Jablonowski-Williamson (2006) baroclinic wave (10-day integration, ps minimum ~950 hPa, conservation < 0.1%)
 - [x] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20, validated climatology (jets, temperature, eddies)
-- [ ] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment
+- [x] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment, bulk surface flux, Frierson (2006) aquaplanet
 - [ ] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, simple convection
 - [ ] **Phase 7 — Seasonal cycle**: orbital parameters, shortwave/longwave radiation, diurnal and annual cycles
-- [ ] **Phase 8 — Surface coupling**: slab ocean, simple land surface, boundary layer parameterization
+- [ ] **Phase 8 — Surface coupling**: slab ocean, simple land surface, Monin-Obukhov boundary layer
 
 ## Tests
 

@@ -115,17 +115,32 @@ Newtonian relaxation forcing + Rayleigh friction. The standard dry dynamical cor
 - The forcing protocol composing with explicit dynamics via `jax.tree.map(add, dyn_tend, phys_tend)` inside the JIT boundary is clean and adds negligible overhead
 - 100 days of spinup is sufficient for the gross climate features to develop at T21; the full 1200-day T42 benchmark uses 200-day spinup per H&S convention
 
-## Phase 5 — Simple Physics (next)
+## Phase 5 — Simple Physics (complete)
 
-Gray radiation and dry convective adjustment — the minimum physics needed for a self-consistent climate.
+Gray radiation, dry convective adjustment, and bulk surface flux — following Frierson et al. (2006) for an aquaplanet configuration.
 
-**Plan:**
-- Gray-atmosphere longwave radiation (optical depth as a function of pressure)
-- Shortwave absorption (Beer-Lambert with prescribed solar constant)
-- Dry convective adjustment (restore unstable profiles to dry adiabat)
-- Surface energy balance (prescribed SST or slab ocean)
+**What was built:**
+- Two-stream gray longwave radiation with latitude-dependent optical depth (tau_e=6.0, tau_p=0.1, mixed linear+p^4 pressure dependence), upward/downward fluxes via `jax.lax.scan`
+- Dry convective adjustment (Manabe-Strickler 1964): bottom-up pairwise adjustment conserving column enthalpy, expressed as a relaxation tendency (tau=12h) for leapfrog stability
+- Bulk aerodynamic surface sensible heat flux: H = rho * cp * C_D * |v| * (T_s - T_a) with constant drag coefficient C_D=0.0015
+- Prescribed SST: Frierson Gaussian profile T_s(phi) = 271 + 29 exp(-0.5(phi/26deg)^2)
+- Rayleigh boundary-layer drag (same formulation as Held-Suarez)
+- No atmospheric shortwave absorption (Frierson convention: SW heats the surface only)
+- `SimplePhysicsConfig` dataclass for all scheme parameters
+- `SimplePhysics` forcing implementing the `Forcing` protocol (drop-in alternative to Held-Suarez)
+- Aquaplanet example script and five-panel diagnostic visualization
 
-## Phase 6 — Moisture
+**Validation:**
+- 32 unit tests covering radiation, convection, SST, surface flux, and forcing protocol
+- 10-day integration stability test at T21 L20
+- All tests pass with 253 total tests across the project
+
+**Lessons learned:**
+- Convective adjustment expressed as (T_adj - T)/dt blows up with leapfrog timestepping because the 2dt effective timestep causes a 2x overcorrection. Using a finite relaxation timescale tau_adj >> 2dt (12 hours) stabilizes the scheme. This is a fundamental leapfrog limitation — IMEX Runge-Kutta schemes (e.g., Dinosaur/NeuralGCM) do not have this problem.
+- Surface sensible heat flux is essential for realistic temperatures. Without it, the atmosphere is ~40 K too cold because LW radiation alone cannot efficiently couple the warm surface to the boundary layer.
+- Frierson (2006) uses no atmospheric SW absorption — the shortwave heats the surface only, and heat enters the atmosphere through sensible flux and LW radiation.
+
+## Phase 6 — Moisture (next)
 
 Add water vapor as a tracer with large-scale condensation.
 
@@ -152,5 +167,6 @@ Interactive surface for land-ocean-atmosphere coupling.
 **Plan:**
 - Slab ocean with prescribed ocean heat transport (Q-flux)
 - Simple land surface model (bucket hydrology, surface energy balance)
-- Planetary boundary layer parameterization (bulk aerodynamic formulas)
+- Monin-Obukhov boundary layer parameterization (stability-dependent drag, prognostic BL depth)
+- Upgrade from constant C_D to full surface similarity theory
 - Sea ice thermodynamics (optional)

@@ -31,6 +31,10 @@ class PlanetaryConstants:
         Specific heat at constant pressure, c_p [J/(kg·K)].
     reference_pressure : float
         Reference surface pressure, p₀ [Pa].
+    solar_constant : float
+        Total solar irradiance, S₀ [W/m²].
+    surface_albedo : float
+        Planetary surface albedo (dimensionless, 0-1).
     """
 
     name: str
@@ -40,6 +44,8 @@ class PlanetaryConstants:
     gas_constant: float
     specific_heat_cp: float
     reference_pressure: float = 1.0e5
+    solar_constant: float = 1360.0
+    surface_albedo: float = 0.31
 
     @property
     def kappa(self) -> float:
