@@ -61,9 +61,7 @@ def _run_jw_integration(
     transform = SpectralTransform(grid)
     levels = uniform_sigma_levels(n_levels)
 
-    state, ref_temps, surface_phi = jablonowski_williamson_steady_state(
-        transform, EARTH, levels
-    )
+    state, ref_temps, surface_phi = jablonowski_williamson_steady_state(transform, EARTH, levels)
     pert = jablonowski_williamson_perturbation(transform, EARTH, levels)
     perturbed = jax.tree.map(jnp.add, state, pert)
 
@@ -78,9 +76,7 @@ def _run_jw_integration(
         spectral_filter=filt,
     )
 
-    diag0 = compute_conservation_diagnostics(
-        perturbed, transform, EARTH, levels, surface_phi
-    )
+    diag0 = compute_conservation_diagnostics(perturbed, transform, EARTH, levels, surface_phi)
 
     prev, curr = init_fn(perturbed)
     steps_per_day = int(86400 / dt)
@@ -94,22 +90,17 @@ def _run_jw_integration(
             prev, curr = step_fn(prev, curr)
 
         # Surface pressure diagnostics
-        lnps_grid = np.asarray(
-            transform.spectral_to_grid(curr.log_surface_pressure)
-        )
+        lnps_grid = np.asarray(transform.spectral_to_grid(curr.log_surface_pressure))
         ps_grid = EARTH.reference_pressure * np.exp(lnps_grid)
         ps_min_daily.append(float(np.min(ps_grid)) / 100.0)
         ps_max_daily.append(float(np.max(ps_grid)) / 100.0)
 
         # Conservation
-        diag = compute_conservation_diagnostics(
-            curr, transform, EARTH, levels, surface_phi
-        )
+        diag = compute_conservation_diagnostics(curr, transform, EARTH, levels, surface_phi)
         conservation.append({
             "dM/M": (diag.mass - diag0.mass) / diag0.mass,
             "dE/E": (diag.total_energy - diag0.total_energy) / diag0.total_energy,
-            "dL/L": (diag.angular_momentum - diag0.angular_momentum)
-            / diag0.angular_momentum,
+            "dL/L": (diag.angular_momentum - diag0.angular_momentum) / diag0.angular_momentum,
         })
 
     return ps_min_daily, ps_max_daily, conservation
@@ -122,11 +113,15 @@ class TestBaroclinicWaveValidation:
     def jw_results(self) -> tuple[list[float], list[float], list[dict[str, float]]]:
         """Run the 10-day T42L20 integration once for all tests."""
         return _run_jw_integration(
-            truncation=42, n_levels=20, dt=600.0, n_days=10,
+            truncation=42,
+            n_levels=20,
+            dt=600.0,
+            n_days=10,
         )
 
     def test_integration_stable_10_days(
-        self, jw_results: tuple,
+        self,
+        jw_results: tuple,
     ) -> None:
         """The integration should remain stable for 10 days."""
         ps_min, _, _ = jw_results
@@ -135,7 +130,8 @@ class TestBaroclinicWaveValidation:
             assert np.isfinite(ps), f"ps_min is not finite at day {day + 1}"
 
     def test_wave_develops(
-        self, jw_results: tuple,
+        self,
+        jw_results: tuple,
     ) -> None:
         """Surface pressure minimum should deepen during the growth phase.
 
@@ -151,7 +147,8 @@ class TestBaroclinicWaveValidation:
             )
 
     def test_surface_pressure_minimum_realistic(
-        self, jw_results: tuple,
+        self,
+        jw_results: tuple,
     ) -> None:
         """Surface pressure minimum should reach ~940-970 hPa by day 9.
 
@@ -166,50 +163,50 @@ class TestBaroclinicWaveValidation:
         )
 
     def test_surface_pressure_maximum_realistic(
-        self, jw_results: tuple,
+        self,
+        jw_results: tuple,
     ) -> None:
         """Surface pressure maximum should rise above 1010 hPa by day 9."""
         _, ps_max, _ = jw_results
         ps_day9 = ps_max[8]
-        assert ps_day9 > 1010.0, (
-            f"Day 9 ps_max={ps_day9:.1f} hPa should exceed 1010 hPa"
-        )
+        assert ps_day9 > 1010.0, f"Day 9 ps_max={ps_day9:.1f} hPa should exceed 1010 hPa"
 
     def test_mass_conservation(
-        self, jw_results: tuple,
+        self,
+        jw_results: tuple,
     ) -> None:
         """Global mass should be conserved to better than 1e-6 over 10 days."""
         _, _, conservation = jw_results
         for day, c in enumerate(conservation):
             assert abs(c["dM/M"]) < 1e-6, (
-                f"Mass conservation violated at day {day + 1}: "
-                f"dM/M = {c['dM/M']:.2e}"
+                f"Mass conservation violated at day {day + 1}: dM/M = {c['dM/M']:.2e}"
             )
 
     def test_energy_conservation(
-        self, jw_results: tuple,
+        self,
+        jw_results: tuple,
     ) -> None:
         """Total energy should be conserved to better than 0.1% over 10 days."""
         _, _, conservation = jw_results
         for day, c in enumerate(conservation):
             assert abs(c["dE/E"]) < 1e-3, (
-                f"Energy conservation violated at day {day + 1}: "
-                f"dE/E = {c['dE/E']:.2e}"
+                f"Energy conservation violated at day {day + 1}: dE/E = {c['dE/E']:.2e}"
             )
 
     def test_angular_momentum_conservation(
-        self, jw_results: tuple,
+        self,
+        jw_results: tuple,
     ) -> None:
         """Angular momentum should be conserved to better than 0.1% over 10 days."""
         _, _, conservation = jw_results
         for day, c in enumerate(conservation):
             assert abs(c["dL/L"]) < 1e-3, (
-                f"Angular momentum conservation violated at day {day + 1}: "
-                f"dL/L = {c['dL/L']:.2e}"
+                f"Angular momentum conservation violated at day {day + 1}: dL/L = {c['dL/L']:.2e}"
             )
 
     def test_pressure_amplitude_grows_then_saturates(
-        self, jw_results: tuple,
+        self,
+        jw_results: tuple,
     ) -> None:
         """The pressure perturbation amplitude should grow then saturate.
 
@@ -219,11 +216,7 @@ class TestBaroclinicWaveValidation:
         ps_min, ps_max, _ = jw_results
         # Day 2: small perturbation
         amp_day2 = max(1000.0 - ps_min[1], ps_max[1] - 1000.0)
-        assert amp_day2 < 5.0, (
-            f"Day 2 amplitude {amp_day2:.1f} hPa too large (expected < 5)"
-        )
+        assert amp_day2 < 5.0, f"Day 2 amplitude {amp_day2:.1f} hPa too large (expected < 5)"
         # Day 9: large perturbation
         amp_day9 = max(1000.0 - ps_min[8], ps_max[8] - 1000.0)
-        assert amp_day9 > 30.0, (
-            f"Day 9 amplitude {amp_day9:.1f} hPa too small (expected > 30)"
-        )
+        assert amp_day9 > 30.0, f"Day 9 amplitude {amp_day9:.1f} hPa too small (expected > 30)"

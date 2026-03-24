@@ -131,9 +131,9 @@ def jablonowski_williamson_steady_state(
     cos_lat = np.cos(lat)
 
     # -- Reference profiles (1D, per level) --
-    reference_temperatures = np.array(
-        [_reference_temperature(float(eta), planet, config) for eta in etas]
-    )
+    reference_temperatures = np.array([
+        _reference_temperature(float(eta), planet, config) for eta in etas
+    ])
 
     # -- Latitude-dependent factors (shared by geopotential & temperature) --
     # A(lat) = -2 sin^6(lat) (cos^2(lat) + 1/3) + 10/63
@@ -155,13 +155,7 @@ def jablonowski_williamson_steady_state(
         sin_enu = np.sin(eta_nu)
 
         # Vorticity: ζ(lat, η) = (-4u0/a) cos^1.5(η_ν) sin(lat) cos(lat) (2 - 5sin²(lat))
-        vort = (
-            (-4.0 * config.u0 / a)
-            * cos_enu**1.5
-            * sin_lat
-            * cos_lat
-            * (2.0 - 5.0 * sin_lat**2)
-        )
+        vort = (-4.0 * config.u0 / a) * cos_enu**1.5 * sin_lat * cos_lat * (2.0 - 5.0 * sin_lat**2)
         vorticity_grid[k, :, :] = vort[:, None]
 
         # Temperature variation:
@@ -257,32 +251,39 @@ def jablonowski_williamson_perturbation(
     lon_bc = lon[None, :]  # (1, n_lon)
 
     # Great-circle distance factor
-    x = (
-        np.sin(lat_location) * sin_lat
-        + np.cos(lat_location) * cos_lat * np.cos(lon_bc - lon_location)
+    x = np.sin(lat_location) * sin_lat + np.cos(lat_location) * cos_lat * np.cos(
+        lon_bc - lon_location
     )
     r = a * np.arccos(np.clip(x, -1.0, 1.0))
     sqrt_val = np.sqrt(np.maximum(1.0 - x**2, 1e-12))
     arccos_x = np.arccos(np.clip(x, -1.0, 1.0))
 
     # Vorticity perturbation
-    exp_decay = np.exp(-(r / big_r) ** 2)
-    vort_pert = (u_perturb / a) * exp_decay * (
-        np.tan(lat[:, None])
-        - 2.0 * (a / big_r) ** 2 * arccos_x
+    exp_decay = np.exp(-((r / big_r) ** 2))
+    vort_pert = (
+        (u_perturb / a)
+        * exp_decay
         * (
-            np.sin(lat_location) * cos_lat
-            - np.cos(lat_location) * sin_lat * np.cos(lon_bc - lon_location)
+            np.tan(lat[:, None])
+            - 2.0
+            * (a / big_r) ** 2
+            * arccos_x
+            * (
+                np.sin(lat_location) * cos_lat
+                - np.cos(lat_location) * sin_lat * np.cos(lon_bc - lon_location)
+            )
+            / sqrt_val
         )
-        / sqrt_val
     )
 
     # Divergence perturbation
     div_pert = (
-        -2.0 * u_perturb * a / big_r**2
-    ) * exp_decay * arccos_x * (
-        np.cos(lat_location) * np.sin(lon_bc - lon_location)
-    ) / sqrt_val
+        (-2.0 * u_perturb * a / big_r**2)
+        * exp_decay
+        * arccos_x
+        * (np.cos(lat_location) * np.sin(lon_bc - lon_location))
+        / sqrt_val
+    )
 
     # Transform once and broadcast (perturbation is level-independent)
     n_levels = levels.n_levels

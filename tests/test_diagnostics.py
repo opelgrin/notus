@@ -140,18 +140,12 @@ class TestConservationDiagnostics:
         grid = GaussianGrid(truncation=21)
         transform = SpectralTransform(grid)
         levels = uniform_sigma_levels(20)
-        state, _, surface_phi = jablonowski_williamson_steady_state(
-            transform, EARTH, levels
-        )
+        state, _, surface_phi = jablonowski_williamson_steady_state(transform, EARTH, levels)
 
-        diag = compute_conservation_diagnostics(
-            state, transform, EARTH, levels, surface_phi
-        )
+        diag = compute_conservation_diagnostics(state, transform, EARTH, levels, surface_phi)
 
         # Total mass of Earth's atmosphere ≈ 5.15e18 kg
-        assert 4e18 < diag.mass < 6e18, (
-            f"Mass {diag.mass:.3e} kg not in expected range"
-        )
+        assert 4e18 < diag.mass < 6e18, f"Mass {diag.mass:.3e} kg not in expected range"
 
         # Total energy should be dominated by internal energy (cp*T*mass)
         # Rough: cp * 250K * 5e18 kg ≈ 1.3e27 J
@@ -174,27 +168,25 @@ class TestConservationDiagnostics:
         )
         filt = exponential_filter(grid.truncation, dt)
         init_fn, step_fn = build_pe_stepper(
-            transform=transform, planet=EARTH, levels=levels,
+            transform=transform,
+            planet=EARTH,
+            levels=levels,
             reference_temperature=ref_temps,
             surface_geopotential=surface_phi,
-            dt=dt, spectral_filter=filt,
+            dt=dt,
+            spectral_filter=filt,
         )
 
-        diag0 = compute_conservation_diagnostics(
-            state, transform, EARTH, levels, surface_phi
-        )
+        diag0 = compute_conservation_diagnostics(state, transform, EARTH, levels, surface_phi)
 
         prev, curr = init_fn(state)
         for _ in range(n_steps):
             prev, curr = step_fn(prev, curr)
 
-        diag1 = compute_conservation_diagnostics(
-            curr, transform, EARTH, levels, surface_phi
-        )
+        diag1 = compute_conservation_diagnostics(curr, transform, EARTH, levels, surface_phi)
 
         np.testing.assert_allclose(
-            diag1.mass, diag0.mass, rtol=1e-8,
-            err_msg="Mass should be conserved for steady state"
+            diag1.mass, diag0.mass, rtol=1e-8, err_msg="Mass should be conserved for steady state"
         )
 
     def test_perturbed_state_approximate_conservation(self) -> None:
@@ -218,38 +210,40 @@ class TestConservationDiagnostics:
 
         filt = exponential_filter(grid.truncation, dt)
         init_fn, step_fn = build_pe_stepper(
-            transform=transform, planet=EARTH, levels=levels,
+            transform=transform,
+            planet=EARTH,
+            levels=levels,
             reference_temperature=ref_temps,
             surface_geopotential=surface_phi,
-            dt=dt, spectral_filter=filt,
+            dt=dt,
+            spectral_filter=filt,
         )
 
-        diag0 = compute_conservation_diagnostics(
-            perturbed, transform, EARTH, levels, surface_phi
-        )
+        diag0 = compute_conservation_diagnostics(perturbed, transform, EARTH, levels, surface_phi)
 
         prev, curr = init_fn(perturbed)
         for _ in range(n_steps):
             prev, curr = step_fn(prev, curr)
 
-        diag1 = compute_conservation_diagnostics(
-            curr, transform, EARTH, levels, surface_phi
-        )
+        diag1 = compute_conservation_diagnostics(curr, transform, EARTH, levels, surface_phi)
 
         # Mass: should be conserved to ~1e-6 or better
         np.testing.assert_allclose(
-            diag1.mass, diag0.mass, rtol=1e-5,
-            err_msg="Mass should be well conserved over 1 day"
+            diag1.mass, diag0.mass, rtol=1e-5, err_msg="Mass should be well conserved over 1 day"
         )
 
         # Total energy: conserved to within ~1%
         np.testing.assert_allclose(
-            diag1.total_energy, diag0.total_energy, rtol=0.01,
-            err_msg="Total energy should be approximately conserved over 1 day"
+            diag1.total_energy,
+            diag0.total_energy,
+            rtol=0.01,
+            err_msg="Total energy should be approximately conserved over 1 day",
         )
 
         # Angular momentum: conserved to within ~1%
         np.testing.assert_allclose(
-            diag1.angular_momentum, diag0.angular_momentum, rtol=0.01,
-            err_msg="Angular momentum should be approximately conserved over 1 day"
+            diag1.angular_momentum,
+            diag0.angular_momentum,
+            rtol=0.01,
+            err_msg="Angular momentum should be approximately conserved over 1 day",
         )

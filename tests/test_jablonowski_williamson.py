@@ -42,9 +42,7 @@ def _notus_to_grid(
     """
     if spectral_field.ndim == 1:
         return np.asarray(transform.spectral_to_grid(spectral_field))
-    result = np.zeros(
-        (spectral_field.shape[0], transform.grid.n_lat, transform.grid.n_lon)
-    )
+    result = np.zeros((spectral_field.shape[0], transform.grid.n_lat, transform.grid.n_lon))
     for k in range(spectral_field.shape[0]):
         result[k] = np.asarray(transform.spectral_to_grid(spectral_field[k]))
     return result
@@ -132,9 +130,7 @@ class TestGridPointFields:
         levels = uniform_sigma_levels(5)
         config = JWConfig()
 
-        state, _, _ = jablonowski_williamson_steady_state(
-            transform, EARTH, levels, config
-        )
+        state, _, _ = jablonowski_williamson_steady_state(transform, EARTH, levels, config)
         vort_grid = _notus_to_grid(transform, state.vorticity)
 
         lat = np.array(grid.latitudes)
@@ -154,12 +150,14 @@ class TestGridPointFields:
             )
             # Apply same spectral roundtrip to the analytic field
             analytic_2d = np.broadcast_to(analytic[:, None], (grid.n_lat, grid.n_lon))
-            expected = np.asarray(transform.spectral_to_grid(
-                transform.grid_to_spectral(jnp.array(analytic_2d))
-            ))
+            expected = np.asarray(
+                transform.spectral_to_grid(transform.grid_to_spectral(jnp.array(analytic_2d)))
+            )
             np.testing.assert_allclose(
-                vort_grid[k], expected, rtol=1e-12,
-                err_msg=f"Vorticity mismatch at level {k} (eta={eta:.2f})"
+                vort_grid[k],
+                expected,
+                rtol=1e-12,
+                err_msg=f"Vorticity mismatch at level {k} (eta={eta:.2f})",
             )
 
     def test_temperature_matches_analytic(self) -> None:
@@ -169,9 +167,7 @@ class TestGridPointFields:
         levels = uniform_sigma_levels(5)
         config = JWConfig()
 
-        state, ref_temps, _ = jablonowski_williamson_steady_state(
-            transform, EARTH, levels, config
-        )
+        state, ref_temps, _ = jablonowski_williamson_steady_state(transform, EARTH, levels, config)
         temp_grid = _notus_to_grid(transform, state.temperature)
 
         lat = np.array(grid.latitudes)
@@ -198,12 +194,14 @@ class TestGridPointFields:
             )
             analytic = ref_temps[k] + t_var
             analytic_2d = np.broadcast_to(analytic[:, None], (grid.n_lat, grid.n_lon))
-            expected = np.asarray(transform.spectral_to_grid(
-                transform.grid_to_spectral(jnp.array(analytic_2d))
-            ))
+            expected = np.asarray(
+                transform.spectral_to_grid(transform.grid_to_spectral(jnp.array(analytic_2d)))
+            )
             np.testing.assert_allclose(
-                temp_grid[k], expected, rtol=1e-12,
-                err_msg=f"Temperature mismatch at level {k} (eta={eta:.2f})"
+                temp_grid[k],
+                expected,
+                rtol=1e-12,
+                err_msg=f"Temperature mismatch at level {k} (eta={eta:.2f})",
             )
 
     def test_divergence_is_zero(self) -> None:
@@ -211,39 +209,31 @@ class TestGridPointFields:
         grid = GaussianGrid(truncation=21)
         transform = SpectralTransform(grid)
         levels = uniform_sigma_levels(5)
-        state, _, _ = jablonowski_williamson_steady_state(
-            transform, EARTH, levels
-        )
-        np.testing.assert_allclose(
-            np.asarray(state.divergence), 0.0, atol=1e-30
-        )
+        state, _, _ = jablonowski_williamson_steady_state(transform, EARTH, levels)
+        np.testing.assert_allclose(np.asarray(state.divergence), 0.0, atol=1e-30)
 
     def test_log_surface_pressure_is_zero(self) -> None:
         """Initial ln(ps/p0) should be zero (uniform surface pressure)."""
         grid = GaussianGrid(truncation=21)
         transform = SpectralTransform(grid)
         levels = uniform_sigma_levels(5)
-        state, _, _ = jablonowski_williamson_steady_state(
-            transform, EARTH, levels
-        )
-        np.testing.assert_allclose(
-            np.asarray(state.log_surface_pressure), 0.0, atol=1e-30
-        )
+        state, _, _ = jablonowski_williamson_steady_state(transform, EARTH, levels)
+        np.testing.assert_allclose(np.asarray(state.log_surface_pressure), 0.0, atol=1e-30)
 
     def test_vorticity_is_zonally_symmetric(self) -> None:
         """Steady-state vorticity should have no longitude dependence (m=0 only)."""
         grid = GaussianGrid(truncation=21)
         transform = SpectralTransform(grid)
         levels = uniform_sigma_levels(5)
-        state, _, _ = jablonowski_williamson_steady_state(
-            transform, EARTH, levels
-        )
+        state, _, _ = jablonowski_williamson_steady_state(transform, EARTH, levels)
         vort_grid = _notus_to_grid(transform, state.vorticity)
         for k in range(levels.n_levels):
             zonal_std = np.std(vort_grid[k], axis=1)  # std along lon
             np.testing.assert_allclose(
-                zonal_std, 0.0, atol=1e-15,
-                err_msg=f"Vorticity should be zonally symmetric at level {k}"
+                zonal_std,
+                0.0,
+                atol=1e-15,
+                err_msg=f"Vorticity should be zonally symmetric at level {k}",
             )
 
     def test_surface_geopotential_nonzero(self) -> None:
@@ -251,9 +241,7 @@ class TestGridPointFields:
         grid = GaussianGrid(truncation=21)
         transform = SpectralTransform(grid)
         levels = uniform_sigma_levels(5)
-        _, _, surface_phi = jablonowski_williamson_steady_state(
-            transform, EARTH, levels
-        )
+        _, _, surface_phi = jablonowski_williamson_steady_state(transform, EARTH, levels)
         phi_grid = np.asarray(transform.spectral_to_grid(surface_phi))
         # Should have latitude-dependent structure
         assert np.max(np.abs(phi_grid)) > 100.0, (
@@ -265,15 +253,11 @@ class TestGridPointFields:
         grid = GaussianGrid(truncation=21)
         transform = SpectralTransform(grid)
         levels = uniform_sigma_levels(20)
-        _, ref_temps, _ = jablonowski_williamson_steady_state(
-            transform, EARTH, levels
-        )
+        _, ref_temps, _ = jablonowski_williamson_steady_state(transform, EARTH, levels)
         assert np.all(ref_temps > 180.0), "T_ref should be > 180 K everywhere"
         assert np.all(ref_temps < 300.0), "T_ref should be < 300 K everywhere"
         # Should decrease with height (increasing index = increasing eta = lower)
-        assert ref_temps[0] < ref_temps[-1], (
-            "T_ref should be colder at top than surface"
-        )
+        assert ref_temps[0] < ref_temps[-1], "T_ref should be colder at top than surface"
 
     def test_perturbation_is_localized(self) -> None:
         """Perturbation vorticity should be localized near (lon_c, lat_c)."""
@@ -293,9 +277,7 @@ class TestGridPointFields:
         i_lon = int(np.argmin(np.abs(lon - config_lon)))
 
         # Peak should be near the perturbation center
-        peak_idx = np.unravel_index(
-            np.argmax(np.abs(vort_grid[0])), vort_grid[0].shape
-        )
+        peak_idx = np.unravel_index(np.argmax(np.abs(vort_grid[0])), vort_grid[0].shape)
         assert abs(peak_idx[0] - j_lat) <= 2, (
             f"Vorticity peak lat index {peak_idx[0]} too far from center {j_lat}"
         )
@@ -313,8 +295,10 @@ class TestGridPointFields:
         vort_grid = _notus_to_grid(transform, pert.vorticity)
         for k in range(1, levels.n_levels):
             np.testing.assert_allclose(
-                vort_grid[k], vort_grid[0], atol=1e-30,
-                err_msg=f"Perturbation should be identical at all levels (k={k})"
+                vort_grid[k],
+                vort_grid[0],
+                atol=1e-30,
+                err_msg=f"Perturbation should be identical at all levels (k={k})",
             )
 
 
@@ -368,14 +352,18 @@ class TestStationarity:
 
         # Vorticity should stay close to initial
         np.testing.assert_allclose(
-            np.asarray(curr.vorticity), init_vort, atol=5e-4,
-            err_msg="Vorticity drifted from initial balanced state"
+            np.asarray(curr.vorticity),
+            init_vort,
+            atol=5e-4,
+            err_msg="Vorticity drifted from initial balanced state",
         )
 
         # Temperature should stay close to initial
         np.testing.assert_allclose(
-            np.asarray(curr.temperature), init_temp, atol=5e-2,
-            err_msg="Temperature drifted from initial balanced state"
+            np.asarray(curr.temperature),
+            init_temp,
+            atol=5e-2,
+            err_msg="Temperature drifted from initial balanced state",
         )
 
         # Log surface pressure should remain near zero
@@ -442,7 +430,10 @@ class TestBaroclinicWave:
 
         # The integration should remain stable (no NaN/Inf)
         for field_name in [
-            "vorticity", "divergence", "temperature", "log_surface_pressure",
+            "vorticity",
+            "divergence",
+            "temperature",
+            "log_surface_pressure",
         ]:
             field = getattr(curr, field_name)
             assert jnp.all(jnp.isfinite(field)), (
@@ -452,9 +443,7 @@ class TestBaroclinicWave:
         # Divergence should have grown from the initial perturbation
         # (baroclinic instability amplifies the disturbance)
         div_max = float(jnp.max(jnp.abs(curr.divergence)))
-        assert div_max > 1e-10, (
-            f"Divergence should grow from perturbation, got max={div_max:.2e}"
-        )
+        assert div_max > 1e-10, f"Divergence should grow from perturbation, got max={div_max:.2e}"
 
         # Surface pressure should show some structure
         lnps_max = float(jnp.max(jnp.abs(curr.log_surface_pressure)))

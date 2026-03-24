@@ -353,7 +353,12 @@ class TestNonzeroLnpsGradient:
         state = _make_perturbed_state(grid, n_levels)
 
         tend_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi, diffusion_order=0,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=0,
         )
         tend = tend_fn(state)
 
@@ -364,12 +369,10 @@ class TestNonzeroLnpsGradient:
         temp_max = float(jnp.max(jnp.abs(tend.temperature)))
 
         assert lnps_max < 1e-3, (
-            f"lnps tendency {lnps_max:.2e} is too large — "
-            "possible missing 1/a in ∇(lnps)"
+            f"lnps tendency {lnps_max:.2e} is too large — possible missing 1/a in ∇(lnps)"
         )
         assert temp_max < 1.0, (
-            f"temperature tendency {temp_max:.2e} is too large — "
-            "possible missing 1/a in ∇(lnps)"
+            f"temperature tendency {temp_max:.2e} is too large — possible missing 1/a in ∇(lnps)"
         )
 
     def test_radius_scaling_consistency(self) -> None:
@@ -396,7 +399,12 @@ class TestNonzeroLnpsGradient:
 
         # Compute tendencies at standard radius
         tend_fn_1 = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi, diffusion_order=0,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=0,
         )
         tend_1 = tend_fn_1(state)
 
@@ -410,7 +418,12 @@ class TestNonzeroLnpsGradient:
             specific_heat_cp=EARTH.specific_heat_cp,
         )
         tend_fn_2 = primitive_equation_tendencies(
-            transform, planet_2a, levels, t_ref, surface_phi, diffusion_order=0,
+            transform,
+            planet_2a,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=0,
         )
         tend_2 = tend_fn_2(state)
 
@@ -441,7 +454,12 @@ class TestNonzeroLnpsGradient:
         state = _make_perturbed_state(grid, n_levels)
 
         tend_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, t_ref, surface_phi, diffusion_order=0,
+            transform,
+            EARTH,
+            levels,
+            t_ref,
+            surface_phi,
+            diffusion_order=0,
         )
         tend = tend_fn(state)
 
