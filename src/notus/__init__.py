@@ -14,7 +14,18 @@ Core components
 """
 
 from notus.constants import EARTH, PlanetaryConstants
+from notus.diagnostics import (
+    ConservationDiagnostics,
+    compute_conservation_diagnostics,
+    sigma_integral,
+    spherical_integral,
+)
 from notus.grid import GaussianGrid
+from notus.initial_conditions import (
+    JWConfig,
+    jablonowski_williamson_perturbation,
+    jablonowski_williamson_steady_state,
+)
 from notus.operators import (
     hyperdiffusion,
     inverse_laplacian,
@@ -25,23 +36,46 @@ from notus.operators import (
     uv_from_vordiv,
     zonal_derivative,
 )
+from notus.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
+from notus.vertical import (
+    geopotential,
+    omega_over_pressure,
+    sigma_dot,
+    surface_pressure_tendency,
+    vertical_advection,
+)
 
 
 __all__ = [
     "EARTH",
+    "ConservationDiagnostics",
     "GaussianGrid",
+    "JWConfig",
     "PlanetaryConstants",
     "PrimitiveEquationState",
     "ShallowWaterState",
+    "SigmaLevels",
     "SpectralTransform",
+    "compute_conservation_diagnostics",
+    "geopotential",
     "hyperdiffusion",
     "inverse_laplacian",
+    "jablonowski_williamson_perturbation",
+    "jablonowski_williamson_steady_state",
     "laplacian",
     "meridional_derivative",
+    "omega_over_pressure",
+    "sigma_dot",
+    "sigma_integral",
     "spectral_curl",
     "spectral_divergence",
+    "spherical_integral",
+    "standard_sigma_levels",
+    "surface_pressure_tendency",
+    "uniform_sigma_levels",
     "uv_from_vordiv",
+    "vertical_advection",
     "zonal_derivative",
 ]
