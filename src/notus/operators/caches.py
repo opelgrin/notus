@@ -123,28 +123,3 @@ def _compute_mu_derivative_coupling(
         jnp.array(c_lower),
         jnp.array(c_upper),
     )
-
-
-# ---------------------------------------------------------------------------
-# Runtime helper (called by vector operators)
-# ---------------------------------------------------------------------------
-
-
-def _mu_derivative(
-    coeffs: jnp.ndarray,
-    mu_derivative_coupling: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
-) -> jnp.ndarray:
-    """Compute d/dμ in spectral space via integration-by-parts recurrence.
-
-    Used internally by :func:`~notus.operators.vector.spectral_divergence`
-    and :func:`~notus.operators.vector.spectral_curl`.
-
-    Parameters
-    ----------
-    coeffs : jnp.ndarray
-        Spectral coefficients.
-    mu_derivative_coupling : tuple
-        Pre-computed coupling arrays from :attr:`OperatorArrays.mu_derivative_coupling`.
-    """
-    idx_lower, idx_upper, c_lower, c_upper = mu_derivative_coupling
-    return c_lower * coeffs[idx_lower] + c_upper * coeffs[idx_upper]

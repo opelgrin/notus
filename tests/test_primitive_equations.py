@@ -388,7 +388,7 @@ class TestNonzeroLnpsGradient:
         giving ratio ~2.0 when the radius doubles.
         """
         grid = GaussianGrid(truncation=21)
-        transform = SpectralTransform(grid, EARTH.radius)
+        transform_1 = SpectralTransform(grid, EARTH.radius)
         n_levels = 3
         levels = uniform_sigma_levels(n_levels)
         t_ref = jnp.full(n_levels, 250.0)
@@ -399,7 +399,7 @@ class TestNonzeroLnpsGradient:
 
         # Compute tendencies at standard radius
         tend_fn_1 = primitive_equation_tendencies(
-            transform,
+            transform_1,
             EARTH,
             levels,
             t_ref,
@@ -417,8 +417,9 @@ class TestNonzeroLnpsGradient:
             gas_constant=EARTH.gas_constant,
             specific_heat_cp=EARTH.specific_heat_cp,
         )
+        transform_2a = SpectralTransform(grid, planet_2a.radius)
         tend_fn_2 = primitive_equation_tendencies(
-            transform,
+            transform_2a,
             planet_2a,
             levels,
             t_ref,

@@ -10,8 +10,26 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from notus.operators.arrays import OperatorArrays
-from notus.operators.caches import _mu_derivative
 from notus.operators.core import inverse_laplacian, meridional_derivative, zonal_derivative
+
+
+def _mu_derivative(
+    coeffs: jnp.ndarray,
+    mu_derivative_coupling: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
+) -> jnp.ndarray:
+    """Compute d/dμ in spectral space via integration-by-parts recurrence.
+
+    [dG/dμ]ₙᵐ = −(n+1)·ε(n,m)·Ĝ_{n−1} + n·ε(n+1,m)·Ĝ_{n+1}
+
+    Parameters
+    ----------
+    coeffs : jnp.ndarray
+        Spectral coefficients.
+    mu_derivative_coupling : tuple
+        Pre-computed coupling arrays from :attr:`OperatorArrays.mu_derivative_coupling`.
+    """
+    idx_lower, idx_upper, c_lower, c_upper = mu_derivative_coupling
+    return c_lower * coeffs[idx_lower] + c_upper * coeffs[idx_upper]
 
 
 def uv_from_vordiv(

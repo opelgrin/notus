@@ -264,12 +264,19 @@ def _grid_point_tendencies(
     column_div = div_grid + v_dot_grad_lnps
     sd = sigma_dot(column_div, levels)
 
+    # Vertical advection of temperature, split for semi-implicit scheme:
+    # - T' part uses full σ̇ (D-dependent): fully explicit
+    # - T_ref part uses σ̇_explicit (D-free): the D-dependent part is implicit
+    #   (captured by the K terms in the temperature implicit weights matrix H)
     sd_explicit = sigma_dot(v_dot_grad_lnps, levels)
     t_ref_field = jnp.broadcast_to(t_ref_bc, t_prime_grid.shape)
     vert_adv_temp = vertical_advection(sd, t_prime_grid, levels) + vertical_advection(
         sd_explicit, t_ref_field, levels
     )
 
+    # Adiabatic heating κ·T·(ω/p), split for semi-implicit scheme:
+    # - T_ref part uses g_term = v⃗·∇ln(ps) only (D-dependent part is implicit)
+    # - T' part uses g_term = D + v⃗·∇ln(ps) (full explicit contribution)
     omega_p_explicit = omega_over_pressure(v_dot_grad_lnps, v_dot_grad_lnps, levels)
     omega_p_full = omega_over_pressure(column_div, v_dot_grad_lnps, levels)
     adiabatic = kappa * (t_ref_bc * omega_p_explicit + t_prime_grid * omega_p_full)
@@ -280,11 +287,16 @@ def _grid_point_tendencies(
     rt_grad_u = gas_constant * t_prime_grid * dlnps_dlam_bc
     rt_grad_v = gas_constant * t_prime_grid * cosphi_dlnps_dphi_bc
 
+    # Combined momentum flux (Dinosaur convention for curl/div)
     combined_u = -flux_b + (vert_mom_u + rt_grad_u) * cos2_inv
     combined_v = flux_a + (vert_mom_v + rt_grad_v) * cos2_inv
 
     lnps_tend_grid = surface_pressure_tendency(v_dot_grad_lnps, levels)
 
+    # Advective-form correction: the spectral temperature tendency uses the
+    # flux divergence -∇·(T'v), but the semi-implicit splitting assumes the
+    # advective form -v·∇T'.  These differ by T'·δ, which must be added as
+    # a nodal term so the total equals -v·∇T' = -∇·(T'v) + T'·δ.
     advective_correction = t_prime_grid * div_grid
     nodal_temp_tend = vert_adv_temp + adiabatic + advective_correction
 
