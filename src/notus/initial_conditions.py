@@ -372,3 +372,51 @@ def held_suarez_initial_state(
     )
 
     return state, reference_temperatures, surface_geopotential
+
+
+def simple_physics_initial_state(
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+    levels: SigmaLevels,
+    *,
+    initial_temperature: float = 264.0,
+    perturbation_amplitude: float = 1.0,
+    seed: int = 0,
+) -> tuple[PrimitiveEquationState, np.ndarray, jnp.ndarray]:
+    """Construct an isothermal rest-state initial condition for simple physics.
+
+    Identical to :func:`held_suarez_initial_state` (flat surface, isothermal
+    with random perturbation).  Provided as a named entry point for clarity.
+
+    Parameters
+    ----------
+    transform : SpectralTransform
+        Pre-computed spectral transform.
+    planet : PlanetaryConstants
+        Planetary constants.
+    levels : SigmaLevels
+        Sigma vertical coordinate.
+    initial_temperature : float
+        Uniform initial temperature [K].
+    perturbation_amplitude : float
+        Amplitude of random temperature perturbation [K].
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    state : PrimitiveEquationState
+        Initial state in spectral space.
+    reference_temperatures : np.ndarray
+        Reference temperature profile, shape ``(n_levels,)``.
+    surface_geopotential : jnp.ndarray
+        Surface geopotential (zero for flat surface), shape ``(n_spectral,)``.
+    """
+    return held_suarez_initial_state(
+        transform,
+        planet,
+        levels,
+        initial_temperature=initial_temperature,
+        perturbation_amplitude=perturbation_amplitude,
+        seed=seed,
+    )

@@ -28,6 +28,7 @@ from notus.initial_conditions import (
     held_suarez_initial_state,
     jablonowski_williamson_perturbation,
     jablonowski_williamson_steady_state,
+    simple_physics_initial_state,
 )
 from notus.operators import (
     OperatorArrays,
@@ -40,7 +41,7 @@ from notus.operators import (
     uv_from_vordiv,
     zonal_derivative,
 )
-from notus.physics import HeldSuarez
+from notus.physics import HeldSuarez, SimplePhysics, SimplePhysicsConfig
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
 from notus.vertical import (
@@ -64,6 +65,8 @@ __all__ = [
     "PrimitiveEquationState",
     "ShallowWaterState",
     "SigmaLevels",
+    "SimplePhysics",
+    "SimplePhysicsConfig",
     "SpectralTransform",
     "ZonalMeanState",
     "compute_conservation_diagnostics",
@@ -79,6 +82,7 @@ __all__ = [
     "omega_over_pressure",
     "sigma_dot",
     "sigma_integral",
+    "simple_physics_initial_state",
     "spectral_curl",
     "spectral_divergence",
     "spherical_integral",
