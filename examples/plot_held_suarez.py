@@ -73,15 +73,21 @@ def run_integration(
     grid : GaussianGrid
     levels : SigmaLevels
     """
-    print(f"Running T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days "
-          f"({spinup_days} spinup + {n_days - spinup_days} averaging)")
+    print(
+        f"Running T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days "
+        f"({spinup_days} spinup + {n_days - spinup_days} averaging)"
+    )
 
     grid = GaussianGrid(truncation=truncation)
     transform = SpectralTransform(grid, EARTH.radius)
     levels = uniform_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = held_suarez_initial_state(
-        transform, EARTH, levels, perturbation_amplitude=1.0, seed=42,
+        transform,
+        EARTH,
+        levels,
+        perturbation_amplitude=1.0,
+        seed=42,
     )
 
     forcing = HeldSuarez(transform, EARTH, levels)
@@ -107,6 +113,7 @@ def run_integration(
             p, c = carry
             p, c = step_fn(p, c)
             return (p, c), None
+
         (prev, curr), _ = jax.lax.scan(step, (prev, curr), None, length=steps_per_day)
         return (prev, curr), None
 
@@ -287,13 +294,21 @@ def plot_surface_pressure_snapshot(
 
     clevels = np.arange(970, 1035, 5)
     cf = ax.contourf(
-        lon_2d, lat_2d, ps_hpa,
-        levels=clevels, cmap="RdBu_r", extend="both",
+        lon_2d,
+        lat_2d,
+        ps_hpa,
+        levels=clevels,
+        cmap="RdBu_r",
+        extend="both",
         transform=ccrs.PlateCarree(),
     )
     ax.contour(
-        lon_2d, lat_2d, ps_hpa,
-        levels=clevels, colors="k", linewidths=0.3,
+        lon_2d,
+        lat_2d,
+        ps_hpa,
+        levels=clevels,
+        colors="k",
+        linewidths=0.3,
         transform=ccrs.PlateCarree(),
     )
     ax.coastlines(linewidth=0.5, color="gray")
@@ -332,7 +347,8 @@ def main() -> None:
     fig.suptitle(
         f"Held-Suarez Benchmark  |  T{args.truncation} L{args.levels}  |  "
         f"Days {args.spinup + 1}-{args.days} average",
-        fontsize=14, fontweight="bold",
+        fontsize=14,
+        fontweight="bold",
     )
 
     # Panel layout: 3 rows x 2 cols

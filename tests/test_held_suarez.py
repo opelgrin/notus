@@ -182,9 +182,7 @@ class TestEquilibriumTemperature:
         assert jnp.all(jnp.isfinite(dt_grid))
         # With T=264K, some levels will have T > T_eq (cooling) and some T < T_eq
         # (warming), but all should be finite and bounded
-        assert jnp.all(jnp.abs(dt_grid) < 1.0), (
-            "Temperature tendency magnitude unreasonably large"
-        )
+        assert jnp.all(jnp.abs(dt_grid) < 1.0), "Temperature tendency magnitude unreasonably large"
 
 
 class TestRayleighFriction:
@@ -204,9 +202,7 @@ class TestRayleighFriction:
         sigma_full = np.asarray(hs_forcing.levels.sigma_full)
         k_v = np.asarray(hs_forcing.k_v)
         in_bl = sigma_full > hs_forcing.sigma_b
-        assert np.all(k_v[in_bl] > 0.0), (
-            f"Zero friction in boundary layer: {k_v[in_bl]}"
-        )
+        assert np.all(k_v[in_bl] > 0.0), f"Zero friction in boundary layer: {k_v[in_bl]}"
 
     def test_maximum_at_surface(self, hs_forcing: HeldSuarez) -> None:
         """k_v at σ=1 should equal k_f."""
@@ -351,7 +347,10 @@ def _run_held_suarez(
     levels = uniform_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = held_suarez_initial_state(
-        transform, EARTH, levels, perturbation_amplitude=1.0,
+        transform,
+        EARTH,
+        levels,
+        perturbation_amplitude=1.0,
     )
 
     forcing = HeldSuarez(transform, EARTH, levels)
@@ -465,7 +464,10 @@ def _run_held_suarez_climatology(
     levels = uniform_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = held_suarez_initial_state(
-        transform, EARTH, levels, perturbation_amplitude=1.0,
+        transform,
+        EARTH,
+        levels,
+        perturbation_amplitude=1.0,
     )
 
     forcing = HeldSuarez(transform, EARTH, levels)
@@ -550,9 +552,7 @@ class TestHeldSuarezRegression:
         sigma = np.asarray(levels.sigma_full)
         upper = sigma < 0.4
         jet_max = float(np.max(np.abs(u_zm[upper, :])))
-        assert 15.0 <= jet_max <= 60.0, (
-            f"Jet strength: {jet_max:.1f} m/s (expected 15-60 m/s)"
-        )
+        assert 15.0 <= jet_max <= 60.0, f"Jet strength: {jet_max:.1f} m/s (expected 15-60 m/s)"
 
     def test_jet_in_subtropics(self, climatology: tuple) -> None:
         """Jet peak should be in the subtropics (15°-50°)."""
@@ -584,9 +584,7 @@ class TestHeldSuarezRegression:
         eq_idx = np.argmin(np.abs(lat_deg))
         sfc_idx = np.argmax(sigma)
         t_eq = float(t_zm[sfc_idx, eq_idx])
-        assert 290.0 <= t_eq <= 315.0, (
-            f"Equatorial surface T = {t_eq:.1f} K (expected 290-315 K)"
-        )
+        assert 290.0 <= t_eq <= 315.0, f"Equatorial surface T = {t_eq:.1f} K (expected 290-315 K)"
 
     def test_polar_surface_temperature(self, climatology: tuple) -> None:
         """Polar surface temperature should be 245-275 K."""
@@ -596,9 +594,7 @@ class TestHeldSuarezRegression:
         pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
         sfc_idx = np.argmax(sigma)
         t_pole = float(t_zm[sfc_idx, pole_idx])
-        assert 245.0 <= t_pole <= 275.0, (
-            f"Polar surface T = {t_pole:.1f} K (expected 245-275 K)"
-        )
+        assert 245.0 <= t_pole <= 275.0, f"Polar surface T = {t_pole:.1f} K (expected 245-275 K)"
 
     def test_equator_pole_temperature_gradient(self, climatology: tuple) -> None:
         """Surface equator-to-pole ΔT should be 25-55 K."""
@@ -609,9 +605,7 @@ class TestHeldSuarezRegression:
         eq_idx = np.argmin(np.abs(lat_deg))
         pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
         dt = float(t_zm[sfc_idx, eq_idx] - t_zm[sfc_idx, pole_idx])
-        assert 25.0 <= dt <= 55.0, (
-            f"ΔT(eq-pole) = {dt:.1f} K (expected 25-55 K)"
-        )
+        assert 25.0 <= dt <= 55.0, f"ΔT(eq-pole) = {dt:.1f} K (expected 25-55 K)"
 
     def test_cold_tropopause(self, climatology: tuple) -> None:
         """Tropopause region should be 180-230 K."""
@@ -620,9 +614,7 @@ class TestHeldSuarezRegression:
         tropo = (sigma > 0.05) & (sigma < 0.3)
         if np.any(tropo):
             t_min = float(np.min(t_zm[tropo, :]))
-            assert 180.0 <= t_min <= 230.0, (
-                f"Tropopause T_min = {t_min:.1f} K (expected 180-230 K)"
-            )
+            assert 180.0 <= t_min <= 230.0, f"Tropopause T_min = {t_min:.1f} K (expected 180-230 K)"
 
     def test_eddy_kinetic_energy(self, climatology: tuple) -> None:
         """Midlatitude EKE should be 10-300 m²/s²."""

@@ -134,9 +134,7 @@ class HeldSuarez:
 
         # Pre-compute boundary-layer ramp: max(0, (σ - σ_b)/(1 - σ_b))
         sigma_full = np.asarray(levels.sigma_full)
-        self.sigma_frac = jnp.array(
-            np.maximum(0.0, (sigma_full - sigma_b) / (1.0 - sigma_b))
-        )
+        self.sigma_frac = jnp.array(np.maximum(0.0, (sigma_full - sigma_b) / (1.0 - sigma_b)))
 
         # Rayleigh friction coefficient per level (level-only, no lat dependence)
         self.k_v = k_f * self.sigma_frac

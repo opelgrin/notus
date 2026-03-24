@@ -280,15 +280,18 @@ def compute_zonal_mean_state(
 
     # Reconstruct winds and temperature on grid
     def _uv_at_level(
-        vort: jnp.ndarray, div: jnp.ndarray,
+        vort: jnp.ndarray,
+        div: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         return uv_from_vordiv(vort, div, arrays)
 
     u_cos_spec, v_cos_spec = jax.vmap(_uv_at_level)(
-        state.vorticity, state.divergence,
+        state.vorticity,
+        state.divergence,
     )
     all_spec = jnp.concatenate(
-        [u_cos_spec, v_cos_spec, state.temperature], axis=0,
+        [u_cos_spec, v_cos_spec, state.temperature],
+        axis=0,
     )
     all_grid = jax.vmap(transform.spectral_to_grid)(all_spec)
 

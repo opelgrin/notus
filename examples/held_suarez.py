@@ -99,13 +99,15 @@ def validate_climatology(
     upper_mask = sigma_full < 0.4
     u_upper = u_zm[upper_mask, :]  # only upper-troposphere levels
     jet_max = float(np.max(np.abs(u_upper)))
-    results.append(ValidationResult(
-        name="Subtropical jet strength",
-        passed=20.0 <= jet_max <= 50.0,
-        value=jet_max,
-        expected="20-50 m/s",
-        message=f"Peak upper-level |U| = {jet_max:.1f} m/s",
-    ))
+    results.append(
+        ValidationResult(
+            name="Subtropical jet strength",
+            passed=20.0 <= jet_max <= 50.0,
+            value=jet_max,
+            expected="20-50 m/s",
+            message=f"Peak upper-level |U| = {jet_max:.1f} m/s",
+        )
+    )
 
     # Jet latitude: find the latitude of maximum U in upper levels
     # Average U over upper levels, find peak in NH (lat_deg > 0)
@@ -114,13 +116,15 @@ def validate_climatology(
     nh_lats = lat_deg[nh_mask]
     nh_u = u_upper_mean[nh_mask]
     jet_lat = float(nh_lats[np.argmax(nh_u)])
-    results.append(ValidationResult(
-        name="Subtropical jet latitude (NH)",
-        passed=15.0 <= jet_lat <= 50.0,
-        value=jet_lat,
-        expected="15-50°N",
-        message=f"NH jet peak at {jet_lat:.1f}°N",
-    ))
+    results.append(
+        ValidationResult(
+            name="Subtropical jet latitude (NH)",
+            passed=15.0 <= jet_lat <= 50.0,
+            value=jet_lat,
+            expected="15-50°N",
+            message=f"NH jet peak at {jet_lat:.1f}°N",
+        )
+    )
 
     # ---- 2. Surface westerlies ----
     # H&S Fig. 1: midlatitude surface westerlies ~5-15 m/s
@@ -128,13 +132,15 @@ def validate_climatology(
     u_surface = u_zm[surface_idx, :]  # (n_lat,)
     midlat_mask = (np.abs(lat_deg) > 30.0) & (np.abs(lat_deg) < 60.0)
     u_surface_midlat = float(np.max(u_surface[midlat_mask]))
-    results.append(ValidationResult(
-        name="Midlatitude surface westerlies",
-        passed=2.0 <= u_surface_midlat <= 20.0,
-        value=u_surface_midlat,
-        expected="2-20 m/s",
-        message=f"Peak midlatitude surface U = {u_surface_midlat:.1f} m/s",
-    ))
+    results.append(
+        ValidationResult(
+            name="Midlatitude surface westerlies",
+            passed=2.0 <= u_surface_midlat <= 20.0,
+            value=u_surface_midlat,
+            expected="2-20 m/s",
+            message=f"Peak midlatitude surface U = {u_surface_midlat:.1f} m/s",
+        )
+    )
 
     # ---- 3. Temperature structure ----
     # H&S Fig. 2: equatorial surface ~295-305 K, polar surface ~250-265 K
@@ -142,66 +148,78 @@ def validate_climatology(
     pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
 
     t_eq_surface = float(t_zm[surface_idx, equator_idx])
-    results.append(ValidationResult(
-        name="Equatorial surface temperature",
-        passed=290.0 <= t_eq_surface <= 315.0,
-        value=t_eq_surface,
-        expected="290-315 K",
-        message=f"T_eq(surface) = {t_eq_surface:.1f} K",
-    ))
+    results.append(
+        ValidationResult(
+            name="Equatorial surface temperature",
+            passed=290.0 <= t_eq_surface <= 315.0,
+            value=t_eq_surface,
+            expected="290-315 K",
+            message=f"T_eq(surface) = {t_eq_surface:.1f} K",
+        )
+    )
 
     t_pole_surface = float(t_zm[surface_idx, pole_idx])
-    results.append(ValidationResult(
-        name="Polar surface temperature",
-        passed=245.0 <= t_pole_surface <= 275.0,
-        value=t_pole_surface,
-        expected="245-275 K",
-        message=f"T_pole(surface) = {t_pole_surface:.1f} K",
-    ))
+    results.append(
+        ValidationResult(
+            name="Polar surface temperature",
+            passed=245.0 <= t_pole_surface <= 275.0,
+            value=t_pole_surface,
+            expected="245-275 K",
+            message=f"T_pole(surface) = {t_pole_surface:.1f} K",
+        )
+    )
 
     # Equator-to-pole gradient at surface
     dt_surface = t_eq_surface - t_pole_surface
-    results.append(ValidationResult(
-        name="Surface equator-to-pole ΔT",
-        passed=25.0 <= dt_surface <= 55.0,
-        value=dt_surface,
-        expected="25-55 K",
-        message=f"ΔT(eq-pole) = {dt_surface:.1f} K",
-    ))
+    results.append(
+        ValidationResult(
+            name="Surface equator-to-pole ΔT",
+            passed=25.0 <= dt_surface <= 55.0,
+            value=dt_surface,
+            expected="25-55 K",
+            message=f"ΔT(eq-pole) = {dt_surface:.1f} K",
+        )
+    )
 
     # Tropopause temperature (upper levels, ~σ=0.1-0.3)
     tropo_mask = (sigma_full > 0.05) & (sigma_full < 0.3)
     if np.any(tropo_mask):
         t_tropo_min = float(np.min(t_zm[tropo_mask, :]))
-        results.append(ValidationResult(
-            name="Minimum tropopause temperature",
-            passed=180.0 <= t_tropo_min <= 230.0,
-            value=t_tropo_min,
-            expected="180-230 K",
-            message=f"T_min(tropopause) = {t_tropo_min:.1f} K",
-        ))
+        results.append(
+            ValidationResult(
+                name="Minimum tropopause temperature",
+                passed=180.0 <= t_tropo_min <= 230.0,
+                value=t_tropo_min,
+                expected="180-230 K",
+                message=f"T_min(tropopause) = {t_tropo_min:.1f} K",
+            )
+        )
 
     # ---- 4. Eddy kinetic energy ----
     # H&S Fig. 3-4: EKE peaks in midlatitudes at upper levels
     eke_max = float(np.max(eke))
-    results.append(ValidationResult(
-        name="Eddy kinetic energy (peak)",
-        passed=10.0 <= eke_max <= 500.0,
-        value=eke_max,
-        expected="10-500 m²/s²",
-        message=f"EKE_max = {eke_max:.1f} m²/s²",
-    ))
+    results.append(
+        ValidationResult(
+            name="Eddy kinetic energy (peak)",
+            passed=10.0 <= eke_max <= 500.0,
+            value=eke_max,
+            expected="10-500 m²/s²",
+            message=f"EKE_max = {eke_max:.1f} m²/s²",
+        )
+    )
 
     # EKE peak should be in midlatitudes (20°-70°)
     eke_col_mean = np.mean(eke[upper_mask, :], axis=0)  # upper-level EKE vs lat
     eke_peak_lat = float(lat_deg[np.argmax(np.abs(eke_col_mean))])
-    results.append(ValidationResult(
-        name="EKE peak latitude",
-        passed=20.0 <= np.abs(eke_peak_lat) <= 70.0,
-        value=eke_peak_lat,
-        expected="20-70° (either hemisphere)",
-        message=f"EKE peak at {eke_peak_lat:.1f}°",
-    ))
+    results.append(
+        ValidationResult(
+            name="EKE peak latitude",
+            passed=20.0 <= np.abs(eke_peak_lat) <= 70.0,
+            value=eke_peak_lat,
+            expected="20-70° (either hemisphere)",
+            message=f"EKE peak at {eke_peak_lat:.1f}°",
+        )
+    )
 
     # ---- 5. Hemispheric symmetry (approximate) ----
     # Time-mean should be roughly N-S symmetric. Check that both
@@ -211,13 +229,15 @@ def validate_climatology(
     sh_jet = float(np.max(sh_u))
     nh_jet = float(np.max(nh_u))
     ratio = min(sh_jet, nh_jet) / max(sh_jet, nh_jet) if max(sh_jet, nh_jet) > 1 else 1.0
-    results.append(ValidationResult(
-        name="Hemispheric jet symmetry",
-        passed=0.3 <= ratio <= 1.0,
-        value=ratio,
-        expected="0.3-1.0 (SH/NH or NH/SH)",
-        message=f"Jet ratio = {ratio:.2f} (NH={nh_jet:.1f}, SH={sh_jet:.1f} m/s)",
-    ))
+    results.append(
+        ValidationResult(
+            name="Hemispheric jet symmetry",
+            passed=0.3 <= ratio <= 1.0,
+            value=ratio,
+            expected="0.3-1.0 (SH/NH or NH/SH)",
+            message=f"Jet ratio = {ratio:.2f} (NH={nh_jet:.1f}, SH={sh_jet:.1f} m/s)",
+        )
+    )
 
     return results
 
@@ -276,7 +296,11 @@ def run_held_suarez(
     levels = uniform_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = held_suarez_initial_state(
-        transform, EARTH, levels, perturbation_amplitude=1.0, seed=42,
+        transform,
+        EARTH,
+        levels,
+        perturbation_amplitude=1.0,
+        seed=42,
     )
 
     forcing = HeldSuarez(transform, EARTH, levels)
@@ -302,6 +326,7 @@ def run_held_suarez(
             p, c = carry
             p, c = step_fn(p, c)
             return (p, c), None
+
         (prev, curr), _ = jax.lax.scan(step, (prev, curr), None, length=steps_per_day)
         return (prev, curr), None
 
@@ -388,8 +413,7 @@ def run_held_suarez(
 
     total_time = time.perf_counter() - t0
     print(f"\nDone. Total wall time: {total_time:.0f}s ({total_time / 3600:.1f}h)")
-    print(f"Averaged over {n_averaging_samples} daily samples "
-          f"(days {spinup_days + 1}-{n_days})")
+    print(f"Averaged over {n_averaging_samples} daily samples (days {spinup_days + 1}-{n_days})")
 
     # --- Compute time-averaged climatology ---
     if accum_zm is None or n_averaging_samples == 0:
