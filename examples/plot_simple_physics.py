@@ -70,7 +70,11 @@ def run_integration(
     levels = uniform_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = simple_physics_initial_state(
-        transform, EARTH, levels, perturbation_amplitude=1.0, seed=42,
+        transform,
+        EARTH,
+        levels,
+        perturbation_amplitude=1.0,
+        seed=42,
     )
 
     forcing = SimplePhysics(transform, EARTH, levels)
@@ -178,7 +182,10 @@ def run_integration(
 
 
 def plot_zonal_mean_u(
-    mean_zm: ZonalMeanState, grid: GaussianGrid, levels: SigmaLevels, ax: plt.Axes,
+    mean_zm: ZonalMeanState,
+    grid: GaussianGrid,
+    levels: SigmaLevels,
+    ax: plt.Axes,
 ) -> None:
     """Zonal-mean zonal wind U(lat, sigma)."""
     lat = np.degrees(np.asarray(grid.latitudes))
@@ -197,7 +204,10 @@ def plot_zonal_mean_u(
 
 
 def plot_zonal_mean_t(
-    mean_zm: ZonalMeanState, grid: GaussianGrid, levels: SigmaLevels, ax: plt.Axes,
+    mean_zm: ZonalMeanState,
+    grid: GaussianGrid,
+    levels: SigmaLevels,
+    ax: plt.Axes,
 ) -> None:
     """Zonal-mean temperature T(lat, sigma)."""
     lat = np.degrees(np.asarray(grid.latitudes))
@@ -216,7 +226,10 @@ def plot_zonal_mean_t(
 
 
 def plot_zonal_mean_eke(
-    mean_zm: ZonalMeanState, grid: GaussianGrid, levels: SigmaLevels, ax: plt.Axes,
+    mean_zm: ZonalMeanState,
+    grid: GaussianGrid,
+    levels: SigmaLevels,
+    ax: plt.Axes,
 ) -> None:
     """Zonal-mean eddy kinetic energy EKE(lat, sigma)."""
     lat = np.degrees(np.asarray(grid.latitudes))
@@ -234,7 +247,9 @@ def plot_zonal_mean_eke(
 
 
 def plot_temperature_timeseries(
-    daily_mean_t: list[float], spinup_days: int, ax: plt.Axes,
+    daily_mean_t: list[float],
+    spinup_days: int,
+    ax: plt.Axes,
 ) -> None:
     """Global-mean temperature vs time."""
     days = np.arange(1, len(daily_mean_t) + 1)
@@ -263,12 +278,22 @@ def plot_surface_pressure_snapshot(
 
     clevels = np.arange(970, 1035, 5)
     cf = ax.contourf(
-        lon_2d, lat_2d, ps_hpa, levels=clevels, cmap="RdBu_r",
-        extend="both", transform=ccrs.PlateCarree(),
+        lon_2d,
+        lat_2d,
+        ps_hpa,
+        levels=clevels,
+        cmap="RdBu_r",
+        extend="both",
+        transform=ccrs.PlateCarree(),
     )
     ax.contour(
-        lon_2d, lat_2d, ps_hpa, levels=clevels, colors="k",
-        linewidths=0.3, transform=ccrs.PlateCarree(),
+        lon_2d,
+        lat_2d,
+        ps_hpa,
+        levels=clevels,
+        colors="k",
+        linewidths=0.3,
+        transform=ccrs.PlateCarree(),
     )
     ax.coastlines(linewidth=0.5, color="gray")
     ax.set_global()

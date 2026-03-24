@@ -117,8 +117,6 @@ def surface_sensible_heat_flux(
     t_air_safe = jnp.maximum(t_air, 1.0)
     dp_safe = jnp.maximum(dp, 1.0)
     rho_sfc = surface_pressure * sigma_lowest / (gas_constant * t_air_safe)
-    flux = rho_sfc * specific_heat_cp * drag_coefficient * wind_speed * (
-        t_surface[:, None] - t_air
-    )
+    flux = rho_sfc * specific_heat_cp * drag_coefficient * wind_speed * (t_surface[:, None] - t_air)
 
     return gravity * flux / (dp_safe * specific_heat_cp)

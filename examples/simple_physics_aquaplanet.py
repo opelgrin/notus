@@ -95,12 +95,14 @@ def run_aquaplanet(
 
     # --- Build a scan function for one day ---
     def one_day(
-        carry: tuple[jnp.ndarray, ...], _: None,
+        carry: tuple[jnp.ndarray, ...],
+        _: None,
     ) -> tuple[tuple[jnp.ndarray, ...], None]:
         prev, curr = carry
 
         def step(
-            carry: tuple[jnp.ndarray, ...], _: None,
+            carry: tuple[jnp.ndarray, ...],
+            _: None,
         ) -> tuple[tuple[jnp.ndarray, ...], None]:
             p, c = carry
             p, c = step_fn(p, c)
@@ -143,7 +145,9 @@ def run_aquaplanet(
             )
 
     def _print_status(
-        day: int, curr_state: jnp.ndarray, elapsed: float,
+        day: int,
+        curr_state: jnp.ndarray,
+        elapsed: float,
     ) -> bool:
         """Print diagnostics and return False if blowup detected."""
         lnps_grid = np.asarray(transform.spectral_to_grid(curr_state.log_surface_pressure))

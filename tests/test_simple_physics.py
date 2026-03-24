@@ -59,7 +59,8 @@ def levels_module() -> SigmaLevels:
 
 @pytest.fixture
 def sp_forcing(
-    t21_transform: SpectralTransform, levels: SigmaLevels,
+    t21_transform: SpectralTransform,
+    levels: SigmaLevels,
 ) -> SimplePhysics:
     """Simple physics forcing at T21."""
     return SimplePhysics(t21_transform, EARTH, levels)
@@ -145,7 +146,9 @@ class TestLongwaveOpticalDepth:
         sigma_half = jnp.array([0.0, 0.5, 1.0])
         sin_lat = jnp.array([0.0])
         tau = longwave_optical_depth(
-            sigma_half, sin_lat, **LW_DEFAULTS,
+            sigma_half,
+            sin_lat,
+            **LW_DEFAULTS,
         )
         np.testing.assert_allclose(tau[0, 0], 0.0)
 
@@ -154,7 +157,9 @@ class TestLongwaveOpticalDepth:
         sigma_half = jnp.array([0.0, 1.0])
         sin_lat = jnp.array([0.0])
         tau = longwave_optical_depth(
-            sigma_half, sin_lat, **LW_DEFAULTS,
+            sigma_half,
+            sin_lat,
+            **LW_DEFAULTS,
         )
         # tau_0 * [f_l * 1 + (1-f_l) * 1^4] = tau_0 * 1.0 = tau_equator
         np.testing.assert_allclose(tau[1, 0], 6.0)
@@ -164,7 +169,9 @@ class TestLongwaveOpticalDepth:
         sigma_half = jnp.array([0.0, 1.0])
         sin_lat = jnp.array([1.0])
         tau = longwave_optical_depth(
-            sigma_half, sin_lat, **LW_DEFAULTS,
+            sigma_half,
+            sin_lat,
+            **LW_DEFAULTS,
         )
         np.testing.assert_allclose(tau[1, 0], 0.1)
 
@@ -173,7 +180,9 @@ class TestLongwaveOpticalDepth:
         sigma_half = jnp.linspace(0.0, 1.0, 21)
         sin_lat = jnp.array([0.3])
         tau = longwave_optical_depth(
-            sigma_half, sin_lat, **LW_DEFAULTS,
+            sigma_half,
+            sin_lat,
+            **LW_DEFAULTS,
         )
         assert jnp.all(jnp.diff(tau[:, 0]) >= 0.0)
 
@@ -182,7 +191,9 @@ class TestLongwaveOpticalDepth:
         sigma_half = jnp.array([0.0, 0.5, 1.0])
         sin_lat = jnp.array([0.0])
         tau = longwave_optical_depth(
-            sigma_half, sin_lat, **LW_DEFAULTS,
+            sigma_half,
+            sin_lat,
+            **LW_DEFAULTS,
         )
         # tau = 6.0 * [0.1 * 0.5 + 0.9 * 0.5^4] = 6.0 * [0.05 + 0.05625] = 0.6375
         expected = 6.0 * (0.1 * 0.5 + 0.9 * 0.5**4)
@@ -198,7 +209,8 @@ class TestLongwaveHeating:
     """Verify longwave radiative heating."""
 
     def test_isothermal_with_same_surface_temp_is_small(
-        self, levels: SigmaLevels,
+        self,
+        levels: SigmaLevels,
     ) -> None:
         """An isothermal atmosphere with T_surface = T_atm has small LW heating."""
         n_levels = levels.n_levels
@@ -210,15 +222,22 @@ class TestLongwaveHeating:
         sin_lat = jnp.zeros(n_lat)
 
         q_lw = longwave_heating(
-            temperature, surface_temperature,
-            levels.sigma_half, levels.dsigma, sin_lat, surface_pressure,
-            EARTH.gravity, EARTH.specific_heat_cp, **LW_DEFAULTS,
+            temperature,
+            surface_temperature,
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            **LW_DEFAULTS,
         )
 
         assert jnp.max(jnp.abs(q_lw)) < 1.0e-4
 
     def test_warm_surface_heats_lower_atmosphere(
-        self, levels: SigmaLevels,
+        self,
+        levels: SigmaLevels,
     ) -> None:
         """A warm surface should produce net heating in the lowest layers."""
         n_levels = levels.n_levels
@@ -229,9 +248,15 @@ class TestLongwaveHeating:
         sin_lat = jnp.zeros(n_lat)
 
         q_lw = longwave_heating(
-            temperature, surface_temperature,
-            levels.sigma_half, levels.dsigma, sin_lat, surface_pressure,
-            EARTH.gravity, EARTH.specific_heat_cp, **LW_DEFAULTS,
+            temperature,
+            surface_temperature,
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            **LW_DEFAULTS,
         )
 
         assert float(jnp.mean(q_lw[-1])) > 0.0
@@ -246,9 +271,15 @@ class TestLongwaveHeating:
         sin_lat = jnp.zeros(n_lat)
 
         q_lw = longwave_heating(
-            temperature, surface_temperature,
-            levels.sigma_half, levels.dsigma, sin_lat, surface_pressure,
-            EARTH.gravity, EARTH.specific_heat_cp, **LW_DEFAULTS,
+            temperature,
+            surface_temperature,
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            **LW_DEFAULTS,
         )
         assert q_lw.shape == (n_levels, n_lat, n_lon)
 
@@ -268,14 +299,22 @@ class TestShortwaveHeating:
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
 
         q_sw = shortwave_heating(
-            levels.sigma_half, levels.dsigma, sin_lat, surface_pressure,
-            EARTH.solar_constant, EARTH.gravity, EARTH.specific_heat_cp,
-            sw_tau_0=0.22, sw_exponent=2.0, delta_s=1.4,
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            EARTH.solar_constant,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            sw_tau_0=0.22,
+            sw_exponent=2.0,
+            delta_s=1.4,
         )
         assert jnp.all(q_sw >= 0.0)
 
     def test_zero_optical_depth_gives_zero_heating(
-        self, levels: SigmaLevels,
+        self,
+        levels: SigmaLevels,
     ) -> None:
         """With zero SW optical depth, no absorption should occur."""
         n_lat, n_lon = 4, 8
@@ -283,9 +322,16 @@ class TestShortwaveHeating:
         surface_pressure = jnp.ones((n_lat, n_lon)) * 1.0e5
 
         q_sw = shortwave_heating(
-            levels.sigma_half, levels.dsigma, sin_lat, surface_pressure,
-            EARTH.solar_constant, EARTH.gravity, EARTH.specific_heat_cp,
-            sw_tau_0=0.0, sw_exponent=2.0, delta_s=1.4,
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            EARTH.solar_constant,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            sw_tau_0=0.0,
+            sw_exponent=2.0,
+            delta_s=1.4,
         )
         np.testing.assert_allclose(q_sw, 0.0, atol=1e-30)
 
@@ -306,9 +352,15 @@ class TestSurfaceSensibleHeatFlux:
         ps = jnp.array([[1.0e5]])
 
         q = surface_sensible_heat_flux(
-            t_surface, t_air, wind, ps,
-            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
-            dsigma_lowest=0.05, drag_coefficient=0.0015,
+            t_surface,
+            t_air,
+            wind,
+            ps,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            EARTH.gas_constant,
+            dsigma_lowest=0.05,
+            drag_coefficient=0.0015,
         )
         assert float(q[0, 0]) > 0.0
 
@@ -320,9 +372,15 @@ class TestSurfaceSensibleHeatFlux:
         ps = jnp.array([[1.0e5]])
 
         q = surface_sensible_heat_flux(
-            t_surface, t_air, wind, ps,
-            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
-            dsigma_lowest=0.05, drag_coefficient=0.0015,
+            t_surface,
+            t_air,
+            wind,
+            ps,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            EARTH.gas_constant,
+            dsigma_lowest=0.05,
+            drag_coefficient=0.0015,
         )
         assert float(q[0, 0]) < 0.0
 
@@ -334,9 +392,15 @@ class TestSurfaceSensibleHeatFlux:
         ps = jnp.array([[1.0e5]])
 
         q = surface_sensible_heat_flux(
-            t_surface, t_air, wind, ps,
-            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
-            dsigma_lowest=0.05, drag_coefficient=0.0015,
+            t_surface,
+            t_air,
+            wind,
+            ps,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            EARTH.gas_constant,
+            dsigma_lowest=0.05,
+            drag_coefficient=0.0015,
         )
         np.testing.assert_allclose(q[0, 0], 0.0, atol=1e-30)
 
@@ -348,9 +412,15 @@ class TestSurfaceSensibleHeatFlux:
         ps = jnp.array([[1.0e5]])
 
         q = surface_sensible_heat_flux(
-            t_surface, t_air, wind, ps,
-            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
-            dsigma_lowest=0.05, drag_coefficient=0.0015,
+            t_surface,
+            t_air,
+            wind,
+            ps,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            EARTH.gas_constant,
+            dsigma_lowest=0.05,
+            drag_coefficient=0.0015,
         )
         np.testing.assert_allclose(q[0, 0], 0.0, atol=1e-30)
 
@@ -362,9 +432,15 @@ class TestSurfaceSensibleHeatFlux:
         ps = jnp.array([[1.0e5]])
 
         q = surface_sensible_heat_flux(
-            t_surface, t_air, wind, ps,
-            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
-            dsigma_lowest=0.05, drag_coefficient=0.0015,
+            t_surface,
+            t_air,
+            wind,
+            ps,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            EARTH.gas_constant,
+            dsigma_lowest=0.05,
+            drag_coefficient=0.0015,
         )
         q_kday = float(q[0, 0]) * 86400.0
         assert 1.0 < q_kday < 100.0, f"Heating rate {q_kday:.1f} K/day out of range"
@@ -391,14 +467,26 @@ class TestSurfaceSensibleHeatFlux:
         ps = jnp.array([[1.0e5], [1.0e5]])
 
         q_unregularized = surface_sensible_heat_flux(
-            t_surface, t_air, wind_unregularized, ps,
-            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
-            dsigma_lowest=0.05, drag_coefficient=0.0015,
+            t_surface,
+            t_air,
+            wind_unregularized,
+            ps,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            EARTH.gas_constant,
+            dsigma_lowest=0.05,
+            drag_coefficient=0.0015,
         )
         q_regularized = surface_sensible_heat_flux(
-            t_surface, t_air, wind_regularized, ps,
-            EARTH.gravity, EARTH.specific_heat_cp, EARTH.gas_constant,
-            dsigma_lowest=0.05, drag_coefficient=0.0015,
+            t_surface,
+            t_air,
+            wind_regularized,
+            ps,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            EARTH.gas_constant,
+            dsigma_lowest=0.05,
+            drag_coefficient=0.0015,
         )
 
         assert bool(jnp.all(jnp.isfinite(q_regularized)))
@@ -423,11 +511,16 @@ class TestDryConvectiveAdjustment:
         theta_profile = jnp.array([310.0, 300.0, 290.0, 280.0, 270.0])
         t_profile = theta_profile * sigma_full**kappa
         temperature = jnp.broadcast_to(
-            t_profile[:, None, None], (5, n_lat, n_lon),
+            t_profile[:, None, None],
+            (5, n_lat, n_lon),
         ).copy()
 
         t_adjusted = dry_convective_adjustment(
-            temperature, sigma_full, dsigma, kappa, n_iterations=3,
+            temperature,
+            sigma_full,
+            dsigma,
+            kappa,
+            n_iterations=3,
         )
         np.testing.assert_allclose(t_adjusted, temperature, atol=1e-10)
 
@@ -444,7 +537,11 @@ class TestDryConvectiveAdjustment:
         temperature = jnp.array([[[t_above]], [[t_below]]])
 
         t_adjusted = dry_convective_adjustment(
-            temperature, sigma_full, dsigma, kappa, n_iterations=1,
+            temperature,
+            sigma_full,
+            dsigma,
+            kappa,
+            n_iterations=1,
         )
 
         theta_adj_above = float(t_adjusted[0, 0, 0]) / sigma_full[0] ** kappa
@@ -461,11 +558,16 @@ class TestDryConvectiveAdjustment:
         theta_profile = jnp.array([250.0, 260.0, 270.0, 280.0, 290.0])
         t_profile = theta_profile * sigma_full**kappa
         temperature = jnp.broadcast_to(
-            t_profile[:, None, None], (5, n_lat, n_lon),
+            t_profile[:, None, None],
+            (5, n_lat, n_lon),
         ).copy()
 
         t_adjusted = dry_convective_adjustment(
-            temperature, sigma_full, dsigma, kappa, n_iterations=5,
+            temperature,
+            sigma_full,
+            dsigma,
+            kappa,
+            n_iterations=5,
         )
 
         h_before = jnp.sum(dsigma[:, None, None] * temperature, axis=0)
@@ -483,7 +585,11 @@ class TestDryConvectiveAdjustment:
         temperature = t_profile[:, None, None]
 
         t_adjusted = dry_convective_adjustment(
-            temperature, sigma_full, dsigma, kappa, n_iterations=50,
+            temperature,
+            sigma_full,
+            dsigma,
+            kappa,
+            n_iterations=50,
         )
 
         theta_adjusted = t_adjusted[:, 0, 0] / sigma_full**kappa
@@ -550,7 +656,9 @@ class TestSimplePhysicsForcing:
         for k in range(levels.n_levels):
             if float(levels.sigma_full[k]) < sigma_b:
                 np.testing.assert_allclose(
-                    tendencies.vorticity[k], 0.0, atol=1e-30,
+                    tendencies.vorticity[k],
+                    0.0,
+                    atol=1e-30,
                     err_msg=f"Drag nonzero at level {k}",
                 )
 
@@ -594,7 +702,9 @@ class TestSimplePhysicsIntegration:
         n_steps = int(30 * 86400 / dt)
 
         state, ref_temps, surface_phi = simple_physics_initial_state(
-            t21_transform_module, EARTH, levels_module,
+            t21_transform_module,
+            EARTH,
+            levels_module,
             initial_temperature=264.0,
             perturbation_amplitude=1.0,
             seed=42,
@@ -604,8 +714,11 @@ class TestSimplePhysicsIntegration:
         spectral_filter = exponential_filter(t21_transform_module.arrays, dt)
 
         init_fn, step_fn = build_pe_stepper(
-            t21_transform_module, EARTH, levels_module,
-            ref_temps, surface_phi,
+            t21_transform_module,
+            EARTH,
+            levels_module,
+            ref_temps,
+            surface_phi,
             dt=dt,
             forcing=forcing,
             spectral_filter=spectral_filter,
@@ -631,21 +744,19 @@ class TestSimplePhysicsIntegration:
 
     def test_temperature_bounded(self, run_30_days: dict[str, float]) -> None:
         """Temperature should remain within physical bounds after 30 days."""
-        assert run_30_days["t_min"] > 150.0, (
-            f"Temperature too cold: {run_30_days['t_min']:.1f} K"
-        )
-        assert run_30_days["t_max"] < 400.0, (
-            f"Temperature too hot: {run_30_days['t_max']:.1f} K"
-        )
+        assert run_30_days["t_min"] > 150.0, f"Temperature too cold: {run_30_days['t_min']:.1f} K"
+        assert run_30_days["t_max"] < 400.0, f"Temperature too hot: {run_30_days['t_max']:.1f} K"
 
     def test_temperature_drifts_from_initial(
-        self, run_30_days: dict[str, float],
+        self,
+        run_30_days: dict[str, float],
     ) -> None:
         """Mean temperature should drift from isothermal initial condition."""
         assert abs(run_30_days["t_mean"] - 264.0) > 0.1
 
     def test_surface_pressure_bounded(
-        self, run_30_days: dict[str, float],
+        self,
+        run_30_days: dict[str, float],
     ) -> None:
         """Surface pressure should remain near 1e5 Pa after 30 days."""
         assert run_30_days["ps_min"] > 0.8e5

@@ -116,9 +116,12 @@ def longwave_heating(
     """
     # Optical depth at half-levels: (n_levels+1, n_lat)
     tau_half = longwave_optical_depth(
-        sigma_half, sin_lat,
-        tau_equator=tau_equator, tau_pole=tau_pole,
-        linear_fraction=linear_fraction, alpha=alpha,
+        sigma_half,
+        sin_lat,
+        tau_equator=tau_equator,
+        tau_pole=tau_pole,
+        linear_fraction=linear_fraction,
+        alpha=alpha,
     )
 
     # Layer optical thickness and transmissivity: (n_levels, n_lat)
@@ -130,7 +133,8 @@ def longwave_heating(
     # Surface blackbody: (n_lat, n_lon) — broadcast SST over longitude
     n_lat, n_lon = surface_pressure.shape
     bb_surface = jnp.broadcast_to(
-        STEFAN_BOLTZMANN * surface_temperature[:, None] ** 4, (n_lat, n_lon),
+        STEFAN_BOLTZMANN * surface_temperature[:, None] ** 4,
+        (n_lat, n_lon),
     )
 
     # Upward flux: scan from surface (bottom) to TOA (top).
@@ -150,7 +154,9 @@ def longwave_heating(
         return f_up_new, f_up_new
 
     _, f_up_interfaces_rev = jax.lax.scan(
-        _upward_step, bb_surface, (trans_rev, bb_rev),
+        _upward_step,
+        bb_surface,
+        (trans_rev, bb_rev),
     )
     # f_up_interfaces_rev: (n_levels, n_lat, n_lon) — fluxes at interfaces
     # from surface-1 to TOA (reversed order)
@@ -159,7 +165,8 @@ def longwave_heating(
     # f_up_inner[k] = flux at interface k+1/2 (above level k)
     # We need n_levels+1 interface values: surface, then n_levels interfaces
     f_up = jnp.concatenate(
-        [f_up_inner, bb_surface[None, :, :]], axis=0,
+        [f_up_inner, bb_surface[None, :, :]],
+        axis=0,
     )  # (n_levels+1, n_lat, n_lon) — index 0 = TOA, index n_levels = surface
 
     # --- Downward flux: scan from TOA (top) to surface (bottom) ---
@@ -175,12 +182,15 @@ def longwave_heating(
 
     f_down_toa = jnp.zeros((n_lat, n_lon))
     _, f_down_interfaces = jax.lax.scan(
-        _downward_step, f_down_toa, (transmissivity, bb),
+        _downward_step,
+        f_down_toa,
+        (transmissivity, bb),
     )
     # f_down_interfaces[k] = flux at interface k+3/2 (below level k)
     # We need n_levels+1 interface values: TOA, then n_levels interfaces
     f_down = jnp.concatenate(
-        [f_down_toa[None, :, :], f_down_interfaces], axis=0,
+        [f_down_toa[None, :, :], f_down_interfaces],
+        axis=0,
     )  # (n_levels+1, n_lat, n_lon) — index 0 = TOA, index n_levels = surface
 
     # --- Net flux and heating rate ---
@@ -249,9 +259,7 @@ def shortwave_heating(
         Shortwave heating rate [K/s], shape ``(n_levels, n_lat, n_lon)``.
     """
     # Insolation profile: (n_lat,)
-    insolation = solar_constant / 4.0 * (
-        1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0
-    )
+    insolation = solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
 
     # SW optical depth at half-levels: (n_levels+1, n_lat)
     tau_sw_half = sw_tau_0 * sigma_half[:, None] ** sw_exponent
