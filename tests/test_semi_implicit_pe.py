@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from notus.constants import EARTH
-from notus.sigma import uniform_sigma_levels
+from notus.vertical.sigma import uniform_sigma_levels
 from notus.state import PrimitiveEquationState
 from notus.timestepping.semi_implicit_pe import (
     PESemiImplicitConfig,

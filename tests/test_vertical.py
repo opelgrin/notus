@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from notus.sigma import uniform_sigma_levels
+from notus.vertical.sigma import uniform_sigma_levels
 from notus.vertical import (
     geopotential,
     geopotential_weights,

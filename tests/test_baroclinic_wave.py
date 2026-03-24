@@ -32,7 +32,7 @@ from notus.initial_conditions import (
     jablonowski_williamson_steady_state,
 )
 from notus.operators import exponential_filter
-from notus.sigma import uniform_sigma_levels
+from notus.vertical.sigma import uniform_sigma_levels
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
 
