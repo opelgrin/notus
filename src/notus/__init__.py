@@ -14,6 +14,12 @@ Core components
 """
 
 from notus.constants import EARTH, PlanetaryConstants
+from notus.diagnostics import (
+    ConservationDiagnostics,
+    compute_conservation_diagnostics,
+    sigma_integral,
+    spherical_integral,
+)
 from notus.grid import GaussianGrid
 from notus.initial_conditions import (
     JWConfig,
@@ -44,6 +50,7 @@ from notus.vertical import (
 
 __all__ = [
     "EARTH",
+    "ConservationDiagnostics",
     "GaussianGrid",
     "JWConfig",
     "PlanetaryConstants",
@@ -51,6 +58,7 @@ __all__ = [
     "ShallowWaterState",
     "SigmaLevels",
     "SpectralTransform",
+    "compute_conservation_diagnostics",
     "geopotential",
     "hyperdiffusion",
     "inverse_laplacian",
@@ -60,8 +68,10 @@ __all__ = [
     "meridional_derivative",
     "omega_over_pressure",
     "sigma_dot",
+    "sigma_integral",
     "spectral_curl",
     "spectral_divergence",
+    "spherical_integral",
     "standard_sigma_levels",
     "surface_pressure_tendency",
     "uniform_sigma_levels",
