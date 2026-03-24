@@ -1,6 +1,6 @@
 """Surface boundary conditions and fluxes for aquaplanet experiments.
 
-Prescribed SST profiles and bulk-aerodynamic surface sensible heat flux.
+Prescribed SST profiles, bulk-aerodynamic sensible and latent heat fluxes.
 """
 
 from __future__ import annotations
@@ -8,6 +8,8 @@ from __future__ import annotations
 import dataclasses
 
 import jax.numpy as jnp
+
+from notus.physics.moisture import saturation_specific_humidity
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -120,3 +122,74 @@ def surface_sensible_heat_flux(
     flux = rho_sfc * specific_heat_cp * drag_coefficient * wind_speed * (t_surface[:, None] - t_air)
 
     return gravity * flux / (dp_safe * specific_heat_cp)
+
+
+def surface_latent_heat_flux(
+    t_surface: jnp.ndarray,
+    q_air: jnp.ndarray,
+    wind_speed: jnp.ndarray,
+    surface_pressure: jnp.ndarray,
+    gravity: float,
+    gas_constant: float,
+    dsigma_lowest: float,
+    epsilon: float,
+    *,
+    drag_coefficient: float,
+) -> jnp.ndarray:
+    """Compute surface evaporation tendency for the lowest level.
+
+    Bulk aerodynamic formula::
+
+        E = rho * C_D * |v| * (q_sat(T_s, p_s) - q_a)
+
+    converted to a specific humidity tendency for the lowest level::
+
+        dq/dt = g * E / dp
+
+    where dp = dsigma_lowest * ps.
+
+    Parameters
+    ----------
+    t_surface : jnp.ndarray
+        Surface temperature, shape ``(n_lat,)``.
+    q_air : jnp.ndarray
+        Specific humidity at the lowest level, shape ``(n_lat, n_lon)``.
+    wind_speed : jnp.ndarray
+        Wind speed at the lowest level, shape ``(n_lat, n_lon)``.
+    surface_pressure : jnp.ndarray
+        Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+    gravity : float
+        Gravitational acceleration [m/s²].
+    gas_constant : float
+        Specific gas constant for dry air [J/(kg·K)].
+    dsigma_lowest : float
+        Sigma thickness of the lowest model level.
+    epsilon : float
+        Ratio R_d / R_v (≈ 0.622).
+    drag_coefficient : float
+        Surface drag coefficient C_D (dimensionless).
+
+    Returns
+    -------
+    jnp.ndarray
+        Specific humidity tendency [kg/kg/s] for the lowest level,
+        shape ``(n_lat, n_lon)``.
+    """
+    dp = dsigma_lowest * surface_pressure
+    dp_safe = jnp.maximum(dp, 1.0)
+
+    # Surface density
+    sigma_lowest = 1.0 - 0.5 * dsigma_lowest
+    t_sfc_bc = t_surface[:, None]
+    t_air_safe = jnp.maximum(t_sfc_bc, 1.0)
+    rho_sfc = surface_pressure * sigma_lowest / (gas_constant * t_air_safe)
+
+    # Saturation specific humidity at the surface
+    q_sat_sfc = saturation_specific_humidity(
+        t_sfc_bc, surface_pressure, epsilon,
+    )
+
+    # Evaporation flux (positive = upward, moistening the atmosphere)
+    evap = rho_sfc * drag_coefficient * wind_speed * (q_sat_sfc - q_air)
+
+    return gravity * evap / dp_safe

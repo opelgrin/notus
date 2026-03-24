@@ -63,15 +63,21 @@ class PrimitiveEquationState:
     divergence: jnp.ndarray
     temperature: jnp.ndarray
     log_surface_pressure: jnp.ndarray
+    humidity: jnp.ndarray | None = None
 
     @property
     def n_levels(self) -> int:
         """Number of vertical sigma levels."""
         return self.vorticity.shape[0]
 
-    def replace(self, **kwargs: jnp.ndarray) -> PrimitiveEquationState:
+    @property
+    def has_humidity(self) -> bool:
+        """Whether this state carries a moisture tracer."""
+        return self.humidity is not None
+
+    def replace(self, **kwargs: jnp.ndarray | None) -> PrimitiveEquationState:
         """Return a new state with specified fields replaced."""
-        return dataclasses.replace(self, **kwargs)
+        return dataclasses.replace(self, **kwargs)  # type: ignore[arg-type]
 
 
 # Register as JAX pytrees so they work with jit/vmap/grad.
@@ -83,19 +89,50 @@ def _sw_unflatten(_aux: None, children: tuple[jnp.ndarray, ...]) -> ShallowWater
     return ShallowWaterState(*children)
 
 
+# PE pytree: the aux data records whether humidity is present so that
+# flatten/unflatten are consistent (JAX requires a fixed number of
+# children for a given aux value).
+
+
 def _pe_flatten(
     state: PrimitiveEquationState,
-) -> tuple[tuple[jnp.ndarray, ...], None]:
-    return (
-        state.vorticity,
-        state.divergence,
-        state.temperature,
-        state.log_surface_pressure,
-    ), None
+) -> tuple[tuple[jnp.ndarray, ...], bool]:
+    children: tuple[jnp.ndarray, ...]
+    if state.humidity is not None:
+        children = (
+            state.vorticity,
+            state.divergence,
+            state.temperature,
+            state.log_surface_pressure,
+            state.humidity,
+        )
+    else:
+        children = (
+            state.vorticity,
+            state.divergence,
+            state.temperature,
+            state.log_surface_pressure,
+        )
+    return children, state.has_humidity
 
 
-def _pe_unflatten(_aux: None, children: tuple[jnp.ndarray, ...]) -> PrimitiveEquationState:
-    return PrimitiveEquationState(*children)
+def _pe_unflatten(
+    has_humidity: bool, children: tuple[jnp.ndarray, ...]
+) -> PrimitiveEquationState:
+    if has_humidity:
+        return PrimitiveEquationState(
+            vorticity=children[0],
+            divergence=children[1],
+            temperature=children[2],
+            log_surface_pressure=children[3],
+            humidity=children[4],
+        )
+    return PrimitiveEquationState(
+        vorticity=children[0],
+        divergence=children[1],
+        temperature=children[2],
+        log_surface_pressure=children[3],
+    )
 
 
 jax.tree_util.register_pytree_node(ShallowWaterState, _sw_flatten, _sw_unflatten)

@@ -272,12 +272,15 @@ def build_pe_stepper(
         if spectral_filter is None:
             return state
         f = spectral_filter
-        return state.replace(
-            vorticity=state.vorticity * f[None, :],
-            divergence=state.divergence * f[None, :],
-            temperature=state.temperature * f[None, :],
-            log_surface_pressure=state.log_surface_pressure * f,
-        )
+        updates: dict[str, jnp.ndarray] = {
+            "vorticity": state.vorticity * f[None, :],
+            "divergence": state.divergence * f[None, :],
+            "temperature": state.temperature * f[None, :],
+            "log_surface_pressure": state.log_surface_pressure * f,
+        }
+        if state.humidity is not None:
+            updates["humidity"] = state.humidity * f[None, :]
+        return state.replace(**updates)
 
     # Build init_fn
     @jax.jit

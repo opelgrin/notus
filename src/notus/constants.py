@@ -46,6 +46,13 @@ class PlanetaryConstants:
     reference_pressure: float = 1.0e5
     solar_constant: float = 1360.0
     surface_albedo: float = 0.31
+    latent_heat_vaporization: float = 2.5e6
+    gas_constant_vapor: float = 461.5
+
+    @property
+    def epsilon_moisture(self) -> float:
+        """Ratio R_d / R_v, used in saturation specific humidity."""
+        return self.gas_constant / self.gas_constant_vapor
 
     @property
     def kappa(self) -> float:
