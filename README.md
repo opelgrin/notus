@@ -16,6 +16,7 @@ The model is planet-agnostic — it can simulate any rotating planet with an ide
 - **Vertical coordinate**: sigma (p/ps) on a Lorenz grid
 - **Time stepping**: IMEX leapfrog with Robert-Asselin filter + semi-implicit 3D Helmholtz solver
 - **Filtering**: exponential spectral filter (Hou & Li 2007) + del-8 hyperdiffusion
+- **Physics**: Held-Suarez forcing (Newtonian relaxation + Rayleigh friction), pluggable via `Forcing` protocol
 - **Computation**: JAX (JIT compilation, GPU support, autodiff)
 
 ## Installation
@@ -33,7 +34,7 @@ from notus import GaussianGrid, SpectralTransform, EARTH, PlanetaryConstants
 grid = GaussianGrid(truncation=42)
 
 # Set up spectral transforms
-transform = SpectralTransform(grid)
+transform = SpectralTransform(grid, EARTH.radius)
 
 # Or define your own planet
 my_planet = PlanetaryConstants(
@@ -46,6 +47,21 @@ my_planet = PlanetaryConstants(
 )
 ```
 
+### Held-Suarez benchmark
+
+Run the standard dry dynamical core intercomparison:
+
+```bash
+# Quick demo (T21, 300 days, ~45s)
+uv run python examples/held_suarez.py --days 300 --spinup 100 --truncation 21 --dt 1200
+
+# Full benchmark (T42, 1200 days)
+uv run python examples/held_suarez.py
+
+# Generate diagnostic plots
+uv run python examples/plot_held_suarez.py
+```
+
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
@@ -53,7 +69,7 @@ See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
 - [x] **Phase 1 — Spectral foundations**: Gaussian grid, spherical harmonic transforms, spectral operators
 - [x] **Phase 2 — Shallow water**: 2D shallow water equations on the sphere, Williamson et al. (1992) test case 2 (steady-state 10 days, mass conservation)
 - [x] **Phase 3 — Primitive equations**: 3D hydrostatic dycore on sigma levels, Jablonowski-Williamson (2006) baroclinic wave (10-day integration, ps minimum ~950 hPa, conservation < 0.1%)
-- [ ] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20
+- [x] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20, validated climatology (jets, temperature, eddies)
 - [ ] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment
 - [ ] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, simple convection
 - [ ] **Phase 7 — Seasonal cycle**: orbital parameters, shortwave/longwave radiation, diurnal and annual cycles
