@@ -30,9 +30,9 @@ import jax.numpy as jnp
 from notus.constants import PlanetaryConstants
 from notus.grid import GaussianGrid
 from notus.operators import uv_from_vordiv
-from notus.sigma import SigmaLevels
 from notus.state import PrimitiveEquationState
 from notus.transforms import SpectralTransform
+from notus.vertical.sigma import SigmaLevels
 
 
 def spherical_integral(

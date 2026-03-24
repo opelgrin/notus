@@ -16,13 +16,13 @@ from notus.constants import EARTH
 from notus.dynamics.primitive_equations import primitive_equation_tendencies
 from notus.grid import GaussianGrid
 from notus.operators import exponential_filter
-from notus.sigma import uniform_sigma_levels
+from notus.vertical.sigma import uniform_sigma_levels
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import (
     build_pe_stepper,
     euler_init,
 )
-from notus.timestepping.semi_implicit import (
+from notus.timestepping.semi_implicit_pe import (
     build_pe_semi_implicit_config,
     pe_implicit_inverse,
     pe_implicit_terms,

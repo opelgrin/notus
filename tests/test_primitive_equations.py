@@ -9,7 +9,7 @@ from notus.dynamics.primitive_equations import primitive_equation_tendencies
 from notus.dynamics.shallow_water import shallow_water_tendencies
 from notus.grid import GaussianGrid
 from notus.operators import laplacian
-from notus.sigma import uniform_sigma_levels
+from notus.vertical.sigma import uniform_sigma_levels
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
 

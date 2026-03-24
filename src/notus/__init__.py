@@ -36,7 +36,6 @@ from notus.operators import (
     uv_from_vordiv,
     zonal_derivative,
 )
-from notus.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
 from notus.vertical import (
@@ -46,6 +45,7 @@ from notus.vertical import (
     surface_pressure_tendency,
     vertical_advection,
 )
+from notus.vertical.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
 
 
 __all__ = [

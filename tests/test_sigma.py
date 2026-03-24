@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from notus.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
+from notus.vertical.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
 
 
 class TestSigmaLevels:

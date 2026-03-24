@@ -30,10 +30,6 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.operators import (
-    _laplacian_eigenvalues,
-    _m_index_array,
-    _meridional_coupling,
-    _mu_derivative_coupling,
     hyperdiffusion,
     laplacian,
     meridional_derivative,
@@ -42,7 +38,12 @@ from notus.operators import (
     uv_from_vordiv,
     zonal_derivative,
 )
-from notus.sigma import SigmaLevels
+from notus.operators.caches import (
+    _laplacian_eigenvalues,
+    _m_index_array,
+    _meridional_coupling,
+    _mu_derivative_coupling,
+)
 from notus.state import PrimitiveEquationState
 from notus.transforms import SpectralTransform
 from notus.vertical import (
@@ -51,6 +52,7 @@ from notus.vertical import (
     surface_pressure_tendency,
     vertical_advection,
 )
+from notus.vertical.sigma import SigmaLevels
 
 
 def primitive_equation_tendencies(

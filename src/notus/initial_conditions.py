@@ -19,9 +19,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from notus.constants import PlanetaryConstants
-from notus.sigma import SigmaLevels
 from notus.state import PrimitiveEquationState
 from notus.transforms import SpectralTransform
+from notus.vertical.sigma import SigmaLevels
 
 
 @dataclass(frozen=True, slots=True)

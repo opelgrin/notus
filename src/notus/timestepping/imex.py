@@ -35,14 +35,14 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.dynamics.primitive_equations import primitive_equation_tendencies
-from notus.sigma import SigmaLevels
 from notus.state import PrimitiveEquationState
-from notus.timestepping.semi_implicit import (
+from notus.timestepping.semi_implicit_pe import (
     build_pe_semi_implicit_config,
     pe_implicit_inverse,
     pe_implicit_terms,
 )
 from notus.transforms import SpectralTransform
+from notus.vertical.sigma import SigmaLevels
 
 
 S = TypeVar("S")
