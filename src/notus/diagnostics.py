@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 
 from notus.constants import PlanetaryConstants
@@ -87,11 +88,7 @@ def sigma_integral(
         Column integral, shape ``(...,)`` (level axis removed).
     """
     # dsigma shape (n_levels,), broadcast to field
-    weights = levels.dsigma
-    # Expand dsigma to match field dimensions
-    n_extra = field.ndim - 1
-    for _ in range(n_extra):
-        weights = weights[..., None]
+    weights = jnp.reshape(levels.dsigma, (-1,) + (1,) * (field.ndim - 1))
     return jnp.sum(field * weights, axis=0)
 
 
@@ -151,7 +148,6 @@ def compute_conservation_diagnostics(
         Global mass, energy, and angular momentum.
     """
     grid = transform.grid
-    n_levels = levels.n_levels
     truncation = grid.truncation
     radius = planet.radius
 
@@ -163,36 +159,30 @@ def compute_conservation_diagnostics(
     a2 = radius**2
     mass = a2 * spherical_integral(ps_grid, grid) / planet.gravity
 
-    # --- Per-level grid-point fields ---
-    # Winds: u*cosφ, v*cosφ in spectral → u, v on grid
-    cos_lat = grid.cos_lat[:, None]  # (n_lat, 1)
+    # --- Per-level grid-point fields (vectorized) ---
+    # Reconstruct winds: vmap over levels
+    def _uv_at_level(vort: jnp.ndarray, div: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return uv_from_vordiv(vort, div, truncation, radius)
 
-    ke_levels = jnp.zeros((n_levels, grid.n_lat, grid.n_lon))
-    ie_levels = jnp.zeros((n_levels, grid.n_lat, grid.n_lon))
-    am_levels = jnp.zeros((n_levels, grid.n_lat, grid.n_lon))
+    u_cos_spec, v_cos_spec = jax.vmap(_uv_at_level)(state.vorticity, state.divergence)
 
-    for k in range(n_levels):
-        # Winds
-        u_cos_spec, v_cos_spec = uv_from_vordiv(
-            state.vorticity[k], state.divergence[k], truncation, radius
-        )
-        u_cos = transform.spectral_to_grid(u_cos_spec)
-        v_cos = transform.spectral_to_grid(v_cos_spec)
-        u = u_cos / cos_lat  # zonal wind
-        v = v_cos / cos_lat  # meridional wind
+    # Batch all spectral→grid transforms: u_cos, v_cos, temperature per level
+    all_spec = jnp.concatenate([u_cos_spec, v_cos_spec, state.temperature], axis=0)
+    all_grid = jax.vmap(transform.spectral_to_grid)(all_spec)
 
-        # Temperature
-        t_grid = transform.spectral_to_grid(state.temperature[k])
+    n_levels = levels.n_levels
+    u_cos_grid = all_grid[:n_levels]
+    v_cos_grid = all_grid[n_levels : 2 * n_levels]
+    t_grid = all_grid[2 * n_levels : 3 * n_levels]
 
-        # Kinetic energy: ½(u² + v²)
-        ke_levels = ke_levels.at[k].set(0.5 * (u**2 + v**2))
+    cos_lat = grid.cos_lat[None, :, None]  # (1, n_lat, 1)
+    u = u_cos_grid / cos_lat
+    v = v_cos_grid / cos_lat
 
-        # Internal energy: cp * T
-        ie_levels = ie_levels.at[k].set(planet.specific_heat_cp * t_grid)
-
-        # Angular momentum integrand: (u + Ω·a·cosφ) · a·cosφ
-        omega_a_cos = planet.rotation_rate * radius * cos_lat
-        am_levels = am_levels.at[k].set((u + omega_a_cos) * radius * cos_lat)
+    ke_levels = 0.5 * (u**2 + v**2)
+    ie_levels = planet.specific_heat_cp * t_grid
+    omega_a_cos = planet.rotation_rate * radius * cos_lat
+    am_levels = (u + omega_a_cos) * radius * cos_lat
 
     # --- Surface geopotential on grid ---
     phi_s_grid = transform.spectral_to_grid(surface_geopotential)

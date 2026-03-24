@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -187,22 +188,14 @@ def jablonowski_williamson_steady_state(
     # Broadcast to (n_lat, n_lon) for transform
     phi_s_grid = np.broadcast_to(phi_s[:, None], (n_lat, n_lon))
 
-    # -- Transform to spectral space --
+    # -- Transform to spectral space (batched) --
     n_spec = grid.n_spectral_coeffs
-    vorticity_spec = np.zeros((n_levels, n_spec), dtype=np.complex128)
-    temperature_spec = np.zeros((n_levels, n_spec), dtype=np.complex128)
+    all_grid = jnp.array(np.concatenate([vorticity_grid, temperature_grid], axis=0))
+    all_spec = jax.vmap(transform.grid_to_spectral)(all_grid)
+    vorticity_spec = np.asarray(all_spec[:n_levels])
+    temperature_spec = np.asarray(all_spec[n_levels:])
 
-    for k in range(n_levels):
-        vorticity_spec[k] = np.asarray(
-            transform.grid_to_spectral(jnp.array(vorticity_grid[k]))
-        )
-        temperature_spec[k] = np.asarray(
-            transform.grid_to_spectral(jnp.array(temperature_grid[k]))
-        )
-
-    surface_geopotential = jnp.array(
-        np.asarray(transform.grid_to_spectral(jnp.array(phi_s_grid)))
-    )
+    surface_geopotential = transform.grid_to_spectral(jnp.array(phi_s_grid))
 
     # Surface pressure is uniform p0, so ln(ps/p0) = 0
     log_surface_pressure = jnp.zeros(n_spec, dtype=jnp.complex128)
@@ -259,19 +252,14 @@ def jablonowski_williamson_perturbation(
 
     lat = np.array(grid.latitudes)  # (n_lat,)
     lon = np.array(grid.longitudes)  # (n_lon,)
-    sin_lat_1d = np.sin(lat)
-    cos_lat_1d = np.cos(lat)
-
-    # 2D meshes: (n_lat, n_lon)
-    lat_2d = lat[:, None] * np.ones(grid.n_lon)[None, :]
-    lon_2d = np.ones(grid.n_lat)[:, None] * lon[None, :]
-    sin_lat_2d = sin_lat_1d[:, None] * np.ones(grid.n_lon)[None, :]
-    cos_lat_2d = cos_lat_1d[:, None] * np.ones(grid.n_lon)[None, :]
+    sin_lat = np.sin(lat)[:, None]  # (n_lat, 1) — broadcasts with lon
+    cos_lat = np.cos(lat)[:, None]
+    lon_bc = lon[None, :]  # (1, n_lon)
 
     # Great-circle distance factor
     x = (
-        np.sin(lat_location) * sin_lat_2d
-        + np.cos(lat_location) * cos_lat_2d * np.cos(lon_2d - lon_location)
+        np.sin(lat_location) * sin_lat
+        + np.cos(lat_location) * cos_lat * np.cos(lon_bc - lon_location)
     )
     r = a * np.arccos(np.clip(x, -1.0, 1.0))
     sqrt_val = np.sqrt(np.maximum(1.0 - x**2, 1e-12))
@@ -280,11 +268,11 @@ def jablonowski_williamson_perturbation(
     # Vorticity perturbation
     exp_decay = np.exp(-(r / big_r) ** 2)
     vort_pert = (u_perturb / a) * exp_decay * (
-        np.tan(lat_2d)
+        np.tan(lat[:, None])
         - 2.0 * (a / big_r) ** 2 * arccos_x
         * (
-            np.sin(lat_location) * cos_lat_2d
-            - np.cos(lat_location) * sin_lat_2d * np.cos(lon_2d - lon_location)
+            np.sin(lat_location) * cos_lat
+            - np.cos(lat_location) * sin_lat * np.cos(lon_bc - lon_location)
         )
         / sqrt_val
     )
@@ -293,26 +281,20 @@ def jablonowski_williamson_perturbation(
     div_pert = (
         -2.0 * u_perturb * a / big_r**2
     ) * exp_decay * arccos_x * (
-        np.cos(lat_location) * np.sin(lon_2d - lon_location)
+        np.cos(lat_location) * np.sin(lon_bc - lon_location)
     ) / sqrt_val
 
-    # Stack to all levels (perturbation is level-independent)
+    # Transform once and broadcast (perturbation is level-independent)
     n_levels = levels.n_levels
     n_spec = grid.n_spectral_coeffs
-    vort_spec = np.zeros((n_levels, n_spec), dtype=np.complex128)
-    div_spec = np.zeros((n_levels, n_spec), dtype=np.complex128)
-
-    for k in range(n_levels):
-        vort_spec[k] = np.asarray(
-            transform.grid_to_spectral(jnp.array(vort_pert))
-        )
-        div_spec[k] = np.asarray(
-            transform.grid_to_spectral(jnp.array(div_pert))
-        )
+    vort_spec_single = transform.grid_to_spectral(jnp.array(vort_pert))
+    div_spec_single = transform.grid_to_spectral(jnp.array(div_pert))
+    vort_spec = jnp.tile(vort_spec_single[None, :], (n_levels, 1))
+    div_spec = jnp.tile(div_spec_single[None, :], (n_levels, 1))
 
     return PrimitiveEquationState(
-        vorticity=jnp.array(vort_spec),
-        divergence=jnp.array(div_spec),
+        vorticity=vort_spec,
+        divergence=div_spec,
         temperature=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
         log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
     )

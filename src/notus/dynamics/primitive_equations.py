@@ -26,6 +26,7 @@ from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.operators import (
@@ -56,7 +57,7 @@ def primitive_equation_tendencies(
     transform: SpectralTransform,
     planet: PlanetaryConstants,
     levels: SigmaLevels,
-    reference_temperature: jnp.ndarray,
+    reference_temperature: np.ndarray,
     surface_geopotential: jnp.ndarray,
     diffusion_order: int = 4,
     diffusion_timescale: float = 2.0 * 3600.0,

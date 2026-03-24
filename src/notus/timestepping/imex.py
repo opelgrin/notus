@@ -264,6 +264,7 @@ def build_pe_stepper(
         )
 
     # Build init_fn
+    @jax.jit
     def init_fn(
         state: PrimitiveEquationState,
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState]:
@@ -272,6 +273,7 @@ def build_pe_stepper(
         return previous, current
 
     # Build step_fn
+    @jax.jit
     def step_fn(
         previous: PrimitiveEquationState,
         current: PrimitiveEquationState,

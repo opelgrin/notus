@@ -264,6 +264,13 @@ class PESemiImplicitConfig:
     ----------
     coupling_matrix : jnp.ndarray
         M = G·H + R·T_ref⊗Δσ, shape ``(n_levels, n_levels)``.
+    coupling_eigvals : jnp.ndarray
+        Eigenvalues of M, shape ``(n_levels,)``.
+    coupling_p : jnp.ndarray
+        Eigenvector matrix P of M, shape ``(n_levels, n_levels)``.
+        M = P @ diag(eigvals) @ P_inv.
+    coupling_p_inv : jnp.ndarray
+        Inverse eigenvector matrix P⁻¹, shape ``(n_levels, n_levels)``.
     geopotential_weights : jnp.ndarray
         G matrix from hydrostatic integration, shape ``(n_levels, n_levels)``.
     temp_implicit_weights : jnp.ndarray
@@ -279,6 +286,9 @@ class PESemiImplicitConfig:
     """
 
     coupling_matrix: jnp.ndarray
+    coupling_eigvals: jnp.ndarray
+    coupling_p: jnp.ndarray
+    coupling_p_inv: jnp.ndarray
     geopotential_weights: jnp.ndarray
     temp_implicit_weights: jnp.ndarray
     dsigma: jnp.ndarray
@@ -317,8 +327,21 @@ def build_pe_semi_implicit_config(
     geo_w = geopotential_weights(levels, gas_constant)
     temp_w = temperature_implicit_weights(levels, kappa, t_ref)
     coupling = pe_coupling_matrix(levels, gas_constant, kappa, t_ref)
+
+    # Eigen-decompose M once so the implicit solve becomes O(L²) per mode
+    # instead of O(L³) from jnp.linalg.solve.
+    # Note: M is not symmetric, but its eigenvalues are empirically real for
+    # physical parameter ranges.  If complex eigenvalues ever appear the
+    # diagonal solve in pe_implicit_inverse still works (complex arithmetic),
+    # but the result should be checked for spurious imaginary parts.
+    eigvals_m, p_mat = np.linalg.eig(coupling)
+    p_inv = np.linalg.inv(p_mat)
+
     return PESemiImplicitConfig(
         coupling_matrix=jnp.array(coupling),
+        coupling_eigvals=jnp.array(eigvals_m),
+        coupling_p=jnp.array(p_mat),
+        coupling_p_inv=jnp.array(p_inv),
         geopotential_weights=jnp.array(geo_w),
         temp_implicit_weights=jnp.array(temp_w),
         dsigma=levels.dsigma,
@@ -432,14 +455,17 @@ def pe_implicit_inverse(
     """
     geo_w = config.geopotential_weights  # (L, L)
     temp_w = config.temp_implicit_weights  # (L, L)
-    coupling = config.coupling_matrix  # (L, L)
     dsigma = config.dsigma  # (L,)
     t_ref = config.reference_temperature  # (L,)
     r_gas = config.gas_constant
     s = step_size
 
+    # Pre-computed eigendecomposition: M = P @ diag(μ) @ P_inv
+    p_mat = config.coupling_p  # (L, L)
+    p_inv = config.coupling_p_inv  # (L, L)
+    mu = config.coupling_eigvals  # (L,)
+
     eigenvalues = _laplacian_eigenvalues(truncation, radius)  # (n_spec,)
-    n_levels = state.n_levels
 
     # --- Step 1: geopotential intermediate ---
     # Φ* = G @ T'* + R·T_ref·lnps*   where T'* = T* - T_ref
@@ -452,14 +478,13 @@ def pe_implicit_inverse(
     # eigenvalues = -n(n+1)/a², so -s·eigenvalues·Φ* = s·|λ|·Φ* > 0
     rhs = state.divergence - s * eigenvalues[None, :] * phi_star  # (L, n_spec)
 
-    # --- Step 3: build and solve the L×L system per spectral mode ---
-    # A_nm = I_L - s²·eigenvalue_nm·M   shape (n_spec, L, L)
-    eye = jnp.eye(n_levels)
-    system = eye[None, :, :] - s**2 * eigenvalues[:, None, None] * coupling[None, :, :]
-
-    # Solve system @ δ_new = rhs   (batch over spectral coefficients)
-    # JAX >=0.5 requires explicit 2-D rhs for batched solve
-    delta_new = jnp.linalg.solve(system, rhs.T[..., None]).squeeze(-1).T  # (L, n_spec)
+    # --- Step 3: solve via eigendecomposition (O(L²) per mode) ---
+    # (I - s²·λₙ·M)·δ = rhs
+    # In eigenspace: (1 - s²·λₙ·μⱼ)·(P⁻¹·δ)ⱼ = (P⁻¹·rhs)ⱼ
+    rhs_eigen = p_inv @ rhs  # (L, n_spec)
+    # Diagonal solve: d[j,n] = 1 / (1 - s²·λₙ·μⱼ)
+    diag_inv = 1.0 / (1.0 - s**2 * eigenvalues[None, :] * mu[:, None])  # (L, n_spec)
+    delta_new = p_mat @ (diag_inv * rhs_eigen)  # (L, n_spec)
 
     # --- Step 4: back-substitute for T and lnps ---
     t_new = state.temperature - s * (temp_w @ delta_new)
