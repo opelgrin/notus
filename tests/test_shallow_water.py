@@ -14,7 +14,7 @@ from notus.dynamics.shallow_water import shallow_water_tendencies
 from notus.operators import exponential_filter
 from notus.state import ShallowWaterState
 from notus.timestepping.leapfrog import LeapfrogState
-from notus.timestepping.semi_implicit import (
+from notus.timestepping.semi_implicit_sw import (
     SemiImplicitConfig,
     implicit_inverse,
     implicit_terms,

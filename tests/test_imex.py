@@ -22,7 +22,7 @@ from notus.timestepping.imex import (
     build_pe_stepper,
     euler_init,
 )
-from notus.timestepping.semi_implicit import (
+from notus.timestepping.semi_implicit_pe import (
     build_pe_semi_implicit_config,
     pe_implicit_inverse,
     pe_implicit_terms,

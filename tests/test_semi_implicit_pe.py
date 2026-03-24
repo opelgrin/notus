@@ -19,7 +19,7 @@ import numpy as np
 from notus.constants import EARTH
 from notus.sigma import uniform_sigma_levels
 from notus.state import PrimitiveEquationState
-from notus.timestepping.semi_implicit import (
+from notus.timestepping.semi_implicit_pe import (
     PESemiImplicitConfig,
     build_pe_semi_implicit_config,
     pe_coupling_matrix,
