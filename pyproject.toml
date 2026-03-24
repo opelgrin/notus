@@ -114,6 +114,18 @@ allowed-confusables = [
     "E402",    # Module-level import after pytest.importorskip guard
 ]
 
+"examples/**" = [
+    "T201",    # print() is the primary output mechanism
+    "E402",    # Imports after jax.config.update
+    "PLR2004", # Magic values (physical constants, thresholds)
+    "PLR0915", # Too many statements
+    "PLC0415", # Import not at top level
+    "RET504",  # Unnecessary variable before return
+    "PLR6104", # Augmented assignment
+    "INP001",  # Implicit namespace package
+    "C901",    # Complexity (main driver functions)
+]
+
 [tool.ruff.lint.isort]
 known-first-party = ["notus"]
 combine-as-imports = true

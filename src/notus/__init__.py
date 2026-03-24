@@ -23,6 +23,7 @@ from notus.diagnostics import (
 from notus.grid import GaussianGrid
 from notus.initial_conditions import (
     JWConfig,
+    held_suarez_initial_state,
     jablonowski_williamson_perturbation,
     jablonowski_williamson_steady_state,
 )
@@ -37,6 +38,7 @@ from notus.operators import (
     uv_from_vordiv,
     zonal_derivative,
 )
+from notus.physics import HeldSuarez
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.transforms import SpectralTransform
 from notus.vertical import (
@@ -53,6 +55,7 @@ __all__ = [
     "EARTH",
     "ConservationDiagnostics",
     "GaussianGrid",
+    "HeldSuarez",
     "JWConfig",
     "OperatorArrays",
     "PlanetaryConstants",
@@ -62,6 +65,7 @@ __all__ = [
     "SpectralTransform",
     "compute_conservation_diagnostics",
     "geopotential",
+    "held_suarez_initial_state",
     "hyperdiffusion",
     "inverse_laplacian",
     "jablonowski_williamson_perturbation",
