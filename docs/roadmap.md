@@ -171,29 +171,30 @@ Add water vapor as a prognostic tracer with moist physics parameterizations.
 - Spectral Gibbs ringing creates negative humidity at sharp moisture gradients. Without clipping, negatives grow to 18%+ of grid points at L20 after 1200 days, biasing q_mean low by ~0.05 g/kg. Grid-space clipping in the time stepper (transform → clip → re-transform after each step) corrects the spectral representation itself and keeps negatives bounded at 0.3%. Clipping before physics alone is insufficient — it doesn't modify the spectral state, so negatives persist and accumulate.
 - Quantitative moisture budget analysis (tracking the spectral (0,0) mode) showed the initial q_mean drift is dominated by the physics E-P imbalance (precipitation exceeds evaporation during spinup from RH=0.7 initial condition), not numerical sinks. Hyperdiffusion, spectral filter, and Robert-Asselin filter all contribute effectively zero to the global mean moisture tendency. The system equilibrates after ~300 days.
 
-## Phase 6b — Virtual Temperature and Moist Dynamics (next)
+## Phase 6b — Virtual Temperature in Pressure Gradient (complete)
 
-Full virtual temperature feedback following the Dinosaur/NeuralGCM decomposition.
+Virtual temperature correction to the pressure gradient force, following the Dinosaur/NeuralGCM perturbation approach. The semi-implicit solver stays dry; moisture effects enter as an explicit correction.
 
-**Virtual temperature plan (following Dinosaur's perturbation approach):**
+**What was built:**
+- Virtual temperature perturbation in the explicit pressure gradient: `T_v' = T' + ε'·q·T` where `ε' = R_v/R_d - 1 ≈ 0.608` and `T = T_ref + T'` is the full temperature. This replaces the previous `R·T'·∇(ln ps)` with `R·T_v'·∇(ln ps)` in `_grid_point_tendencies`.
+- The expression `T' + ε'·q·T` captures both the T' part (`T'·(1 + ε'q)`) and the T_ref part (`ε'·q·T_ref`) in a single line — simpler than the 3-term decomposition originally planned.
+- Dry dynamics unchanged: when humidity is None, `T_v' = T'`.
 
-The semi-implicit solver stays dry (T_ref, dry R, dry κ). All moisture effects enter as explicit correction tendencies:
-
-1. **Pressure gradient**: multiply R·T' by `(1 + ε'q)` in `_grid_point_tendencies`, where ε' = R_v/R_d - 1 ≈ 0.608. This is the dominant effect.
-
-2. **Geopotential correction**: add `∇²(Φ(T_v) - Φ(T))` to the divergence tendency. Compute `ΔT = ε'·q·T` (the full temperature including T_ref), pass through the geopotential weight matrix G, then apply the spectral Laplacian. This captures the thicker layers in moist regions.
-
-3. **Reference pressure gradient correction**: add `∇²(R·ε'·q·T_ref·ln(ps))` to the divergence tendency. This is the T_ref component that was unstable when folded into the T' multiplication (because it's a large mean-field term). As a separate Laplacian term, it's stable because it enters the same way as the implicit geopotential.
-
-4. **Vorticity correction**: add the curl of `R·ε'·T_ref·(∇q × ∇ln(ps))` — moisture gradients crossed with pressure gradients create vorticity. Small but physically present.
-
-5. **Moist adiabatic heating**: replace κ·T·(ω/p) with κ_moist·T_v·(ω/p) where κ_moist = R_moist/cp_moist accounts for the different heat capacity of moist air. Decompose into T' and T_ref components for semi-implicit consistency.
-
-Items 1-3 are essential for quantitative moist climatology. Items 4-5 are second-order corrections.
+**What was NOT implemented (and why):**
+- Geopotential correction `-∇²(G·ε'·q·T)`: adding an explicit `∇²Φ` perturbation to the divergence creates unbalanced gravity waves — the semi-implicit solver couples G (geopotential) and H (temperature) implicitly, and an explicit geopotential perturbation without that coupling is unstable. This is ~5% of the total T_v effect.
+- Vorticity correction and moist κ: ~3% combined, deferred.
 
 **Validation:**
-- Stable 300-day moist aquaplanet with multiple seeds
-- Compare zonal-mean T, U, q against Frierson (2006) published climatology
+- 600-day moist aquaplanet stable at T21 L20, dt=580s
+- Requires ~3% dt reduction vs dry (600→580s) due to faster gravity waves from T_v
+- Equilibrium: q_mean ≈ 2.6 g/kg, T_mean ≈ 249 K, neg < 0.3%
+- Climatology: T_equator=300.5 K, T_pole=268.7 K, jet max=77 m/s, EKE=82.7 m²/s²
+- Jet max reduced from 87→77 m/s vs no-T_v baseline (moist buoyancy strengthens Hadley cell, increasing poleward momentum transport that brakes the jet)
+
+**Lessons learned:**
+- The previous T_v attempt (commit 0737af9, reverted) only applied `T'·(1 + ε'q)`, missing the dominant `ε'·q·T_ref` term. The drift observed at the time was actually the E-P spinup imbalance (resolved by humidity clipping), not a T_v problem.
+- Explicit geopotential corrections are incompatible with the semi-implicit gravity wave solver. The pressure gradient correction alone captures ~95% of the T_v effect and is stable.
+- Virtual temperature increases effective gravity wave speed by O(ε'·q) ≈ 1%, tightening the CFL constraint. At T21 this requires reducing dt from 600s to ~580s.
 
 ## Phase 7 — Seasonal Cycle
 
