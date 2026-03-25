@@ -16,7 +16,8 @@ The model is planet-agnostic — it can simulate any rotating planet with an ide
 - **Vertical coordinate**: sigma (p/ps) on a Lorenz grid
 - **Time stepping**: IMEX leapfrog with Robert-Asselin filter + semi-implicit 3D Helmholtz solver
 - **Filtering**: exponential spectral filter (Hou & Li 2007) + del-8 hyperdiffusion
-- **Physics**: Held-Suarez forcing, Frierson (2006) simple physics (gray radiation, convective adjustment, bulk surface flux), pluggable via `Forcing` protocol
+- **Physics**: Held-Suarez forcing, Frierson (2006/2007) simple physics (gray radiation, Betts-Miller convection, large-scale condensation, bulk surface fluxes), pluggable via `Forcing` protocol
+- **Moisture**: specific humidity as optional spectral tracer, surface evaporation, condensation with latent heating
 - **Computation**: JAX (JIT compilation, GPU support, autodiff)
 
 ## Installation
@@ -62,7 +63,7 @@ uv run python examples/held_suarez.py
 uv run python examples/plot_held_suarez.py
 ```
 
-### Frierson aquaplanet
+### Frierson aquaplanet (dry)
 
 Run the gray-radiation aquaplanet with surface fluxes (Frierson et al. 2006):
 
@@ -74,6 +75,18 @@ uv run python examples/simple_physics_aquaplanet.py
 uv run python examples/plot_simple_physics.py
 ```
 
+### Moist aquaplanet
+
+Run the moist aquaplanet with condensation, Betts-Miller convection, and surface evaporation:
+
+```bash
+# Quick demo (T21, 300 days)
+uv run python examples/moist_aquaplanet.py
+
+# Longer run
+uv run python examples/moist_aquaplanet.py --days 500 --spinup 200
+```
+
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
@@ -83,7 +96,7 @@ See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
 - [x] **Phase 3 — Primitive equations**: 3D hydrostatic dycore on sigma levels, Jablonowski-Williamson (2006) baroclinic wave (10-day integration, ps minimum ~950 hPa, conservation < 0.1%)
 - [x] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20, validated climatology (jets, temperature, eddies)
 - [x] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment, bulk surface flux, Frierson (2006) aquaplanet
-- [ ] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, simple convection
+- [x] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, Betts-Miller convection, surface evaporation
 - [ ] **Phase 7 — Seasonal cycle**: orbital parameters, shortwave/longwave radiation, diurnal and annual cycles
 - [ ] **Phase 8 — Surface coupling**: slab ocean, simple land surface, Monin-Obukhov boundary layer
 
@@ -101,3 +114,5 @@ Built with guidance from:
 - [Dinosaur](https://github.com/neuralgcm/dinosaur) — differentiable spectral dycore in JAX (Google)
 - [SPEEDY](http://users.ictp.it/~kucharsk/speedy-doc.html) — simplified atmospheric GCM (ICTP)
 - Held & Suarez (1994), *A Proposal for the Intercomparison of the Dynamical Cores of Atmospheric General Circulation Models*, BAMS
+- Frierson et al. (2006), *A Gray-Radiation Aquaplanet Moist GCM*, JAS
+- Frierson (2007), *The Dynamics of Idealized Convection Schemes and Their Effect on the Zonally Averaged Tropical Circulation*, JAS

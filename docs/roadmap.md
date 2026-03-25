@@ -140,15 +140,33 @@ Gray radiation, dry convective adjustment, and bulk surface flux — following F
 - Surface sensible heat flux is essential for realistic temperatures. Without it, the atmosphere is ~40 K too cold because LW radiation alone cannot efficiently couple the warm surface to the boundary layer.
 - Frierson (2006) uses no atmospheric SW absorption — the shortwave heats the surface only, and heat enters the atmosphere through sensible flux and LW radiation.
 
-## Phase 6 — Moisture (next)
+## Phase 6 — Moisture (complete)
 
-Add water vapor as a tracer with large-scale condensation.
+Add water vapor as a prognostic tracer with moist physics parameterizations.
 
-**Plan:**
-- Specific humidity as a prognostic variable with spectral advection
-- Large-scale condensation when supersaturated (with latent heating feedback)
-- Simple convection scheme (Betts-Miller or simplified Arakawa-Schubert)
-- Precipitation diagnostic
+**What was built:**
+- Specific humidity as an optional field in `PrimitiveEquationState`, advected spectrally with the same flux-divergence + advective correction treatment as temperature
+- Zero implicit terms (fully explicit), pass-through in semi-implicit solver
+- Moisture thermodynamics: saturation vapor pressure (Bolton 1980), saturation specific humidity, moist pseudoadiabatic lapse rate
+- Large-scale condensation: implicit Frierson (2006) eq. 21 scheme, iterative, energy-conserving per level (cp·ΔT + L·Δq = 0)
+- Simplified Betts-Miller convection (Frierson 2007): parcel ascent with level of zero buoyancy (LZB), deep/shallow distinction via Pq/PT integrals, qref formulation for shallow convection, enthalpy-conserving ΔT offset applied only within the convective column
+- Bulk aerodynamic surface latent heat flux (evaporation)
+- `SimplePhysics` extended with automatic moist/dry pathway selection
+- `moist_aquaplanet_initial_state` with RH-based humidity profile
+- No humidity clipping (Dinosaur/NeuralGCM approach) — exponential filtering alone controls Gibbs ringing
+- Backward-compatible: dry states (humidity=None) work identically to Phase 5
+
+**Validation:**
+- 50-day moist aquaplanet integration stable at T21 L20, dt=600s
+- Temperature range 226–305 K, humidity 0–24 g/kg, surface pressure 983–1018 hPa
+- Negative humidity points < 1% at day 50, small magnitude (~1 g/kg)
+- 49 new tests (303 total): thermodynamics, surface flux, condensation, BM convection, passive tracer transport, config validation, 10-day integration stability
+
+**Lessons learned:**
+- Betts-Miller convection must be vertically bounded by the level of zero buoyancy. Applying relaxation tendencies to the full column (including the stratosphere where the moist adiabat reference is meaningless) causes rapid temperature drift and blowup within days. This is universal across GCMs: both SpeedyWeather.jl (Frierson SBM) and SPEEDY (Tiedtke) limit tendencies to between the surface and the convection top.
+- The implicit condensation denominator factor is L²ε²/(cp·R_d·T²), not L²ε/(cp·R_v·T²) computed from a reconstructed R_v. Using R_v = R_d/ε and simplifying algebraically avoids an intermediate variable that is easy to get wrong.
+- Initializing humidity from q = RH × q_sat(T, p) on an isothermal atmosphere requires capping q_sat at the surface value, because q_sat diverges at low pressures when temperature is constant.
+- NeuralGCM/Dinosaur runs without any humidity clipping, relying on exponential filtering alone. SPEEDY and SpeedyWeather clip before physics but use no global mass fixer. Our no-clipping approach works at T21 for 50+ days.
 
 ## Phase 7 — Seasonal Cycle
 
