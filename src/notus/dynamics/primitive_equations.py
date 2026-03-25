@@ -30,7 +30,7 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.operators import (
-    hyperdiffusion,
+    hyperdiffusion_scaling,
     laplacian,
     meridional_derivative,
     spectral_curl,
@@ -97,6 +97,11 @@ def primitive_equation_tendencies(
     # Reference temperature for broadcasting
     t_ref_grid = jnp.asarray(reference_temperature)
 
+    # Pre-compute hyperdiffusion scaling array (constant for fixed order/timescale)
+    diff_scaling: jnp.ndarray | None = None
+    if diffusion_order > 0:
+        diff_scaling = hyperdiffusion_scaling(arrays, diffusion_order, diffusion_timescale)
+
     @jax.jit
     def tendency(state: PrimitiveEquationState) -> PrimitiveEquationState:
         return _tendency_impl(
@@ -111,8 +116,7 @@ def primitive_equation_tendencies(
             cos_lat,
             t_ref_grid,
             orography_tend,
-            diffusion_order,
-            diffusion_timescale,
+            diff_scaling,
         )
 
     return tendency
@@ -130,8 +134,7 @@ def _tendency_impl(
     cos_lat: jnp.ndarray,
     t_ref: jnp.ndarray,
     orography_tend: jnp.ndarray,
-    diffusion_order: int,
-    diffusion_timescale: float,
+    diff_scaling: jnp.ndarray | None,
 ) -> PrimitiveEquationState:
     """Core PE explicit tendency computation."""
     n_levels = state.n_levels
@@ -217,8 +220,7 @@ def _tendency_impl(
         orography_tend,
         n_levels,
         arrays,
-        diffusion_order,
-        diffusion_timescale,
+        diff_scaling,
         q_products_spec,
     )
 
@@ -343,8 +345,7 @@ def _assemble_spectral_tendencies(
     orography_tend: jnp.ndarray,
     n_levels: int,
     arrays: OperatorArrays,
-    diffusion_order: int,
-    diffusion_timescale: float,
+    diff_scaling: jnp.ndarray | None,
     q_products_spec: jnp.ndarray | None = None,
 ) -> PrimitiveEquationState:
     """Assemble spectral tendencies from transformed grid products."""
@@ -371,10 +372,10 @@ def _assemble_spectral_tendencies(
         div_tend = -spectral_divergence(cu, cv, arrays) - laplacian(ke, arrays) + orography_tend
         temp_tend = -spectral_divergence(tfa, tfb, arrays) + nodal_t
 
-        if diffusion_order > 0:
-            vort_tend += hyperdiffusion(vort_k, arrays, diffusion_order, diffusion_timescale)
-            div_tend += hyperdiffusion(div_k, arrays, diffusion_order, diffusion_timescale)
-            temp_tend += hyperdiffusion(temp_k, arrays, diffusion_order, diffusion_timescale)
+        if diff_scaling is not None:
+            vort_tend += diff_scaling * vort_k
+            div_tend += diff_scaling * div_k
+            temp_tend += diff_scaling * temp_k
 
         return jnp.stack([vort_tend, div_tend, temp_tend])
 
@@ -405,8 +406,8 @@ def _assemble_spectral_tendencies(
         def _assemble_q_level(args: jnp.ndarray) -> jnp.ndarray:
             qfa, qfb, nodal_q, q_k = args[0], args[1], args[2], args[3]
             q_tend = -spectral_divergence(qfa, qfb, arrays) + nodal_q
-            if diffusion_order > 0:
-                q_tend += hyperdiffusion(q_k, arrays, diffusion_order, diffusion_timescale)
+            if diff_scaling is not None:
+                q_tend += diff_scaling * q_k
             return q_tend
 
         q_level_args = jnp.stack(

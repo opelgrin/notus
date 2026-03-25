@@ -41,6 +41,18 @@ def _compute_laplacian_eigenvalues(truncation: int, radius: float) -> jnp.ndarra
     return jnp.array(vals)
 
 
+def _compute_inverse_laplacian_eigenvalues(truncation: int, radius: float) -> jnp.ndarray:
+    """Pre-compute 1/(-n(n+1)/a²) for all spectral indices.
+
+    The (0,0) mode has zero eigenvalue; its inverse is set to zero
+    since ∇⁻²(constant) is undefined up to a constant.
+    """
+    eigenvalues = _compute_laplacian_eigenvalues(truncation, radius)
+    safe = jnp.where(eigenvalues == 0, 1.0, eigenvalues)
+    result = 1.0 / safe
+    return result.at[0].set(0.0)
+
+
 def _compute_m_index_array(truncation: int) -> jnp.ndarray:
     """Array of zonal wavenumber m for each spectral index."""
     vals = [m for m in range(truncation + 1) for _n in range(m, truncation + 1)]
