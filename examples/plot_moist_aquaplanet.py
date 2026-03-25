@@ -72,7 +72,11 @@ def run_integration(
     levels = uniform_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
-        transform, EARTH, levels, initial_rh=0.7, seed=42,
+        transform,
+        EARTH,
+        levels,
+        initial_rh=0.7,
+        seed=42,
     )
 
     forcing = SimplePhysics(transform, EARTH, levels)
@@ -315,12 +319,22 @@ def plot_surface_pressure_snapshot(
 
     clevels = np.arange(970, 1035, 5)
     cf = ax.contourf(
-        lon_2d, lat_2d, ps_hpa, levels=clevels, cmap="RdBu_r",
-        extend="both", transform=ccrs.PlateCarree(),
+        lon_2d,
+        lat_2d,
+        ps_hpa,
+        levels=clevels,
+        cmap="RdBu_r",
+        extend="both",
+        transform=ccrs.PlateCarree(),
     )
     ax.contour(
-        lon_2d, lat_2d, ps_hpa, levels=clevels, colors="k",
-        linewidths=0.3, transform=ccrs.PlateCarree(),
+        lon_2d,
+        lat_2d,
+        ps_hpa,
+        levels=clevels,
+        colors="k",
+        linewidths=0.3,
+        transform=ccrs.PlateCarree(),
     )
     ax.coastlines(linewidth=0.5, color="gray")
     ax.set_global()
@@ -341,7 +355,10 @@ def main() -> None:
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=600.0, help="Timestep [s]")
     parser.add_argument(
-        "--output", type=str, default="moist_aquaplanet.png", help="Output filename",
+        "--output",
+        type=str,
+        default="moist_aquaplanet.png",
+        help="Output filename",
     )
     parser.add_argument("--dpi", type=int, default=200, help="Output DPI")
     args = parser.parse_args()
