@@ -289,11 +289,17 @@ def pe_implicit_terms(
     # L_lnps = -Δσ @ δ: (L,) @ (L, n_spec) → (n_spec,)
     l_lnps = -(dsigma @ state.divergence)
 
+    # Humidity is fully explicit — zero implicit tendency
+    humidity_tend: jnp.ndarray | None = None
+    if state.humidity is not None:
+        humidity_tend = jnp.zeros_like(state.humidity)
+
     return PrimitiveEquationState(
         vorticity=jnp.zeros_like(state.vorticity),
         divergence=l_div,
         temperature=l_temp,
         log_surface_pressure=l_lnps,
+        humidity=humidity_tend,
     )
 
 
@@ -378,4 +384,5 @@ def pe_implicit_inverse(
         divergence=delta_new,
         temperature=t_new,
         log_surface_pressure=lnps_new,
+        humidity=state.humidity,
     )

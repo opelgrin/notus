@@ -140,15 +140,61 @@ Gray radiation, dry convective adjustment, and bulk surface flux — following F
 - Surface sensible heat flux is essential for realistic temperatures. Without it, the atmosphere is ~40 K too cold because LW radiation alone cannot efficiently couple the warm surface to the boundary layer.
 - Frierson (2006) uses no atmospheric SW absorption — the shortwave heats the surface only, and heat enters the atmosphere through sensible flux and LW radiation.
 
-## Phase 6 — Moisture (next)
+## Phase 6 — Moisture (complete)
 
-Add water vapor as a tracer with large-scale condensation.
+Add water vapor as a prognostic tracer with moist physics parameterizations.
 
-**Plan:**
-- Specific humidity as a prognostic variable with spectral advection
-- Large-scale condensation when supersaturated (with latent heating feedback)
-- Simple convection scheme (Betts-Miller or simplified Arakawa-Schubert)
-- Precipitation diagnostic
+**What was built:**
+- Specific humidity as an optional field in `PrimitiveEquationState`, advected spectrally with the same flux-divergence + advective correction treatment as temperature
+- Zero implicit terms (fully explicit), pass-through in semi-implicit solver
+- Moisture thermodynamics: saturation vapor pressure (Bolton 1980), saturation specific humidity, moist pseudoadiabatic lapse rate
+- Large-scale condensation: implicit Frierson (2006) eq. 21 scheme, iterative, energy-conserving per level (cp·ΔT + L·Δq = 0)
+- Simplified Betts-Miller convection (Frierson 2007): parcel ascent with level of zero buoyancy (LZB), deep/shallow distinction via Pq/PT integrals, qref formulation for shallow convection, enthalpy-conserving ΔT offset applied only within the convective column
+- Bulk aerodynamic surface latent heat flux (evaporation)
+- `SimplePhysics` extended with automatic moist/dry pathway selection
+- `moist_aquaplanet_initial_state` with RH-based humidity profile
+- Grid-space humidity clipping after each time step to prevent accumulation of negative values from spectral Gibbs ringing (see lessons learned)
+- Backward-compatible: dry states (humidity=None) work identically to Phase 5
+
+**Validation:**
+- 1200-day moist aquaplanet integration stable at T21 L20, dt=600s
+- Equilibrium reached by ~day 300: q_mean ≈ 2.6 g/kg, T_mean ≈ 249 K
+- Negative humidity bounded at 0.2–0.4% with grid-space clipping
+- Temperature range 207–305 K, humidity 0–24 g/kg, surface pressure 969–1021 hPa
+- Climatology: T_equator=300 K, T_pole=269 K, jet max=87 m/s, EKE max=83 m²/s²
+- 49 new tests (303 total): thermodynamics, surface flux, condensation, BM convection, passive tracer transport, config validation, 10-day integration stability
+
+**Lessons learned:**
+- Betts-Miller convection must be vertically bounded by the level of zero buoyancy. Applying relaxation tendencies to the full column (including the stratosphere where the moist adiabat reference is meaningless) causes rapid temperature drift and blowup within days. This is universal across GCMs: both SpeedyWeather.jl (Frierson SBM) and SPEEDY (Tiedtke) limit tendencies to between the surface and the convection top.
+- The implicit condensation denominator factor is L²ε²/(cp·R_d·T²), not L²ε/(cp·R_v·T²) computed from a reconstructed R_v. Using R_v = R_d/ε and simplifying algebraically avoids an intermediate variable that is easy to get wrong.
+- Initializing humidity from q = RH × q_sat(T, p) on an isothermal atmosphere requires capping q_sat at the surface value, because q_sat diverges at low pressures when temperature is constant.
+- Spectral Gibbs ringing creates negative humidity at sharp moisture gradients. Without clipping, negatives grow to 18%+ of grid points at L20 after 1200 days, biasing q_mean low by ~0.05 g/kg. Grid-space clipping in the time stepper (transform → clip → re-transform after each step) corrects the spectral representation itself and keeps negatives bounded at 0.3%. Clipping before physics alone is insufficient — it doesn't modify the spectral state, so negatives persist and accumulate.
+- Quantitative moisture budget analysis (tracking the spectral (0,0) mode) showed the initial q_mean drift is dominated by the physics E-P imbalance (precipitation exceeds evaporation during spinup from RH=0.7 initial condition), not numerical sinks. Hyperdiffusion, spectral filter, and Robert-Asselin filter all contribute effectively zero to the global mean moisture tendency. The system equilibrates after ~300 days.
+
+## Phase 6b — Virtual Temperature in Pressure Gradient (complete)
+
+Virtual temperature correction to the pressure gradient force, following the Dinosaur/NeuralGCM perturbation approach. The semi-implicit solver stays dry; moisture effects enter as an explicit correction.
+
+**What was built:**
+- Virtual temperature perturbation in the explicit pressure gradient: `T_v' = T' + ε'·q·T` where `ε' = R_v/R_d - 1 ≈ 0.608` and `T = T_ref + T'` is the full temperature. This replaces the previous `R·T'·∇(ln ps)` with `R·T_v'·∇(ln ps)` in `_grid_point_tendencies`.
+- The expression `T' + ε'·q·T` captures both the T' part (`T'·(1 + ε'q)`) and the T_ref part (`ε'·q·T_ref`) in a single line — simpler than the 3-term decomposition originally planned.
+- Dry dynamics unchanged: when humidity is None, `T_v' = T'`.
+
+**What was NOT implemented (and why):**
+- Geopotential correction `-∇²(G·ε'·q·T)`: adding an explicit `∇²Φ` perturbation to the divergence creates unbalanced gravity waves — the semi-implicit solver couples G (geopotential) and H (temperature) implicitly, and an explicit geopotential perturbation without that coupling is unstable. This is ~5% of the total T_v effect.
+- Vorticity correction and moist κ: ~3% combined, deferred.
+
+**Validation:**
+- 600-day moist aquaplanet stable at T21 L20, dt=580s
+- Requires ~3% dt reduction vs dry (600→580s) due to faster gravity waves from T_v
+- Equilibrium: q_mean ≈ 2.6 g/kg, T_mean ≈ 249 K, neg < 0.3%
+- Climatology: T_equator=300.5 K, T_pole=268.7 K, jet max=77 m/s, EKE=82.7 m²/s²
+- Jet max reduced from 87→77 m/s vs no-T_v baseline (moist buoyancy strengthens Hadley cell, increasing poleward momentum transport that brakes the jet)
+
+**Lessons learned:**
+- The previous T_v attempt (commit 0737af9, reverted) only applied `T'·(1 + ε'q)`, missing the dominant `ε'·q·T_ref` term. The drift observed at the time was actually the E-P spinup imbalance (resolved by humidity clipping), not a T_v problem.
+- Explicit geopotential corrections are incompatible with the semi-implicit gravity wave solver. The pressure gradient correction alone captures ~95% of the T_v effect and is stable.
+- Virtual temperature increases effective gravity wave speed by O(ε'·q) ≈ 1%, tightening the CFL constraint. At T21 this requires reducing dt from 600s to ~580s.
 
 ## Phase 7 — Seasonal Cycle
 

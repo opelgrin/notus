@@ -19,6 +19,7 @@ import dataclasses
 import jax.numpy as jnp
 
 from notus.operators.caches import (
+    _compute_inverse_laplacian_eigenvalues,
     _compute_laplacian_eigenvalues,
     _compute_m_index_array,
     _compute_meridional_coupling,
@@ -43,6 +44,9 @@ class OperatorArrays:
         Planet radius [m].
     laplacian_eigenvalues : jnp.ndarray
         ``-n(n+1)/a²`` for every spectral index, shape ``(n_spectral,)``.
+    inverse_laplacian_eigenvalues : jnp.ndarray
+        ``1/(-n(n+1)/a²)`` for every spectral index, shape ``(n_spectral,)``.
+        The (0,0) mode is set to zero.
     m_index : jnp.ndarray
         Zonal wavenumber m for every spectral index, shape ``(n_spectral,)``.
     n_index : jnp.ndarray
@@ -58,6 +62,7 @@ class OperatorArrays:
     truncation: int
     radius: float
     laplacian_eigenvalues: jnp.ndarray
+    inverse_laplacian_eigenvalues: jnp.ndarray
     m_index: jnp.ndarray
     n_index: jnp.ndarray
     meridional_coupling: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]
@@ -82,6 +87,9 @@ class OperatorArrays:
             truncation=truncation,
             radius=radius,
             laplacian_eigenvalues=_compute_laplacian_eigenvalues(truncation, radius),
+            inverse_laplacian_eigenvalues=_compute_inverse_laplacian_eigenvalues(
+                truncation, radius
+            ),
             m_index=_compute_m_index_array(truncation),
             n_index=_compute_n_index_array(truncation),
             meridional_coupling=_compute_meridional_coupling(truncation),

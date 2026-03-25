@@ -30,7 +30,7 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.operators import (
-    hyperdiffusion,
+    hyperdiffusion_scaling,
     laplacian,
     meridional_derivative,
     spectral_curl,
@@ -88,6 +88,7 @@ def primitive_equation_tendencies(
     rotation_rate = planet.rotation_rate
     gas_constant = planet.gas_constant
     kappa = planet.kappa
+    epsilon_v = 1.0 / planet.epsilon_moisture - 1.0  # R_v/R_d - 1 ≈ 0.608
     sin_lat = transform.grid.sin_lat
     cos_lat = transform.grid.cos_lat
 
@@ -96,6 +97,11 @@ def primitive_equation_tendencies(
 
     # Reference temperature for broadcasting
     t_ref_grid = jnp.asarray(reference_temperature)
+
+    # Pre-compute hyperdiffusion scaling array (constant for fixed order/timescale)
+    diff_scaling: jnp.ndarray | None = None
+    if diffusion_order > 0:
+        diff_scaling = hyperdiffusion_scaling(arrays, diffusion_order, diffusion_timescale)
 
     @jax.jit
     def tendency(state: PrimitiveEquationState) -> PrimitiveEquationState:
@@ -107,12 +113,12 @@ def primitive_equation_tendencies(
             rotation_rate,
             gas_constant,
             kappa,
+            epsilon_v,
             sin_lat,
             cos_lat,
             t_ref_grid,
             orography_tend,
-            diffusion_order,
-            diffusion_timescale,
+            diff_scaling,
         )
 
     return tendency
@@ -126,12 +132,12 @@ def _tendency_impl(
     rotation_rate: float,
     gas_constant: float,
     kappa: float,
+    epsilon_v: float,
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
     t_ref: jnp.ndarray,
     orography_tend: jnp.ndarray,
-    diffusion_order: int,
-    diffusion_timescale: float,
+    diff_scaling: jnp.ndarray | None,
 ) -> PrimitiveEquationState:
     """Core PE explicit tendency computation."""
     n_levels = state.n_levels
@@ -154,17 +160,18 @@ def _tendency_impl(
     cosphi_dlnps_dphi_spec = meridional_derivative(state.log_surface_pressure, arrays) * inv_a
 
     # Step 3: Transform to grid (batched)
-    all_spec = jnp.concatenate(
-        [
-            state.vorticity,
-            state.divergence,
-            u_cos_spec,
-            v_cos_spec,
-            state.temperature,
-            jnp.stack([dlnps_dlam_spec, cosphi_dlnps_dphi_spec]),
-        ],
-        axis=0,
-    )
+    has_humidity = state.has_humidity
+    spec_fields: list[jnp.ndarray] = [
+        state.vorticity,
+        state.divergence,
+        u_cos_spec,
+        v_cos_spec,
+        state.temperature,
+        jnp.stack([dlnps_dlam_spec, cosphi_dlnps_dphi_spec]),
+    ]
+    if has_humidity and state.humidity is not None:
+        spec_fields.append(state.humidity)
+    all_spec = jnp.concatenate(spec_fields, axis=0)
     all_grid = jax.vmap(transform.spectral_to_grid)(all_spec)
 
     vort_grid = all_grid[:n_levels]
@@ -174,9 +181,10 @@ def _tendency_impl(
     t_grid = all_grid[4 * n_levels : 5 * n_levels]
     dlnps_dlam_grid = all_grid[5 * n_levels]
     cosphi_dlnps_dphi_grid = all_grid[5 * n_levels + 1]
+    q_grid = all_grid[5 * n_levels + 2 :] if has_humidity else None
 
     # Steps 4-6: Grid-point and vertical computations
-    products_grid, lnps_tend_grid = _grid_point_tendencies(
+    products_grid, lnps_tend_grid, q_products_grid = _grid_point_tendencies(
         vort_grid,
         div_grid,
         u_cos_grid,
@@ -189,21 +197,24 @@ def _tendency_impl(
         rotation_rate,
         gas_constant,
         kappa,
+        epsilon_v,
         sin_lat,
         cos_lat,
+        q_grid,
     )
 
     # Step 7: Transform all products to spectral (batched)
-    all_products = jnp.concatenate(
-        [
-            products_grid,
-            lnps_tend_grid[None, :, :],
-        ],
-        axis=0,
-    )
+    products_list: list[jnp.ndarray] = [products_grid, lnps_tend_grid[None, :, :]]
+    if has_humidity and q_products_grid is not None:
+        products_list.append(q_products_grid)
+    all_products = jnp.concatenate(products_list, axis=0)
     all_products_spec = jax.vmap(transform.grid_to_spectral)(all_products)
-    products_spec = all_products_spec[:-1]
-    lnps_tend_spec = all_products_spec[-1]
+
+    # Unpack: 6*n_levels dynamical products, 1 lnps tendency, then humidity
+    n_dyn = 6 * n_levels
+    products_spec = all_products_spec[:n_dyn]
+    lnps_tend_spec = all_products_spec[n_dyn]
+    q_products_spec = all_products_spec[n_dyn + 1 :] if has_humidity else None
 
     # Step 8: Assemble spectral tendencies per level
     return _assemble_spectral_tendencies(
@@ -213,8 +224,8 @@ def _tendency_impl(
         orography_tend,
         n_levels,
         arrays,
-        diffusion_order,
-        diffusion_timescale,
+        diff_scaling,
+        q_products_spec,
     )
 
 
@@ -231,14 +242,18 @@ def _grid_point_tendencies(
     rotation_rate: float,
     gas_constant: float,
     kappa: float,
+    epsilon_v: float,
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+    q_grid: jnp.ndarray | None = None,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
     """Compute grid-point products and vertical tendency terms.
 
-    Returns (products_grid, lnps_tend_grid) where products_grid has shape
-    (6*n_levels, n_lat, n_lon) containing combined_u, combined_v, KE,
-    T_flux_a, T_flux_b, nodal_temp_tend stacked along axis 0.
+    Returns (products_grid, lnps_tend_grid, q_products_grid) where
+    products_grid has shape (6*n_levels, n_lat, n_lon) containing
+    combined_u, combined_v, KE, T_flux_a, T_flux_b, nodal_temp_tend
+    stacked along axis 0.  q_products_grid has shape
+    (3*n_levels, n_lat, n_lon) if humidity is present, else None.
     """
     f_coriolis = 2.0 * rotation_rate * sin_lat[None, :, None]
     cos2_inv = 1.0 / (cos_lat[None, :, None] ** 2)
@@ -284,8 +299,13 @@ def _grid_point_tendencies(
     vert_mom_u = -vertical_advection(sd, u_cos_grid, levels)
     vert_mom_v = -vertical_advection(sd, v_cos_grid, levels)
 
-    rt_grad_u = gas_constant * t_prime_grid * dlnps_dlam_bc
-    rt_grad_v = gas_constant * t_prime_grid * cosphi_dlnps_dphi_bc
+    # Virtual temperature correction for pressure gradient (Phase 6b).
+    # Full T_v - T_ref = T' + ε'·q·T where T = T_ref + T'.
+    # When humidity is absent, tv_prime = T' (dry dynamics unchanged).
+    tv_prime = t_prime_grid + epsilon_v * q_grid * t_grid if q_grid is not None else t_prime_grid
+
+    rt_grad_u = gas_constant * tv_prime * dlnps_dlam_bc
+    rt_grad_v = gas_constant * tv_prime * cosphi_dlnps_dphi_bc
 
     # Combined momentum flux (Dinosaur convention for curl/div)
     combined_u = -flux_b + (vert_mom_u + rt_grad_u) * cos2_inv
@@ -312,7 +332,20 @@ def _grid_point_tendencies(
         axis=0,
     )
 
-    return products_grid, lnps_tend_grid
+    # Moisture transport: same advective-form treatment as temperature
+    q_products_grid = None
+    if q_grid is not None:
+        q_flux_a = q_grid * u_cos_grid * cos2_inv
+        q_flux_b = q_grid * v_cos_grid * cos2_inv
+        vert_adv_q = vertical_advection(sd, q_grid, levels)
+        advective_correction_q = q_grid * div_grid
+        nodal_q_tend = vert_adv_q + advective_correction_q
+        q_products_grid = jnp.concatenate(
+            [q_flux_a, q_flux_b, nodal_q_tend],
+            axis=0,
+        )
+
+    return products_grid, lnps_tend_grid, q_products_grid
 
 
 def _assemble_spectral_tendencies(
@@ -322,8 +355,8 @@ def _assemble_spectral_tendencies(
     orography_tend: jnp.ndarray,
     n_levels: int,
     arrays: OperatorArrays,
-    diffusion_order: int,
-    diffusion_timescale: float,
+    diff_scaling: jnp.ndarray | None,
+    q_products_spec: jnp.ndarray | None = None,
 ) -> PrimitiveEquationState:
     """Assemble spectral tendencies from transformed grid products."""
     combined_u_spec = products_spec[:n_levels]
@@ -349,10 +382,10 @@ def _assemble_spectral_tendencies(
         div_tend = -spectral_divergence(cu, cv, arrays) - laplacian(ke, arrays) + orography_tend
         temp_tend = -spectral_divergence(tfa, tfb, arrays) + nodal_t
 
-        if diffusion_order > 0:
-            vort_tend += hyperdiffusion(vort_k, arrays, diffusion_order, diffusion_timescale)
-            div_tend += hyperdiffusion(div_k, arrays, diffusion_order, diffusion_timescale)
-            temp_tend += hyperdiffusion(temp_k, arrays, diffusion_order, diffusion_timescale)
+        if diff_scaling is not None:
+            vort_tend += diff_scaling * vort_k
+            div_tend += diff_scaling * div_k
+            temp_tend += diff_scaling * temp_k
 
         return jnp.stack([vort_tend, div_tend, temp_tend])
 
@@ -373,9 +406,30 @@ def _assemble_spectral_tendencies(
 
     level_tendencies = jax.vmap(_assemble_level)(level_args)
 
+    # Humidity tendencies (if present)
+    humidity_tend = None
+    if q_products_spec is not None and state.humidity is not None:
+        q_flux_a_spec = q_products_spec[:n_levels]
+        q_flux_b_spec = q_products_spec[n_levels : 2 * n_levels]
+        nodal_q_tend_spec = q_products_spec[2 * n_levels : 3 * n_levels]
+
+        def _assemble_q_level(args: jnp.ndarray) -> jnp.ndarray:
+            qfa, qfb, nodal_q, q_k = args[0], args[1], args[2], args[3]
+            q_tend = -spectral_divergence(qfa, qfb, arrays) + nodal_q
+            if diff_scaling is not None:
+                q_tend += diff_scaling * q_k
+            return q_tend
+
+        q_level_args = jnp.stack(
+            [q_flux_a_spec, q_flux_b_spec, nodal_q_tend_spec, state.humidity],
+            axis=1,
+        )
+        humidity_tend = jax.vmap(_assemble_q_level)(q_level_args)
+
     return PrimitiveEquationState(
         vorticity=level_tendencies[:, 0, :],
         divergence=level_tendencies[:, 1, :],
         temperature=level_tendencies[:, 2, :],
         log_surface_pressure=lnps_tend_spec,
+        humidity=humidity_tend,
     )

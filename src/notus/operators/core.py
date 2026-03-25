@@ -52,10 +52,37 @@ def inverse_laplacian(
     arrays : OperatorArrays
         Pre-computed operator arrays.
     """
+    return coeffs * arrays.inverse_laplacian_eigenvalues
+
+
+def hyperdiffusion_scaling(
+    arrays: OperatorArrays,
+    order: int = 2,
+    damping_timescale: float = 0.5 * 86400.0,
+) -> jnp.ndarray:
+    """Pre-compute the hyperdiffusion scaling array.
+
+    Returns the multiplicative factor ``-ν · |λₙ|^p`` so that the
+    hyperdiffusion tendency is simply ``scaling * coeffs``.
+
+    Parameters
+    ----------
+    arrays : OperatorArrays
+        Pre-computed operator arrays.
+    order : int
+        Order p (p=1 → ∇², p=2 → ∇⁴, etc.).
+    damping_timescale : float
+        E-folding damping time for the smallest scale [s].
+
+    Returns
+    -------
+    jnp.ndarray
+        Scaling array, shape ``(n_spectral,)``.
+    """
     eigenvalues = arrays.laplacian_eigenvalues
-    safe_eigenvalues = jnp.where(eigenvalues == 0, 1.0, eigenvalues)
-    result = coeffs / safe_eigenvalues
-    return result.at[0].set(0.0)
+    t_eigenvalue = -arrays.truncation * (arrays.truncation + 1) / arrays.radius**2
+    nu = 1.0 / (damping_timescale * abs(t_eigenvalue) ** order)
+    return -nu * jnp.abs(eigenvalues) ** order
 
 
 def hyperdiffusion(
@@ -87,10 +114,7 @@ def hyperdiffusion(
     jnp.ndarray
         Tendency due to hyperdiffusion.
     """
-    eigenvalues = arrays.laplacian_eigenvalues
-    t_eigenvalue = -arrays.truncation * (arrays.truncation + 1) / arrays.radius**2
-    nu = 1.0 / (damping_timescale * abs(t_eigenvalue) ** order)
-    return -nu * jnp.abs(eigenvalues) ** order * coeffs
+    return hyperdiffusion_scaling(arrays, order, damping_timescale) * coeffs
 
 
 def zonal_derivative(

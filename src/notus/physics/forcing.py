@@ -201,9 +201,15 @@ class HeldSuarez:
         # No surface pressure tendency from Held-Suarez forcing
         zero_lnps = jnp.zeros_like(state.log_surface_pressure)
 
+        # No moisture tendency (dry benchmark)
+        humidity_tend: jnp.ndarray | None = None
+        if state.humidity is not None:
+            humidity_tend = jnp.zeros_like(state.humidity)
+
         return PrimitiveEquationState(
             vorticity=dvort_spec,
             divergence=ddiv_spec,
             temperature=dt_spec,
             log_surface_pressure=zero_lnps,
+            humidity=humidity_tend,
         )
