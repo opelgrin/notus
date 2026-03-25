@@ -85,6 +85,9 @@ uv run python examples/moist_aquaplanet.py
 
 # Longer run
 uv run python examples/moist_aquaplanet.py --days 500 --spinup 200
+
+# Generate diagnostic plots (U, T, q, EKE, spinup, surface pressure)
+uv run python examples/plot_moist_aquaplanet.py
 ```
 
 ## Roadmap
