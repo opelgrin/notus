@@ -88,6 +88,7 @@ def primitive_equation_tendencies(
     rotation_rate = planet.rotation_rate
     gas_constant = planet.gas_constant
     kappa = planet.kappa
+    epsilon_v = 1.0 / planet.epsilon_moisture - 1.0  # R_v/R_d - 1 ≈ 0.608
     sin_lat = transform.grid.sin_lat
     cos_lat = transform.grid.cos_lat
 
@@ -112,6 +113,7 @@ def primitive_equation_tendencies(
             rotation_rate,
             gas_constant,
             kappa,
+            epsilon_v,
             sin_lat,
             cos_lat,
             t_ref_grid,
@@ -130,6 +132,7 @@ def _tendency_impl(
     rotation_rate: float,
     gas_constant: float,
     kappa: float,
+    epsilon_v: float,
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
     t_ref: jnp.ndarray,
@@ -194,6 +197,7 @@ def _tendency_impl(
         rotation_rate,
         gas_constant,
         kappa,
+        epsilon_v,
         sin_lat,
         cos_lat,
         q_grid,
@@ -238,6 +242,7 @@ def _grid_point_tendencies(
     rotation_rate: float,
     gas_constant: float,
     kappa: float,
+    epsilon_v: float,
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
     q_grid: jnp.ndarray | None = None,
@@ -294,8 +299,13 @@ def _grid_point_tendencies(
     vert_mom_u = -vertical_advection(sd, u_cos_grid, levels)
     vert_mom_v = -vertical_advection(sd, v_cos_grid, levels)
 
-    rt_grad_u = gas_constant * t_prime_grid * dlnps_dlam_bc
-    rt_grad_v = gas_constant * t_prime_grid * cosphi_dlnps_dphi_bc
+    # Virtual temperature correction for pressure gradient (Phase 6b).
+    # Full T_v - T_ref = T' + ε'·q·T where T = T_ref + T'.
+    # When humidity is absent, tv_prime = T' (dry dynamics unchanged).
+    tv_prime = t_prime_grid + epsilon_v * q_grid * t_grid if q_grid is not None else t_prime_grid
+
+    rt_grad_u = gas_constant * tv_prime * dlnps_dlam_bc
+    rt_grad_v = gas_constant * tv_prime * cosphi_dlnps_dphi_bc
 
     # Combined momentum flux (Dinosaur convention for curl/div)
     combined_u = -flux_b + (vert_mom_u + rt_grad_u) * cos2_inv
