@@ -116,9 +116,7 @@ def _pe_flatten(
     return children, state.has_humidity
 
 
-def _pe_unflatten(
-    has_humidity: bool, children: tuple[jnp.ndarray, ...]
-) -> PrimitiveEquationState:
+def _pe_unflatten(has_humidity: bool, children: tuple[jnp.ndarray, ...]) -> PrimitiveEquationState:
     if has_humidity:
         return PrimitiveEquationState(
             vorticity=children[0],

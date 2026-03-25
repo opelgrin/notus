@@ -186,7 +186,9 @@ def surface_latent_heat_flux(
 
     # Saturation specific humidity at the surface
     q_sat_sfc = saturation_specific_humidity(
-        t_sfc_bc, surface_pressure, epsilon,
+        t_sfc_bc,
+        surface_pressure,
+        epsilon,
     )
 
     # Evaporation flux (positive = upward, moistening the atmosphere)
