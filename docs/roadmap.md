@@ -168,6 +168,39 @@ Add water vapor as a prognostic tracer with moist physics parameterizations.
 - Initializing humidity from q = RH × q_sat(T, p) on an isothermal atmosphere requires capping q_sat at the surface value, because q_sat diverges at low pressures when temperature is constant.
 - NeuralGCM/Dinosaur runs without any humidity clipping, relying on exponential filtering alone. SPEEDY and SpeedyWeather clip before physics but use no global mass fixer. Our no-clipping approach works at T21 for 50+ days.
 
+## Phase 6b — Virtual Temperature and Moist Dynamics (next)
+
+Full virtual temperature feedback following the Dinosaur/NeuralGCM decomposition. Also fix the moisture budget drift (q_mean declining due to missing dry convective adjustment in the moist pathway).
+
+**Investigate first: moisture budget drift**
+
+In 250-day integrations, q_mean declines steadily after an initial rise (3.83 → 2.60 g/kg), accompanied by cooling (267 → 255 K). Possible causes to investigate:
+- Moist pathway omits dry convective adjustment (SpeedyWeather.jl and Frierson 2006 apply it as baseline in both pathways) — adding it back did not fully resolve the drift in initial testing but needs more thorough analysis
+- Hyperdiffusion and spectral filtering acting as moisture sinks on a positive-definite field
+- Condensation removing moisture as precipitation without sufficient evaporative replenishment
+- Missing virtual temperature feedback underestimating moist buoyancy and weakening the circulation (and hence surface fluxes)
+
+**Virtual temperature plan (following Dinosaur's perturbation approach):**
+
+The semi-implicit solver stays dry (T_ref, dry R, dry κ). All moisture effects enter as explicit correction tendencies:
+
+1. **Pressure gradient**: multiply R·T' by `(1 + ε'q)` in `_grid_point_tendencies`, where ε' = R_v/R_d - 1 ≈ 0.608. This is the dominant effect.
+
+2. **Geopotential correction**: add `∇²(Φ(T_v) - Φ(T))` to the divergence tendency. Compute `ΔT = ε'·q·T` (the full temperature including T_ref), pass through the geopotential weight matrix G, then apply the spectral Laplacian. This captures the thicker layers in moist regions.
+
+3. **Reference pressure gradient correction**: add `∇²(R·ε'·q·T_ref·ln(ps))` to the divergence tendency. This is the T_ref component that was unstable when folded into the T' multiplication (because it's a large mean-field term). As a separate Laplacian term, it's stable because it enters the same way as the implicit geopotential.
+
+4. **Vorticity correction**: add the curl of `R·ε'·T_ref·(∇q × ∇ln(ps))` — moisture gradients crossed with pressure gradients create vorticity. Small but physically present.
+
+5. **Moist adiabatic heating**: replace κ·T·(ω/p) with κ_moist·T_v·(ω/p) where κ_moist = R_moist/cp_moist accounts for the different heat capacity of moist air. Decompose into T' and T_ref components for semi-implicit consistency.
+
+Items 1-3 are essential for quantitative moist climatology. Items 4-5 are second-order corrections.
+
+**Validation:**
+- Stable 300-day moist aquaplanet with multiple seeds
+- q_mean should stabilize (not drift) after spinup
+- Compare zonal-mean T, U, q against Frierson (2006) published climatology
+
 ## Phase 7 — Seasonal Cycle
 
 Time-varying solar forcing for realistic seasonal behavior.
