@@ -28,7 +28,7 @@ import jax.numpy as jnp
 
 from notus.constants import PlanetaryConstants
 from notus.operators import (
-    hyperdiffusion,
+    hyperdiffusion_scaling,
     laplacian,
     spectral_curl,
     spectral_divergence,
@@ -68,6 +68,11 @@ def shallow_water_tendencies(
     sin_lat = transform.grid.sin_lat
     cos_lat = transform.grid.cos_lat
 
+    # Pre-compute hyperdiffusion scaling array
+    diff_scaling: jnp.ndarray | None = None
+    if diffusion_order > 0:
+        diff_scaling = hyperdiffusion_scaling(arrays, diffusion_order, diffusion_timescale)
+
     @jax.jit
     def tendency(state: ShallowWaterState) -> ShallowWaterState:
         return _tendency_impl(
@@ -77,8 +82,7 @@ def shallow_water_tendencies(
             rotation_rate,
             sin_lat,
             cos_lat,
-            diffusion_order,
-            diffusion_timescale,
+            diff_scaling,
         )
 
     return tendency
@@ -114,6 +118,11 @@ def shallow_water_tendencies_eager(
     ShallowWaterState
         Tendencies dζ/dt, dδ/dt, dΦ/dt in spectral space.
     """
+    diff_scaling: jnp.ndarray | None = None
+    if diffusion_order > 0:
+        diff_scaling = hyperdiffusion_scaling(
+            transform.arrays, diffusion_order, diffusion_timescale
+        )
     return _tendency_impl(
         state,
         transform,
@@ -121,8 +130,7 @@ def shallow_water_tendencies_eager(
         planet.rotation_rate,
         transform.grid.sin_lat,
         transform.grid.cos_lat,
-        diffusion_order,
-        diffusion_timescale,
+        diff_scaling,
     )
 
 
@@ -133,8 +141,7 @@ def _tendency_impl(
     rotation_rate: float,
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
-    diffusion_order: int,
-    diffusion_timescale: float,
+    diff_scaling: jnp.ndarray | None,
 ) -> ShallowWaterState:
     """Core tendency computation shared by JIT and eager paths."""
     # --- Step 1: Reconstruct cosine-weighted winds (spectral) ---
@@ -169,9 +176,9 @@ def _tendency_impl(
     phi_tend = -spectral_divergence(phi_flux_a_spec, phi_flux_b_spec, arrays)
 
     # --- Step 6: Hyperdiffusion for numerical stability ---
-    if diffusion_order > 0:
-        vort_tend += hyperdiffusion(state.vorticity, arrays, diffusion_order, diffusion_timescale)
-        div_tend += hyperdiffusion(state.divergence, arrays, diffusion_order, diffusion_timescale)
+    if diff_scaling is not None:
+        vort_tend += diff_scaling * state.vorticity
+        div_tend += diff_scaling * state.divergence
 
     return ShallowWaterState(
         vorticity=vort_tend,

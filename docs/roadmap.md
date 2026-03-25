@@ -153,32 +153,27 @@ Add water vapor as a prognostic tracer with moist physics parameterizations.
 - Bulk aerodynamic surface latent heat flux (evaporation)
 - `SimplePhysics` extended with automatic moist/dry pathway selection
 - `moist_aquaplanet_initial_state` with RH-based humidity profile
-- No humidity clipping (Dinosaur/NeuralGCM approach) — exponential filtering alone controls Gibbs ringing
+- Grid-space humidity clipping after each time step to prevent accumulation of negative values from spectral Gibbs ringing (see lessons learned)
 - Backward-compatible: dry states (humidity=None) work identically to Phase 5
 
 **Validation:**
-- 50-day moist aquaplanet integration stable at T21 L20, dt=600s
-- Temperature range 226–305 K, humidity 0–24 g/kg, surface pressure 983–1018 hPa
-- Negative humidity points < 1% at day 50, small magnitude (~1 g/kg)
+- 1200-day moist aquaplanet integration stable at T21 L20, dt=600s
+- Equilibrium reached by ~day 300: q_mean ≈ 2.6 g/kg, T_mean ≈ 249 K
+- Negative humidity bounded at 0.2–0.4% with grid-space clipping
+- Temperature range 207–305 K, humidity 0–24 g/kg, surface pressure 969–1021 hPa
+- Climatology: T_equator=300 K, T_pole=269 K, jet max=87 m/s, EKE max=83 m²/s²
 - 49 new tests (303 total): thermodynamics, surface flux, condensation, BM convection, passive tracer transport, config validation, 10-day integration stability
 
 **Lessons learned:**
 - Betts-Miller convection must be vertically bounded by the level of zero buoyancy. Applying relaxation tendencies to the full column (including the stratosphere where the moist adiabat reference is meaningless) causes rapid temperature drift and blowup within days. This is universal across GCMs: both SpeedyWeather.jl (Frierson SBM) and SPEEDY (Tiedtke) limit tendencies to between the surface and the convection top.
 - The implicit condensation denominator factor is L²ε²/(cp·R_d·T²), not L²ε/(cp·R_v·T²) computed from a reconstructed R_v. Using R_v = R_d/ε and simplifying algebraically avoids an intermediate variable that is easy to get wrong.
 - Initializing humidity from q = RH × q_sat(T, p) on an isothermal atmosphere requires capping q_sat at the surface value, because q_sat diverges at low pressures when temperature is constant.
-- NeuralGCM/Dinosaur runs without any humidity clipping, relying on exponential filtering alone. SPEEDY and SpeedyWeather clip before physics but use no global mass fixer. Our no-clipping approach works at T21 for 50+ days.
+- Spectral Gibbs ringing creates negative humidity at sharp moisture gradients. Without clipping, negatives grow to 18%+ of grid points at L20 after 1200 days, biasing q_mean low by ~0.05 g/kg. Grid-space clipping in the time stepper (transform → clip → re-transform after each step) corrects the spectral representation itself and keeps negatives bounded at 0.3%. Clipping before physics alone is insufficient — it doesn't modify the spectral state, so negatives persist and accumulate.
+- Quantitative moisture budget analysis (tracking the spectral (0,0) mode) showed the initial q_mean drift is dominated by the physics E-P imbalance (precipitation exceeds evaporation during spinup from RH=0.7 initial condition), not numerical sinks. Hyperdiffusion, spectral filter, and Robert-Asselin filter all contribute effectively zero to the global mean moisture tendency. The system equilibrates after ~300 days.
 
 ## Phase 6b — Virtual Temperature and Moist Dynamics (next)
 
-Full virtual temperature feedback following the Dinosaur/NeuralGCM decomposition. Also fix the moisture budget drift (q_mean declining due to missing dry convective adjustment in the moist pathway).
-
-**Investigate first: moisture budget drift**
-
-In 250-day integrations, q_mean declines steadily after an initial rise (3.83 → 2.60 g/kg), accompanied by cooling (267 → 255 K). Possible causes to investigate:
-- Moist pathway omits dry convective adjustment (SpeedyWeather.jl and Frierson 2006 apply it as baseline in both pathways) — adding it back did not fully resolve the drift in initial testing but needs more thorough analysis
-- Hyperdiffusion and spectral filtering acting as moisture sinks on a positive-definite field
-- Condensation removing moisture as precipitation without sufficient evaporative replenishment
-- Missing virtual temperature feedback underestimating moist buoyancy and weakening the circulation (and hence surface fluxes)
+Full virtual temperature feedback following the Dinosaur/NeuralGCM decomposition.
 
 **Virtual temperature plan (following Dinosaur's perturbation approach):**
 
@@ -198,7 +193,6 @@ Items 1-3 are essential for quantitative moist climatology. Items 4-5 are second
 
 **Validation:**
 - Stable 300-day moist aquaplanet with multiple seeds
-- q_mean should stabilize (not drift) after spinup
 - Compare zonal-mean T, U, q against Frierson (2006) published climatology
 
 ## Phase 7 — Seasonal Cycle

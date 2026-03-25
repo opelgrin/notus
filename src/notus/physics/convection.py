@@ -176,9 +176,7 @@ def large_scale_condensation(
     # Implicit denominator factor (Frierson 2006 eq. 21):
     # L²ε / (cp R_v T²) where R_v = R_d / ε, so
     # L²ε / (cp (R_d/ε) T²) = L²ε² / (cp R_d T²)
-    lv2_eps2_over_cp_rd = latent_heat**2 * epsilon**2 / (
-        specific_heat_cp * gas_constant
-    )
+    lv2_eps2_over_cp_rd = latent_heat**2 * epsilon**2 / (specific_heat_cp * gas_constant)
 
     def _iterate(
         carry: tuple[jnp.ndarray, jnp.ndarray],
@@ -200,9 +198,7 @@ def large_scale_condensation(
         t_new = t - latent_heat / specific_heat_cp * dq
         return (t_new, q_new), None
 
-    (t_out, q_out), _ = jax.lax.scan(
-        _iterate, (temperature, humidity), None, length=n_iterations
-    )
+    (t_out, q_out), _ = jax.lax.scan(_iterate, (temperature, humidity), None, length=n_iterations)
 
     # Per-level condensate: positive where moisture was removed
     condensate = humidity - q_out  # (n_levels, n_lat, n_lon)
@@ -273,12 +269,15 @@ def betts_miller_convection(
     t_sfc = temperature[n_levels - 1]  # (n_lat, n_lon)
     p_sfc = pressure[n_levels - 1]
 
-    def _column_adiabat(
-        t_s: jnp.ndarray, p_s: jnp.ndarray, p_col: jnp.ndarray
-    ) -> jnp.ndarray:
+    def _column_adiabat(t_s: jnp.ndarray, p_s: jnp.ndarray, p_col: jnp.ndarray) -> jnp.ndarray:
         return moist_adiabat(
-            t_s, p_col, p_s,
-            epsilon, latent_heat, specific_heat_cp, gas_constant,
+            t_s,
+            p_col,
+            p_s,
+            epsilon,
+            latent_heat,
+            specific_heat_cp,
+            gas_constant,
         )
 
     lat_lon_shape = t_sfc.shape
@@ -291,9 +290,7 @@ def betts_miller_convection(
     t_ref = t_ref_flat.T.reshape(n_levels, *lat_lon_shape)
 
     # Reference humidity
-    q_ref = rh_ref * saturation_specific_humidity(
-        t_ref, pressure, epsilon
-    )
+    q_ref = rh_ref * saturation_specific_humidity(t_ref, pressure, epsilon)
 
     # --- Step 2: Find level of zero buoyancy (LZB) per column ---
     # Virtual temperature: T_v = T * (1 + (1/ε - 1) * q)

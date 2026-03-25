@@ -254,8 +254,12 @@ class SimplePhysics:
         # --- Moist or dry pathway ---
         if state.humidity is not None:
             dt_grid, dq_grid = self._moist_physics(
-                t_grid, state.humidity, surface_pressure,
-                wind_speed, q_lw, q_sfc,
+                t_grid,
+                state.humidity,
+                surface_pressure,
+                wind_speed,
+                q_lw,
+                q_sfc,
             )
         else:
             dt_grid = self._dry_physics(t_grid, q_lw, q_sfc)
@@ -268,9 +272,7 @@ class SimplePhysics:
 
         humidity_tend: jnp.ndarray | None = None
         if dq_grid is not None:
-            humidity_tend = jax.vmap(self.transform.grid_to_spectral)(
-                dq_grid
-            )
+            humidity_tend = jax.vmap(self.transform.grid_to_spectral)(dq_grid)
 
         return PrimitiveEquationState(
             vorticity=dvort_spec,

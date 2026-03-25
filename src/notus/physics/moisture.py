@@ -116,14 +116,10 @@ def moist_adiabat(
             _: None,
         ) -> tuple[tuple[jnp.ndarray, jnp.ndarray], None]:
             t, log_p = carry
-            q_sat = saturation_specific_humidity(
-                t, jnp.exp(log_p), epsilon
-            )
+            q_sat = saturation_specific_humidity(t, jnp.exp(log_p), epsilon)
             numerator = gas_constant * t + latent_heat * q_sat
             lv2_term = latent_heat**2 * q_sat * epsilon
-            denominator = specific_heat_cp + lv2_term / (
-                gas_constant * t**2
-            )
+            denominator = specific_heat_cp + lv2_term / (gas_constant * t**2)
             dt_dlnp = numerator / denominator
             t_new = t + dt_dlnp * d_log_p
             log_p_new = log_p + d_log_p

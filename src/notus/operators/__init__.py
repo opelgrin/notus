@@ -4,6 +4,7 @@ from notus.operators.arrays import OperatorArrays
 from notus.operators.core import (
     exponential_filter,
     hyperdiffusion,
+    hyperdiffusion_scaling,
     inverse_laplacian,
     laplacian,
     meridional_derivative,
@@ -16,6 +17,7 @@ __all__ = [
     "OperatorArrays",
     "exponential_filter",
     "hyperdiffusion",
+    "hyperdiffusion_scaling",
     "inverse_laplacian",
     "laplacian",
     "meridional_derivative",

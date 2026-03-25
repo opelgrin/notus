@@ -102,16 +102,12 @@ class TestSaturationVaporPressure:
 class TestSaturationSpecificHumidity:
     def test_tropical_surface(self) -> None:
         """q_sat(300 K, 1000 hPa) ≈ 22 g/kg (standard atmosphere)."""
-        q = saturation_specific_humidity(
-            jnp.array(300.0), jnp.array(1.0e5), EARTH.epsilon_moisture
-        )
+        q = saturation_specific_humidity(jnp.array(300.0), jnp.array(1.0e5), EARTH.epsilon_moisture)
         np.testing.assert_allclose(float(q), 0.022, atol=0.003)
 
     def test_stratosphere_nearly_zero(self) -> None:
         """q_sat(200 K, 100 hPa) should be very small."""
-        q = saturation_specific_humidity(
-            jnp.array(200.0), jnp.array(1.0e4), EARTH.epsilon_moisture
-        )
+        q = saturation_specific_humidity(jnp.array(200.0), jnp.array(1.0e4), EARTH.epsilon_moisture)
         assert float(q) < 1e-4  # < 0.1 g/kg
 
     def test_increases_with_temperature(self) -> None:
@@ -149,7 +145,9 @@ class TestMoistAdiabat:
         """Temperature at surface pressure should equal t_surface."""
         p_levels = jnp.array([1.0e5])
         t = moist_adiabat(
-            300.0, p_levels, 1.0e5,
+            300.0,
+            p_levels,
+            1.0e5,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -161,7 +159,9 @@ class TestMoistAdiabat:
         """Moist adiabat must cool with decreasing pressure."""
         p_levels = jnp.linspace(2.0e4, 1.0e5, 20)
         t = moist_adiabat(
-            300.0, p_levels, 1.0e5,
+            300.0,
+            p_levels,
+            1.0e5,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -179,7 +179,9 @@ class TestMoistAdiabat:
         """
         p_levels = jnp.array([9.0e4, 1.0e5])
         t = moist_adiabat(
-            300.0, p_levels, 1.0e5,
+            300.0,
+            p_levels,
+            1.0e5,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -195,7 +197,9 @@ class TestMoistAdiabat:
         """At cold temperatures, moist ≈ dry adiabat (little moisture)."""
         p_levels = jnp.array([1.0e4, 2.0e4])
         t = moist_adiabat(
-            300.0, p_levels, 1.0e5,
+            300.0,
+            p_levels,
+            1.0e5,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -203,10 +207,7 @@ class TestMoistAdiabat:
         )
         # At these cold upper-tropospheric temperatures,
         # the lapse rate should approach the dry value (~10 K/km)
-        dz_approx = (
-            EARTH.gas_constant * float(t.mean()) / EARTH.gravity
-            * jnp.log(2.0e4 / 1.0e4)
-        )
+        dz_approx = EARTH.gas_constant * float(t.mean()) / EARTH.gravity * jnp.log(2.0e4 / 1.0e4)
         lapse = (float(t[1]) - float(t[0])) / float(dz_approx) * 1000.0
         assert lapse > 7.0  # closer to dry (~10 K/km)
 
@@ -286,9 +287,7 @@ def _make_moist_state(
     a specific humidity profile: 80% RH in the troposphere, decaying
     above σ = 0.3.
     """
-    state, ref_temps, surf_geo = held_suarez_initial_state(
-        transform, EARTH, levels
-    )
+    state, ref_temps, surf_geo = held_suarez_initial_state(transform, EARTH, levels)
     n_levels = levels.n_levels
     n_spec = transform.grid.n_spectral_coeffs
 
@@ -301,9 +300,7 @@ def _make_moist_state(
     # Mode (0,0) spectral coefficient = global mean * sqrt(4π)
     # For a constant field, the (0,0) coefficient is value * sqrt(4π)
     sqrt4pi = jnp.sqrt(4.0 * jnp.pi)
-    q_spec = q_spec.at[:, 0].set(
-        jnp.array(q_profile, dtype=jnp.complex128) * sqrt4pi
-    )
+    q_spec = q_spec.at[:, 0].set(jnp.array(q_profile, dtype=jnp.complex128) * sqrt4pi)
 
     moist_state = state.replace(humidity=q_spec)
     return moist_state, ref_temps, surf_geo
@@ -323,15 +320,15 @@ class TestPassiveTracerTransport:
         state = PrimitiveEquationState(
             vorticity=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
             divergence=jnp.zeros((n_levels, n_spec), dtype=jnp.complex128),
-            temperature=jnp.full(
-                (n_levels, n_spec), 0.0, dtype=jnp.complex128
-            ).at[:, 0].set(264.0 * jnp.sqrt(4.0 * jnp.pi)),
-            log_surface_pressure=jnp.zeros(
-                n_spec, dtype=jnp.complex128
-            ),
-            humidity=jnp.full(
-                (n_levels, n_spec), 0.0, dtype=jnp.complex128
-            ).at[:, 0].set(0.01 * jnp.sqrt(4.0 * jnp.pi)),
+            temperature=jnp
+            .full((n_levels, n_spec), 0.0, dtype=jnp.complex128)
+            .at[:, 0]
+            .set(264.0 * jnp.sqrt(4.0 * jnp.pi)),
+            log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
+            humidity=jnp
+            .full((n_levels, n_spec), 0.0, dtype=jnp.complex128)
+            .at[:, 0]
+            .set(0.01 * jnp.sqrt(4.0 * jnp.pi)),
         )
 
         from notus.dynamics.primitive_equations import (
@@ -342,7 +339,11 @@ class TestPassiveTracerTransport:
         surf_geo = jnp.zeros(n_spec, dtype=jnp.complex128)
 
         tend_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, ref_temps, surf_geo,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surf_geo,
             diffusion_order=0,
         )
         tendency = tend_fn(state)
@@ -358,15 +359,19 @@ class TestPassiveTracerTransport:
         levels: SigmaLevels,
     ) -> None:
         """10-step integration with moisture tracer should remain stable."""
-        state, ref_temps, surf_geo = _make_moist_state(
-            transform, levels
-        )
+        state, ref_temps, surf_geo = _make_moist_state(transform, levels)
         dt = 1200.0
         filt = exponential_filter(transform.arrays, dt)
         forcing = HeldSuarez(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
-            transform, EARTH, levels, ref_temps, surf_geo,
-            dt=dt, spectral_filter=filt, forcing=forcing,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surf_geo,
+            dt=dt,
+            spectral_filter=filt,
+            forcing=forcing,
         )
 
         prev, curr = init_fn(state)
@@ -387,9 +392,7 @@ class TestPassiveTracerTransport:
         levels: SigmaLevels,
     ) -> None:
         """With active dynamics, humidity should have nonzero tendency."""
-        state, ref_temps, surf_geo = _make_moist_state(
-            transform, levels
-        )
+        state, ref_temps, surf_geo = _make_moist_state(transform, levels)
 
         from notus.dynamics.primitive_equations import (
             primitive_equation_tendencies,
@@ -400,8 +403,14 @@ class TestPassiveTracerTransport:
         filt = exponential_filter(transform.arrays, dt)
         forcing = HeldSuarez(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
-            transform, EARTH, levels, ref_temps, surf_geo,
-            dt=dt, spectral_filter=filt, forcing=forcing,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surf_geo,
+            dt=dt,
+            spectral_filter=filt,
+            forcing=forcing,
         )
 
         prev, curr = init_fn(state)
@@ -410,7 +419,11 @@ class TestPassiveTracerTransport:
 
         # Now compute explicit tendency on the evolved state
         tend_fn = primitive_equation_tendencies(
-            transform, EARTH, levels, ref_temps, surf_geo,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surf_geo,
         )
         tendency = tend_fn(curr)
 
@@ -424,15 +437,19 @@ class TestPassiveTracerTransport:
         levels: SigmaLevels,
     ) -> None:
         """Dry state (no humidity) still works through the stepper."""
-        state, ref_temps, surf_geo = held_suarez_initial_state(
-            transform, EARTH, levels
-        )
+        state, ref_temps, surf_geo = held_suarez_initial_state(transform, EARTH, levels)
         dt = 1200.0
         filt = exponential_filter(transform.arrays, dt)
         forcing = HeldSuarez(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
-            transform, EARTH, levels, ref_temps, surf_geo,
-            dt=dt, spectral_filter=filt, forcing=forcing,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surf_geo,
+            dt=dt,
+            spectral_filter=filt,
+            forcing=forcing,
         )
 
         prev, curr = init_fn(state)
@@ -459,9 +476,14 @@ class TestSurfaceLatentHeatFlux:
         ps = jnp.full((n_lat, n_lon), 1.0e5)
 
         flux = surface_latent_heat_flux(
-            t_surface, q_air, wind_speed, ps,
-            EARTH.gravity, EARTH.gas_constant,
-            0.05, EARTH.epsilon_moisture,
+            t_surface,
+            q_air,
+            wind_speed,
+            ps,
+            EARTH.gravity,
+            EARTH.gas_constant,
+            0.05,
+            EARTH.epsilon_moisture,
             drag_coefficient=0.0015,
         )
         assert jnp.all(flux > 0)
@@ -473,15 +495,22 @@ class TestSurfaceLatentHeatFlux:
         ps = jnp.full((n_lat, n_lon), 1.0e5)
 
         q_sat = saturation_specific_humidity(
-            jnp.array(300.0), jnp.array(1.0e5), EARTH.epsilon_moisture,
+            jnp.array(300.0),
+            jnp.array(1.0e5),
+            EARTH.epsilon_moisture,
         )
         q_air = jnp.full((n_lat, n_lon), float(q_sat))
         wind_speed = jnp.full((n_lat, n_lon), 5.0)
 
         flux = surface_latent_heat_flux(
-            t_surface, q_air, wind_speed, ps,
-            EARTH.gravity, EARTH.gas_constant,
-            0.05, EARTH.epsilon_moisture,
+            t_surface,
+            q_air,
+            wind_speed,
+            ps,
+            EARTH.gravity,
+            EARTH.gas_constant,
+            0.05,
+            EARTH.epsilon_moisture,
             drag_coefficient=0.0015,
         )
         np.testing.assert_allclose(flux, 0.0, atol=1e-10)
@@ -494,15 +523,25 @@ class TestSurfaceLatentHeatFlux:
         ps = jnp.full((n_lat, n_lon), 1.0e5)
 
         flux_5 = surface_latent_heat_flux(
-            t_surface, q_air, jnp.full((n_lat, n_lon), 5.0), ps,
-            EARTH.gravity, EARTH.gas_constant,
-            0.05, EARTH.epsilon_moisture,
+            t_surface,
+            q_air,
+            jnp.full((n_lat, n_lon), 5.0),
+            ps,
+            EARTH.gravity,
+            EARTH.gas_constant,
+            0.05,
+            EARTH.epsilon_moisture,
             drag_coefficient=0.0015,
         )
         flux_10 = surface_latent_heat_flux(
-            t_surface, q_air, jnp.full((n_lat, n_lon), 10.0), ps,
-            EARTH.gravity, EARTH.gas_constant,
-            0.05, EARTH.epsilon_moisture,
+            t_surface,
+            q_air,
+            jnp.full((n_lat, n_lon), 10.0),
+            ps,
+            EARTH.gravity,
+            EARTH.gas_constant,
+            0.05,
+            EARTH.epsilon_moisture,
             drag_coefficient=0.0015,
         )
         np.testing.assert_allclose(flux_10 / flux_5, 2.0, rtol=0.01)
@@ -520,9 +559,14 @@ class TestSurfaceLatentHeatFlux:
         ps = jnp.full((n_lat, n_lon), 1.0e5)
 
         dq_dt = surface_latent_heat_flux(
-            t_surface, q_air, wind_speed, ps,
-            EARTH.gravity, EARTH.gas_constant,
-            0.05, EARTH.epsilon_moisture,
+            t_surface,
+            q_air,
+            wind_speed,
+            ps,
+            EARTH.gravity,
+            EARTH.gas_constant,
+            0.05,
+            EARTH.epsilon_moisture,
             drag_coefficient=0.0015,
         )
         # Convert tendency to W/m²: E_flux = dq/dt * dp/g * L
@@ -546,7 +590,9 @@ class TestLargeScaleCondensation:
         q = q_sat * 1.1  # 110% RH
 
         t_new, q_new, _condensate = large_scale_condensation(
-            t, q, p,
+            t,
+            q,
+            p,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -554,9 +600,7 @@ class TestLargeScaleCondensation:
         )
 
         # q should be at or below saturation
-        q_sat_new = saturation_specific_humidity(
-            t_new, p, EARTH.epsilon_moisture
-        )
+        q_sat_new = saturation_specific_humidity(t_new, p, EARTH.epsilon_moisture)
         excess = q_new - q_sat_new
         assert float(jnp.max(excess)) < 1e-6
 
@@ -569,7 +613,9 @@ class TestLargeScaleCondensation:
         q = q_sat * 0.8  # 80% RH
 
         t_new, q_new, condensate = large_scale_condensation(
-            t, q, p,
+            t,
+            q,
+            p,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -589,16 +635,17 @@ class TestLargeScaleCondensation:
         q = q_sat * 1.2  # 120% RH
 
         t_new, q_new, _condensate = large_scale_condensation(
-            t, q, p,
+            t,
+            q,
+            p,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
             EARTH.gas_constant,
         )
 
-        energy_change = (
-            EARTH.specific_heat_cp * (t_new - t)
-            + EARTH.latent_heat_vaporization * (q_new - q)
+        energy_change = EARTH.specific_heat_cp * (t_new - t) + EARTH.latent_heat_vaporization * (
+            q_new - q
         )
         np.testing.assert_allclose(energy_change, 0.0, atol=1e-6)
 
@@ -611,7 +658,9 @@ class TestLargeScaleCondensation:
         q = q_sat * 1.1
 
         t_new, _q_new, _condensate = large_scale_condensation(
-            t, q, p,
+            t,
+            q,
+            p,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -628,7 +677,9 @@ class TestLargeScaleCondensation:
         q = q_sat * 2.0  # very supersaturated
 
         t_new, q_new, _condensate = large_scale_condensation(
-            t, q, p,
+            t,
+            q,
+            p,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -646,7 +697,9 @@ class TestLargeScaleCondensation:
         q = q_sat * 1.15
 
         _t_new, q_new, condensate = large_scale_condensation(
-            t, q, p,
+            t,
+            q,
+            p,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -666,9 +719,7 @@ class TestBettsMillerConvection:
         n_levels, n_lat, n_lon = 10, 4, 8
         # Very stable: cold at bottom, warm aloft (inverted)
         sigma = jnp.linspace(0.05, 0.95, n_levels)
-        p = jnp.broadcast_to(
-            sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
-        ).copy()
+        p = jnp.broadcast_to(sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)).copy()
         # Temperature increasing upward (stable against convection)
         t = jnp.broadcast_to(
             (250.0 + 50.0 * (1.0 - sigma))[:, None, None],
@@ -679,7 +730,10 @@ class TestBettsMillerConvection:
         dsigma = jnp.full(n_levels, 1.0 / n_levels)
 
         dt, dq = betts_miller_convection(
-            t, q, p, dsigma,
+            t,
+            q,
+            p,
+            dsigma,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -694,9 +748,7 @@ class TestBettsMillerConvection:
         """Column with steep lapse rate should trigger BM convection."""
         n_levels, n_lat, n_lon = 20, 4, 8
         sigma = jnp.linspace(0.025, 0.975, n_levels)
-        p = jnp.broadcast_to(
-            sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
-        ).copy()
+        p = jnp.broadcast_to(sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)).copy()
         # Steep lapse rate: warm surface (300K), cold aloft (220K).
         # The moist adiabat from 300K cools to ~230K at the top,
         # so the environment (220K) is colder → parcel is buoyant.
@@ -709,7 +761,10 @@ class TestBettsMillerConvection:
         dsigma = jnp.full(n_levels, 1.0 / n_levels)
 
         dt, dq = betts_miller_convection(
-            t, q, p, dsigma,
+            t,
+            q,
+            p,
+            dsigma,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -723,9 +778,7 @@ class TestBettsMillerConvection:
         """Column-integrated moist enthalpy tendency should be near zero."""
         n_levels, n_lat, n_lon = 20, 4, 8
         sigma = jnp.linspace(0.025, 0.975, n_levels)
-        p = jnp.broadcast_to(
-            sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
-        ).copy()
+        p = jnp.broadcast_to(sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)).copy()
         t = jnp.broadcast_to(
             (300.0 - 80.0 * (1.0 - sigma))[:, None, None],
             (n_levels, n_lat, n_lon),
@@ -735,7 +788,10 @@ class TestBettsMillerConvection:
         dsigma = jnp.full(n_levels, 1.0 / n_levels)
 
         dt, dq = betts_miller_convection(
-            t, q, p, dsigma,
+            t,
+            q,
+            p,
+            dsigma,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -744,15 +800,13 @@ class TestBettsMillerConvection:
 
         # Column enthalpy tendency: ∫(cp*dT + L*dq) dσ ≈ 0
         enthalpy_tend = jnp.sum(
-            (EARTH.specific_heat_cp * dt
-             + EARTH.latent_heat_vaporization * dq)
+            (EARTH.specific_heat_cp * dt + EARTH.latent_heat_vaporization * dq)
             * dsigma[:, None, None],
             axis=0,
         )
         # Normalized by column enthalpy
         enthalpy_col = jnp.sum(
-            (EARTH.specific_heat_cp * t
-             + EARTH.latent_heat_vaporization * q)
+            (EARTH.specific_heat_cp * t + EARTH.latent_heat_vaporization * q)
             * dsigma[:, None, None],
             axis=0,
         )
@@ -763,9 +817,7 @@ class TestBettsMillerConvection:
         """Tendency magnitude should be proportional to 1/tau."""
         n_levels, n_lat, n_lon = 20, 2, 4
         sigma = jnp.linspace(0.025, 0.975, n_levels)
-        p = jnp.broadcast_to(
-            sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
-        ).copy()
+        p = jnp.broadcast_to(sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)).copy()
         t = jnp.broadcast_to(
             (300.0 - 80.0 * (1.0 - sigma))[:, None, None],
             (n_levels, n_lat, n_lon),
@@ -775,7 +827,10 @@ class TestBettsMillerConvection:
         dsigma = jnp.full(n_levels, 1.0 / n_levels)
 
         dt_fast, _ = betts_miller_convection(
-            t, q, p, dsigma,
+            t,
+            q,
+            p,
+            dsigma,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -783,7 +838,10 @@ class TestBettsMillerConvection:
             tau_bm=3600.0,
         )
         dt_slow, _ = betts_miller_convection(
-            t, q, p, dsigma,
+            t,
+            q,
+            p,
+            dsigma,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -792,18 +850,14 @@ class TestBettsMillerConvection:
         )
 
         # Fast should be ~2x stronger than slow
-        ratio = float(
-            jnp.max(jnp.abs(dt_fast)) / jnp.max(jnp.abs(dt_slow))
-        )
+        ratio = float(jnp.max(jnp.abs(dt_fast)) / jnp.max(jnp.abs(dt_slow)))
         np.testing.assert_allclose(ratio, 2.0, rtol=0.1)
 
     def test_no_tendencies_above_lzb(self) -> None:
         """Tendencies should be zero above the level of zero buoyancy."""
         n_levels, n_lat, n_lon = 20, 4, 8
         sigma = jnp.linspace(0.025, 0.975, n_levels)
-        p = jnp.broadcast_to(
-            sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)
-        ).copy()
+        p = jnp.broadcast_to(sigma[:, None, None] * 1.0e5, (n_levels, n_lat, n_lon)).copy()
         # Steep lapse rate — buoyant only in lower troposphere
         t = jnp.broadcast_to(
             (300.0 - 80.0 * (1.0 - sigma))[:, None, None],
@@ -814,7 +868,10 @@ class TestBettsMillerConvection:
         dsigma = jnp.full(n_levels, 1.0 / n_levels)
 
         dt, dq = betts_miller_convection(
-            t, q, p, dsigma,
+            t,
+            q,
+            p,
+            dsigma,
             EARTH.epsilon_moisture,
             EARTH.latent_heat_vaporization,
             EARTH.specific_heat_cp,
@@ -855,8 +912,10 @@ class TestSimplePhysicsConfigValidation:
 
     def test_valid_config_accepted(self) -> None:
         cfg = SimplePhysicsConfig(
-            tau_bm=3600.0, rh_ref=0.8,
-            n_condensation_iterations=5, rh_condensation=0.95,
+            tau_bm=3600.0,
+            rh_ref=0.8,
+            n_condensation_iterations=5,
+            rh_condensation=0.95,
         )
         np.testing.assert_allclose(cfg.tau_bm, 3600.0)
 
@@ -874,7 +933,9 @@ class TestMoistInitialConditions:
     ) -> None:
         """Moist initial condition should have humidity field."""
         state, _ref, _geo = moist_aquaplanet_initial_state(
-            transform, EARTH, levels,
+            transform,
+            EARTH,
+            levels,
         )
         assert state.has_humidity
         assert state.humidity is not None
@@ -887,7 +948,9 @@ class TestMoistInitialConditions:
     ) -> None:
         """Humidity should be positive in the troposphere."""
         state, _ref, _geo = moist_aquaplanet_initial_state(
-            transform, EARTH, levels,
+            transform,
+            EARTH,
+            levels,
         )
         assert state.humidity is not None
         q_grid = jax.vmap(transform.spectral_to_grid)(state.humidity)
@@ -906,7 +969,9 @@ class TestMoistInitialConditions:
     ) -> None:
         """Global mean humidity should be positive and bounded."""
         state, _ref, _geo = moist_aquaplanet_initial_state(
-            transform, EARTH, levels,
+            transform,
+            EARTH,
+            levels,
         )
         assert state.humidity is not None
         q_grid = jax.vmap(transform.spectral_to_grid)(state.humidity)
@@ -929,14 +994,22 @@ class TestMoistAquaplanetIntegration:
     ) -> None:
         """Moist aquaplanet should remain stable for 10 days at T21 L20."""
         state, ref_temps, surf_geo = moist_aquaplanet_initial_state(
-            transform, EARTH, levels,
+            transform,
+            EARTH,
+            levels,
         )
         dt = 600.0
         filt = exponential_filter(transform.arrays, dt)
         forcing = SimplePhysics(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
-            transform, EARTH, levels, ref_temps, surf_geo,
-            dt=dt, spectral_filter=filt, forcing=forcing,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surf_geo,
+            dt=dt,
+            spectral_filter=filt,
+            forcing=forcing,
         )
 
         prev, curr = init_fn(state)
@@ -962,14 +1035,22 @@ class TestMoistAquaplanetIntegration:
     ) -> None:
         """After 10 days, humidity should remain physically plausible."""
         state, ref_temps, surf_geo = moist_aquaplanet_initial_state(
-            transform, EARTH, levels,
+            transform,
+            EARTH,
+            levels,
         )
         dt = 600.0
         filt = exponential_filter(transform.arrays, dt)
         forcing = SimplePhysics(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
-            transform, EARTH, levels, ref_temps, surf_geo,
-            dt=dt, spectral_filter=filt, forcing=forcing,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surf_geo,
+            dt=dt,
+            spectral_filter=filt,
+            forcing=forcing,
         )
 
         prev, curr = init_fn(state)
@@ -998,14 +1079,22 @@ class TestMoistAquaplanetIntegration:
         from notus.initial_conditions import simple_physics_initial_state
 
         state, ref_temps, surf_geo = simple_physics_initial_state(
-            transform, EARTH, levels,
+            transform,
+            EARTH,
+            levels,
         )
         dt = 600.0
         filt = exponential_filter(transform.arrays, dt)
         forcing = SimplePhysics(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
-            transform, EARTH, levels, ref_temps, surf_geo,
-            dt=dt, spectral_filter=filt, forcing=forcing,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surf_geo,
+            dt=dt,
+            spectral_filter=filt,
+            forcing=forcing,
         )
 
         prev, curr = init_fn(state)

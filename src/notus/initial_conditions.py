@@ -472,7 +472,9 @@ def moist_aquaplanet_initial_state(
         Surface geopotential, shape ``(n_spectral,)``.
     """
     state, ref_temps, surf_geo = simple_physics_initial_state(
-        transform, planet, levels,
+        transform,
+        planet,
+        levels,
         initial_temperature=initial_temperature,
         perturbation_amplitude=perturbation_amplitude,
         seed=seed,
@@ -483,8 +485,7 @@ def moist_aquaplanet_initial_state(
     rh_profile = np.where(
         sigma_full > sigma_tropopause,
         initial_rh,
-        rh_stratosphere + (initial_rh - rh_stratosphere)
-        * (sigma_full / sigma_tropopause),
+        rh_stratosphere + (initial_rh - rh_stratosphere) * (sigma_full / sigma_tropopause),
     )
 
     # Compute q = RH * q_sat(T, p) at each level, capped at the
@@ -507,9 +508,7 @@ def moist_aquaplanet_initial_state(
     n_levels = levels.n_levels
     sqrt4pi = np.sqrt(4.0 * np.pi)
     q_spec = jnp.zeros((n_levels, n_spec), dtype=jnp.complex128)
-    q_spec = q_spec.at[:, 0].set(
-        jnp.array(q_profile * sqrt4pi, dtype=jnp.complex128)
-    )
+    q_spec = q_spec.at[:, 0].set(jnp.array(q_profile * sqrt4pi, dtype=jnp.complex128))
 
     moist_state = state.replace(humidity=q_spec)
     return moist_state, ref_temps, surf_geo

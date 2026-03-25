@@ -33,7 +33,9 @@ from notus.initial_conditions import (
 )
 from notus.operators import (
     OperatorArrays,
+    exponential_filter,
     hyperdiffusion,
+    hyperdiffusion_scaling,
     inverse_laplacian,
     laplacian,
     meridional_derivative,
@@ -72,9 +74,11 @@ __all__ = [
     "ZonalMeanState",
     "compute_conservation_diagnostics",
     "compute_zonal_mean_state",
+    "exponential_filter",
     "geopotential",
     "held_suarez_initial_state",
     "hyperdiffusion",
+    "hyperdiffusion_scaling",
     "inverse_laplacian",
     "jablonowski_williamson_perturbation",
     "jablonowski_williamson_steady_state",
