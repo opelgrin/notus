@@ -88,7 +88,6 @@ def primitive_equation_tendencies(
     rotation_rate = planet.rotation_rate
     gas_constant = planet.gas_constant
     kappa = planet.kappa
-    epsilon_v = 1.0 / planet.epsilon_moisture - 1.0  # ε' = R_v/R_d - 1 ≈ 0.608
     sin_lat = transform.grid.sin_lat
     cos_lat = transform.grid.cos_lat
 
@@ -108,7 +107,6 @@ def primitive_equation_tendencies(
             rotation_rate,
             gas_constant,
             kappa,
-            epsilon_v,
             sin_lat,
             cos_lat,
             t_ref_grid,
@@ -128,7 +126,6 @@ def _tendency_impl(
     rotation_rate: float,
     gas_constant: float,
     kappa: float,
-    epsilon_v: float,
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
     t_ref: jnp.ndarray,
@@ -194,7 +191,6 @@ def _tendency_impl(
         rotation_rate,
         gas_constant,
         kappa,
-        epsilon_v,
         sin_lat,
         cos_lat,
         q_grid,
@@ -240,7 +236,6 @@ def _grid_point_tendencies(
     rotation_rate: float,
     gas_constant: float,
     kappa: float,
-    epsilon_v: float,
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
     q_grid: jnp.ndarray | None = None,
@@ -297,18 +292,8 @@ def _grid_point_tendencies(
     vert_mom_u = -vertical_advection(sd, u_cos_grid, levels)
     vert_mom_v = -vertical_advection(sd, v_cos_grid, levels)
 
-    # Virtual temperature perturbation for pressure gradient:
-    # T_v' = T'(1 + ε'q) captures the moisture correction to the
-    # geopotential without including the mean-field ε'·q·T_ref term
-    # (which would require semi-implicit treatment to remain stable).
-    # When humidity is absent, tv_prime = t_prime (dry dynamics).
-    if q_grid is not None:
-        tv_prime_grid = t_prime_grid * (1.0 + epsilon_v * q_grid)
-    else:
-        tv_prime_grid = t_prime_grid
-
-    rt_grad_u = gas_constant * tv_prime_grid * dlnps_dlam_bc
-    rt_grad_v = gas_constant * tv_prime_grid * cosphi_dlnps_dphi_bc
+    rt_grad_u = gas_constant * t_prime_grid * dlnps_dlam_bc
+    rt_grad_v = gas_constant * t_prime_grid * cosphi_dlnps_dphi_bc
 
     # Combined momentum flux (Dinosaur convention for curl/div)
     combined_u = -flux_b + (vert_mom_u + rt_grad_u) * cos2_inv

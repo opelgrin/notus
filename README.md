@@ -100,7 +100,6 @@ See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
 - [x] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20, validated climatology (jets, temperature, eddies)
 - [x] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment, bulk surface flux, Frierson (2006) aquaplanet
 - [x] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, Betts-Miller convection, surface evaporation
-- [x] **Phase 6b — Virtual temperature**: T_v = T(1 + ε'q) in the pressure gradient for moist buoyancy
 - [ ] **Phase 7 — Seasonal cycle**: orbital parameters, shortwave/longwave radiation, diurnal and annual cycles
 - [ ] **Phase 8 — Surface coupling**: slab ocean, simple land surface, Monin-Obukhov boundary layer
 

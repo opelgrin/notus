@@ -168,23 +168,6 @@ Add water vapor as a prognostic tracer with moist physics parameterizations.
 - Initializing humidity from q = RH × q_sat(T, p) on an isothermal atmosphere requires capping q_sat at the surface value, because q_sat diverges at low pressures when temperature is constant.
 - NeuralGCM/Dinosaur runs without any humidity clipping, relying on exponential filtering alone. SPEEDY and SpeedyWeather clip before physics but use no global mass fixer. Our no-clipping approach works at T21 for 50+ days.
 
-## Phase 6b — Virtual Temperature (complete)
-
-Use virtual temperature T_v = T(1 + ε'q) in the pressure gradient to account for moist air buoyancy.
-
-**What was built:**
-- Virtual temperature perturbation T_v' = T'(1 + ε'q) applied to the explicit pressure gradient term R·T'·∇ln(ps) in the divergence equation
-- ε' = R_v/R_d - 1 ≈ 0.608 computed from `PlanetaryConstants.epsilon_moisture`
-- Dry dynamics unchanged (T_v' = T' when humidity is absent)
-- Semi-implicit reference temperature stays dry (T_ref) — no solver changes needed
-
-**Validation:**
-- 50-day moist aquaplanet stable at T21 L20 with multiple seeds
-- All 303 existing tests pass unchanged
-
-**Lessons learned:**
-- The full virtual temperature perturbation T_v' = T' + ε'·q·T includes a mean-field term ε'·q·T_ref that is large (~3.6K in the tropics) and spatially varying through q. Including it in the explicit pressure gradient without semi-implicit treatment creates a positive feedback that blows up within days for certain perturbation seeds. Using the multiplicative form T_v' = T'(1 + ε'q) avoids this by keeping the correction proportional to T' itself, which is small during spinup.
-
 ## Phase 7 — Seasonal Cycle
 
 Time-varying solar forcing for realistic seasonal behavior.
