@@ -119,6 +119,26 @@ class TestStandardSigmaLevels:
         levels = standard_sigma_levels(20)
         assert float(levels.dsigma[0]) < float(levels.dsigma[-1])
 
+    def test_refinement_near_tropopause(self) -> None:
+        """Layers around σ≈0.2 should be thinner than mid-troposphere."""
+        levels = standard_sigma_levels(20)
+        sigma_full = np.asarray(levels.sigma_full)
+        dsigma = np.asarray(levels.dsigma)
+
+        idx_trop = int(np.argmin(np.abs(sigma_full - 0.2)))
+        idx_mid = int(np.argmin(np.abs(sigma_full - 0.5)))
+        assert dsigma[idx_trop] < dsigma[idx_mid]
+
+    def test_refinement_near_surface(self) -> None:
+        """Near-surface layers should be thinner than mid-troposphere."""
+        levels = standard_sigma_levels(20)
+        sigma_full = np.asarray(levels.sigma_full)
+        dsigma = np.asarray(levels.dsigma)
+
+        idx_sfc = int(np.argmin(np.abs(sigma_full - 0.9)))
+        idx_mid = int(np.argmin(np.abs(sigma_full - 0.5)))
+        assert dsigma[idx_sfc] < dsigma[idx_mid]
+
     def test_various_level_counts(self) -> None:
         for n in [5, 10, 20, 40]:
             levels = standard_sigma_levels(n)
