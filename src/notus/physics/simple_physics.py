@@ -100,7 +100,7 @@ class SimplePhysicsConfig:
     rh_ref: float = 0.7
     n_condensation_iterations: int = 3
     rh_condensation: float = 1.0
-    implicit_surface: bool = False
+    implicit_surface: bool = True
 
     def __post_init__(self) -> None:
         """Validate parameter ranges."""

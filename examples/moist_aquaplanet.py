@@ -90,12 +90,7 @@ def run_moist_aquaplanet(
     )
     ref_humidity = rh_profile * q_sat_ref
 
-    from notus.physics.simple_physics import SimplePhysicsConfig
-
-    forcing = SimplePhysics(
-        transform, EARTH, levels,
-        config=SimplePhysicsConfig(implicit_surface=True),
-    )
+    forcing = SimplePhysics(transform, EARTH, levels)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,
