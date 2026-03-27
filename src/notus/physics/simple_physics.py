@@ -424,13 +424,8 @@ class SimplePhysics:
         dq_cond = (q_cond - q_grid) / cfg.tau_adjustment
 
         # --- Total temperature tendency ---
-        # When implicit_surface=True, BM is applied via apply_implicit.
-        if cfg.implicit_surface:
-            dt_grid = q_lw + dt_cond
-            dq_grid = dq_cond
-        else:
-            dt_grid = q_lw + dt_bm + dt_cond
-            dq_grid = dq_bm + dq_cond
+        dt_grid = q_lw + dt_bm + dt_cond
+        dq_grid = dq_bm + dq_cond
 
         dt_grid = dt_grid.at[lowest].add(q_sfc_sensible)
         dq_grid = dq_grid.at[lowest].add(q_evap)
@@ -444,18 +439,22 @@ class SimplePhysics:
     ) -> PrimitiveEquationState:
         """Apply implicit physics corrections after the IMEX step.
 
-        Treats stiff terms with backward Euler for unconditional stability:
+        Treats stiff boundary-layer terms with exact exponential decay
+        for unconditional stability and zero systematic bias:
 
-        - **Rayleigh friction**: ``ζ_new = ζ / (1 + dt·k_v)`` per level
-        - **Sensible heat flux**: relaxation toward SST at lowest level
-        - **Latent heat flux**: relaxation toward q_sat(SST) at lowest level
-        - **Betts-Miller convection**: relaxation toward moist adiabat
+        - **Rayleigh friction**: ``ζ_new = ζ · exp(-dt·k_v)``
+        - **Sensible heat flux**: decay toward SST at lowest level
+        - **Latent heat flux**: decay toward q_sat(SST) at lowest level
 
-        For a relaxation tendency ``(X_ref - X) / τ``, backward Euler gives::
+        For a relaxation ``dX/dt = (X_ref - X) / τ``, the exact solution is::
 
-            X_new = (X + (dt/τ)·X_ref) / (1 + dt/τ)
+            X_new = X_ref + (X - X_ref) · exp(-dt / τ)
 
-        which is unconditionally stable for any dt and τ.
+        This is unconditionally stable AND unbiased — unlike backward Euler
+        (which undershoots) or forward Euler (which overshoots).
+
+        Betts-Miller convection remains in the explicit pathway to avoid
+        operator-splitting errors that alter the equilibrium climate.
 
         Should be called AFTER the IMEX time step with
         ``dt_implicit = 2·dt`` for leapfrog or ``dt`` for the Euler init.
@@ -478,13 +477,10 @@ class SimplePhysics:
         transform = self.transform
         lowest = levels.n_levels - 1
 
-        # --- Rayleigh friction (spectral, diagonal, all levels) ---
-        damp = 1.0 / (1.0 + dt_implicit * self.k_v[:, None])
+        # --- Rayleigh friction (spectral, exact exponential decay) ---
+        damp = jnp.exp(-dt_implicit * self.k_v[:, None])
         new_vort = state.vorticity * damp
         new_div = state.divergence * damp
-
-        # --- Transform T (and q) to grid for surface + BM corrections ---
-        t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
 
         # --- Surface winds for drag computation ---
         u_cos_spec, v_cos_spec = uv_from_vordiv(
@@ -506,49 +502,29 @@ class SimplePhysics:
         dp = self.dsigma_lowest * ps_grid
         dp_safe = jnp.maximum(dp, 1.0)
         sigma_lowest = 1.0 - 0.5 * self.dsigma_lowest
-        t_safe = jnp.maximum(t_grid[lowest], 1.0)
+        t_lowest_grid = transform.spectral_to_grid(state.temperature[lowest])
+        t_safe = jnp.maximum(t_lowest_grid, 1.0)
         rho_sfc = ps_grid * sigma_lowest / (planet.gas_constant * t_safe)
         k_sfc = planet.gravity * rho_sfc * cfg.c_d * wind_speed / dp_safe
 
-        # --- Sensible heat flux (backward Euler at lowest level) ---
-        t_grid = t_grid.at[lowest].set(
-            (t_grid[lowest] + dt_implicit * k_sfc * self.sst[:, None])
-            / (1.0 + dt_implicit * k_sfc)
+        # --- Sensible heat flux (exact exponential decay at lowest level) ---
+        decay_sfc = jnp.exp(-dt_implicit * k_sfc)
+        t_corrected = self.sst[:, None] + (t_lowest_grid - self.sst[:, None]) * decay_sfc
+        new_temp = state.temperature.at[lowest].set(
+            transform.grid_to_spectral(t_corrected)
         )
 
-        # --- Humidity: surface latent heat + Betts-Miller ---
-        q_grid: jnp.ndarray | None = None
+        # --- Latent heat flux (exact exponential decay at lowest level) ---
+        new_humidity: jnp.ndarray | None = None
         if state.humidity is not None:
-            q_grid = jax.vmap(transform.spectral_to_grid)(state.humidity)
-
-            # Latent heat flux (backward Euler at lowest level)
+            q_lowest_grid = transform.spectral_to_grid(state.humidity[lowest])
             q_sat_sfc = saturation_specific_humidity(
                 self.sst[:, None], ps_grid, planet.epsilon_moisture,
             )
-            q_grid = q_grid.at[lowest].set(
-                (q_grid[lowest] + dt_implicit * k_sfc * q_sat_sfc)
-                / (1.0 + dt_implicit * k_sfc)
+            q_corrected = q_sat_sfc + (q_lowest_grid - q_sat_sfc) * decay_sfc
+            new_humidity = state.humidity.at[lowest].set(
+                transform.grid_to_spectral(q_corrected)
             )
-
-            # --- Betts-Miller convection (backward Euler relaxation) ---
-            pressure = levels.sigma_full[:, None, None] * ps_grid[None, :, :]
-            dt_bm, dq_bm = betts_miller_convection(
-                t_grid, q_grid, pressure, levels.dsigma,
-                planet.epsilon_moisture, planet.latent_heat_vaporization,
-                planet.specific_heat_cp, planet.gas_constant,
-                tau_bm=cfg.tau_bm, rh_ref=cfg.rh_ref,
-            )
-            # BM returns (T_ref - T) / τ.  Backward Euler scales this by
-            # 1 / (1 + dt/τ) for unconditional stability.
-            bm_scale = dt_implicit / (1.0 + dt_implicit / cfg.tau_bm)
-            t_grid += bm_scale * dt_bm
-            q_grid += bm_scale * dq_bm
-
-        # --- Transform back to spectral ---
-        new_temp = jax.vmap(transform.grid_to_spectral)(t_grid)
-        new_humidity: jnp.ndarray | None = None
-        if q_grid is not None:
-            new_humidity = jax.vmap(transform.grid_to_spectral)(q_grid)
 
         return PrimitiveEquationState(
             vorticity=new_vort,
