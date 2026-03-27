@@ -157,7 +157,7 @@ Add water vapor as a prognostic tracer with moist physics parameterizations.
 - Backward-compatible: dry states (humidity=None) work identically to Phase 5
 
 **Validation:**
-- 1200-day moist aquaplanet integration stable at T21 L20, dt=600s
+- 1200-day moist aquaplanet integration stable at T21 L20
 - Equilibrium reached by ~day 300: q_mean ≈ 2.6 g/kg, T_mean ≈ 249 K
 - Negative humidity bounded at 0.2–0.4% with grid-space clipping
 - Temperature range 207–305 K, humidity 0–24 g/kg, surface pressure 969–1021 hPa
@@ -171,30 +171,50 @@ Add water vapor as a prognostic tracer with moist physics parameterizations.
 - Spectral Gibbs ringing creates negative humidity at sharp moisture gradients. Without clipping, negatives grow to 18%+ of grid points at L20 after 1200 days, biasing q_mean low by ~0.05 g/kg. Grid-space clipping in the time stepper (transform → clip → re-transform after each step) corrects the spectral representation itself and keeps negatives bounded at 0.3%. Clipping before physics alone is insufficient — it doesn't modify the spectral state, so negatives persist and accumulate.
 - Quantitative moisture budget analysis (tracking the spectral (0,0) mode) showed the initial q_mean drift is dominated by the physics E-P imbalance (precipitation exceeds evaporation during spinup from RH=0.7 initial condition), not numerical sinks. Hyperdiffusion, spectral filter, and Robert-Asselin filter all contribute effectively zero to the global mean moisture tendency. The system equilibrates after ~300 days.
 
-## Phase 6b — Virtual Temperature in Pressure Gradient (complete)
+## Phase 6b — Virtual Temperature + Stability Consolidation (complete)
 
-Virtual temperature correction to the pressure gradient force, following the Dinosaur/NeuralGCM perturbation approach. The semi-implicit solver stays dry; moisture effects enter as an explicit correction.
+Virtual temperature in the semi-implicit solver, plus implicit treatment of stiff physics terms. This phase solidified the numerical foundations before adding further physics complexity.
 
 **What was built:**
-- Virtual temperature perturbation in the explicit pressure gradient: `T_v' = T' + ε'·q·T` where `ε' = R_v/R_d - 1 ≈ 0.608` and `T = T_ref + T'` is the full temperature. This replaces the previous `R·T'·∇(ln ps)` with `R·T_v'·∇(ln ps)` in `_grid_point_tendencies`.
-- The expression `T' + ε'·q·T` captures both the T' part (`T'·(1 + ε'q)`) and the T_ref part (`ε'·q·T_ref`) in a single line — simpler than the 3-term decomposition originally planned.
-- Dry dynamics unchanged: when humidity is None, `T_v' = T'`.
+
+*Virtual temperature in the semi-implicit solver:*
+- The implicit solver now linearizes around `T_v_ref = T_ref·(1 + ε_v·q_ref)` when a reference humidity profile is provided
+- Geopotential weights scaled to `G_v = G·diag(1 + ε_v·q_ref)` so the implicit geopotential uses virtual temperature
+- Coupling matrix `M_v = G_v·H + R·T_v_ref⊗Δσ` properly captures moisture contribution to pressure gradient
+- H matrix stays dry (relates divergence to prognostic temperature tendency — correct)
+- Explicit pressure gradient uses smaller residual `T_v - T_v_ref` instead of `T_v - T_ref`
+- Pure dynamics stable to dt=1200+ at T21 L20
+
+*Implicit surface fluxes:*
+- Surface sensible heat flux, latent heat flux, and Rayleigh friction treated with backward Euler: `X_new = (X + dt/τ · X_ref) / (1 + dt/τ)`
+- Unconditionally stable regardless of wind speed, drag coefficient, or dt
+- Applied after the IMEX step via `SimplePhysics.apply_implicit(state, dt_implicit)`
+- `build_pe_stepper` accepts `implicit_physics` callable for operator splitting
+
+*Implicit Betts-Miller convection:*
+- BM reference profile (moist adiabat, LZB, deep/shallow) computed explicitly at post-step state
+- Relaxation toward the reference applied with backward Euler scaling: `dt / (1 + dt/τ_bm)`
+- Unconditionally stable regardless of dt/tau_bm ratio
+- Eliminates the computational mode excitation that previously limited dt
+
+*All implicit physics enabled by default* via `SimplePhysicsConfig(implicit_surface=True)`. Explicit path retained for debugging and comparison.
 
 **What was NOT implemented (and why):**
-- Geopotential correction `-∇²(G·ε'·q·T)`: adding an explicit `∇²Φ` perturbation to the divergence creates unbalanced gravity waves — the semi-implicit solver couples G (geopotential) and H (temperature) implicitly, and an explicit geopotential perturbation without that coupling is unstable. This is ~5% of the total T_v effect.
-- Vorticity correction and moist κ: ~3% combined, deferred.
+- Vorticity correction and moist κ: ~3% combined effect, deferred.
+- RAW filter (Williams 2009): implemented and tested, but destabilizes moist runs because remaining explicit physics (radiation, condensation) still excites the computational mode. Removed — would need all physics implicit or a non-leapfrog integrator.
 
 **Validation:**
-- 600-day moist aquaplanet stable at T21 L20, dt=580s
-- Requires ~3% dt reduction vs dry (600→580s) due to faster gravity waves from T_v
-- Equilibrium: q_mean ≈ 2.6 g/kg, T_mean ≈ 249 K, neg < 0.3%
-- Climatology: T_equator=300.5 K, T_pole=268.7 K, jet max=77 m/s, EKE=82.7 m²/s²
-- Jet max reduced from 87→77 m/s vs no-T_v baseline (moist buoyancy strengthens Hadley cell, increasing poleward momentum transport that brakes the jet)
+- 303 existing tests pass (backward compatible)
+- Moist aquaplanet stable at dt=1200s (default) for 50+ days, tested to dt=2400s for 950+ days
+- Dry Held-Suarez and baroclinic wave tests unaffected
+- Climatology at dt=1200: T_equator=293 K, T_pole=268 K, jet max=33 m/s, EKE=81 m²/s²
 
 **Lessons learned:**
-- The previous T_v attempt (commit 0737af9, reverted) only applied `T'·(1 + ε'q)`, missing the dominant `ε'·q·T_ref` term. The drift observed at the time was actually the E-P spinup imbalance (resolved by humidity clipping), not a T_v problem.
-- Explicit geopotential corrections are incompatible with the semi-implicit gravity wave solver. The pressure gradient correction alone captures ~95% of the T_v effect and is stable.
-- Virtual temperature increases effective gravity wave speed by O(ε'·q) ≈ 1%, tightening the CFL constraint. At T21 this requires reducing dt from 600s to ~580s.
+- The original Phase 6b only put T_v in the explicit pressure gradient, leaving `ε_v·q·T·∇lnps` as a fully unresolved fast mode. Moving T_v into the semi-implicit solver (G_v, T_v_ref) was essential for dynamics stability.
+- The moist physics stability bottleneck was NOT surface fluxes (as initially assumed) but Betts-Miller convection exciting the leapfrog computational mode. BM's sharp on/off activation (CAPE threshold) creates large `x_{n-1} - 2·x_n + x_{n+1}` terms that grow without implicit treatment.
+- Implicit treatment of relaxation terms (`(X_ref - X)/τ`) is trivial: just scale the explicit tendency by `1/(1 + dt/τ)`. No iteration needed.
+- The Robert-Asselin-Williams (RAW) filter was harmful for moist runs: it feeds computational mode energy back into the future state, amplifying convective noise. Standard RA with implicit physics is more stable than RAW with explicit physics.
+- Implicit physics adds negligible cost per step (one extra grid↔spectral round-trip for BM), but dt doubles, so net wallclock improves ~2x.
 
 ## Phase 7 — Seasonal Cycle
 
