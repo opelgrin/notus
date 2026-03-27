@@ -51,7 +51,7 @@ def run_moist_aquaplanet(
     spinup_days: int = 100,
     truncation: int = 21,
     n_levels: int = 20,
-    dt: float = 900.0,
+    dt: float = 1200.0,
     output_path: str | None = None,
 ) -> bool:
     """Run a moist Frierson aquaplanet integration.
@@ -294,7 +294,7 @@ def main() -> None:
     parser.add_argument("--spinup", type=int, default=100, help="Spinup days before averaging")
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Number of vertical levels")
-    parser.add_argument("--dt", type=float, default=650.0, help="Timestep [s]")
+    parser.add_argument("--dt", type=float, default=1200.0, help="Timestep [s]")
     parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     args = parser.parse_args()
 
