@@ -185,6 +185,24 @@ def _clip_humidity(
     return state.replace(humidity=q_spec)
 
 
+def _compute_virtual_reference(
+    t_ref: np.ndarray,
+    reference_humidity: np.ndarray | None,
+    planet: PlanetaryConstants,
+) -> tuple[float, np.ndarray | None]:
+    """Compute virtual temperature reference from humidity profile.
+
+    Returns ``(epsilon_v, T_v_ref)`` where ``T_v_ref`` is None when
+    no reference humidity is provided (dry dynamics).
+    """
+    if reference_humidity is None:
+        return 0.0, None
+    epsilon_v = 1.0 / planet.epsilon_moisture - 1.0
+    q_ref = np.asarray(reference_humidity)
+    tv_ref = t_ref * (1.0 + epsilon_v * q_ref)
+    return epsilon_v, tv_ref
+
+
 def build_pe_stepper(
     transform: SpectralTransform,
     planet: PlanetaryConstants,
@@ -198,6 +216,7 @@ def build_pe_stepper(
     robert_coeff: float = 0.05,
     alpha: float = 0.5,
     forcing: Forcing | None = None,
+    reference_humidity: np.ndarray | None = None,
 ) -> tuple[
     Callable[[PrimitiveEquationState], tuple[PrimitiveEquationState, PrimitiveEquationState]],
     Callable[
@@ -236,6 +255,12 @@ def build_pe_stepper(
         Physics forcing callable (e.g. Held-Suarez).  When provided,
         its tendencies are added to the explicit dynamics tendencies
         at each time step.  None disables physics forcing.
+    reference_humidity : np.ndarray or None
+        Reference specific humidity profile, shape ``(n_levels,)``.
+        When provided, the semi-implicit solver and explicit pressure
+        gradient linearize around the virtual reference temperature
+        T_v_ref = T_ref · (1 + ε_v · q_ref), absorbing the leading-order
+        moisture contribution into the implicit solve.
 
     Returns
     -------
@@ -246,6 +271,9 @@ def build_pe_stepper(
     arrays = transform.arrays
     t_ref = np.asarray(reference_temperature)
 
+    # Virtual temperature reference for the semi-implicit solver
+    epsilon_v, tv_ref = _compute_virtual_reference(t_ref, reference_humidity, planet)
+
     # Build the explicit tendency function (JIT-compiled internally)
     explicit_fn = primitive_equation_tendencies(
         transform,
@@ -255,6 +283,7 @@ def build_pe_stepper(
         surface_geopotential,
         diffusion_order=diffusion_order,
         diffusion_timescale=diffusion_timescale,
+        reference_virtual_temperature=tv_ref,
     )
 
     # Compose dynamics + physics forcing if provided
@@ -275,6 +304,8 @@ def build_pe_stepper(
         planet.kappa,
         t_ref,
         alpha=alpha,
+        reference_humidity=reference_humidity,
+        epsilon_v=epsilon_v,
     )
 
     # Wrap implicit functions with partially applied config

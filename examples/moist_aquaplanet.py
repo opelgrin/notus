@@ -51,7 +51,7 @@ def run_moist_aquaplanet(
     spinup_days: int = 100,
     truncation: int = 21,
     n_levels: int = 20,
-    dt: float = 580.0,
+    dt: float = 650.0,
     output_path: str | None = None,
 ) -> bool:
     """Run a moist Frierson aquaplanet integration.
@@ -78,6 +78,18 @@ def run_moist_aquaplanet(
         seed=42,
     )
 
+    # Reference humidity profile for virtual temperature in semi-implicit solver.
+    # Matches the initial RH-based profile: ~70% RH tapered above σ=0.3.
+    from notus.physics.moisture import saturation_specific_humidity
+
+    sigma_full = np.asarray(levels.sigma_full)
+    p_ref = sigma_full * EARTH.reference_pressure
+    rh_profile = 0.7 * np.minimum(1.0, sigma_full / 0.3)
+    q_sat_ref = np.asarray(
+        saturation_specific_humidity(jnp.array(ref_temps), jnp.array(p_ref), EARTH.epsilon_moisture)
+    )
+    ref_humidity = rh_profile * q_sat_ref
+
     forcing = SimplePhysics(transform, EARTH, levels)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
@@ -89,6 +101,7 @@ def run_moist_aquaplanet(
         dt=dt,
         spectral_filter=filt,
         forcing=forcing,
+        reference_humidity=ref_humidity,
     )
 
     steps_per_day = int(86400 / dt)
@@ -280,7 +293,7 @@ def main() -> None:
     parser.add_argument("--spinup", type=int, default=100, help="Spinup days before averaging")
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Number of vertical levels")
-    parser.add_argument("--dt", type=float, default=580.0, help="Timestep [s]")
+    parser.add_argument("--dt", type=float, default=650.0, help="Timestep [s]")
     parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     args = parser.parse_args()
 

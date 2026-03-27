@@ -3,18 +3,27 @@
 For the 3D primitive equations, the implicit terms couple divergence (δ),
 temperature (T), and ln(pₛ) through the vertical structure:
 
-    L_δ  = -∇²(G·T + R·T_ref·ln pₛ)     (geopotential + pressure gradient)
-    L_T  = -H·δ                            (temperature response)
-    L_lnps = -Δσᵀ·δ                        (continuity)
+    L_δ  = -∇²(G_v·T' + R·T_v_ref·ln pₛ)  (geopotential + pressure gradient)
+    L_T  = -H·δ                              (temperature response)
+    L_lnps = -Δσᵀ·δ                          (continuity)
+
+where G_v and T_v_ref use virtual temperature when moisture is active:
+
+    T_v_ref = T_ref · (1 + ε_v · q_ref)
+    G_v     = G · diag(1 + ε_v · q_ref)
+
+This absorbs the leading-order moisture contribution to the pressure gradient
+into the implicit solver, preventing the ε_v·q·T term from acting as an
+unresolved fast mode that limits the timestep.
 
 Substituting into the leapfrog scheme gives an L×L system per spectral mode:
 
-    (I - s²·λₙ·M) · δ_new = δ* - s·λₙ·(G·T* + R·T_ref·lnps*)
+    (I - s²·λₙ·M_v) · δ_new = δ* - s·λₙ·(G_v·T'* + R·T_v_ref·lnps*)
 
-where M = G·H + R·T_ref⊗Δσ is the vertical coupling matrix, G is the
-geopotential weight matrix, H is the temperature implicit weights (encoding
-the D-dependent part of adiabatic heating κ·T_ref·(ω/p)), and
-λₙ = -n(n+1)/a² is the Laplacian eigenvalue.  After solving for δ_new,
+where M_v = G_v·H + R·T_v_ref⊗Δσ, H is the temperature implicit weights
+(encoding the D-dependent part of adiabatic heating κ·T_ref·(ω/p)), and
+λₙ = -n(n+1)/a².  H uses dry T_ref because it relates divergence to the
+tendency of the prognostic (dry) temperature.  After solving for δ_new,
 T and ln(pₛ) are recovered by back-substitution.
 """
 
@@ -110,8 +119,10 @@ def pe_coupling_matrix(
     gas_constant: float,
     kappa: float,
     reference_temperature: np.ndarray,
+    reference_humidity: np.ndarray | None = None,
+    epsilon_v: float = 0.0,
 ) -> np.ndarray:
-    """Build the vertical coupling matrix M = G·H + R·T_ref⊗Δσ.
+    """Build the vertical coupling matrix M = G_v·H + R·T_v_ref⊗Δσ.
 
     M appears in the Helmholtz problem for the semi-implicit divergence
     solve:
@@ -119,6 +130,11 @@ def pe_coupling_matrix(
         (I - s²·λₙ·M) · δ_new = rhs
 
     where λₙ = -n(n+1)/a² and s is the implicit step size.
+
+    When ``reference_humidity`` is provided, the geopotential weights and
+    reference temperature are scaled by the virtual temperature factor
+    ``(1 + ε_v · q_ref)`` to capture the moisture contribution to the
+    pressure gradient implicitly.
 
     Parameters
     ----------
@@ -130,6 +146,12 @@ def pe_coupling_matrix(
         Ratio R/cₚ.
     reference_temperature : np.ndarray
         Reference temperature profile, shape ``(n_levels,)``.
+    reference_humidity : np.ndarray or None
+        Reference specific humidity profile, shape ``(n_levels,)``.
+        When provided, virtual temperature scaling is applied.
+    epsilon_v : float
+        Virtual temperature coefficient ``R_v/R_d - 1 ≈ 0.608``.
+        Only used when ``reference_humidity`` is not None.
 
     Returns
     -------
@@ -140,6 +162,14 @@ def pe_coupling_matrix(
     temp_w = temperature_implicit_weights(levels, kappa, reference_temperature)
     dsigma = np.asarray(levels.dsigma)
     t_ref = np.asarray(reference_temperature)
+
+    if reference_humidity is not None:
+        q_ref = np.asarray(reference_humidity)
+        virtual_factor = 1.0 + epsilon_v * q_ref
+        geo_w_v = geo_w * virtual_factor[np.newaxis, :]
+        t_v_ref = t_ref * virtual_factor
+        return geo_w_v @ temp_w + gas_constant * np.outer(t_v_ref, dsigma)
+
     return geo_w @ temp_w + gas_constant * np.outer(t_ref, dsigma)
 
 
@@ -149,10 +179,15 @@ class PESemiImplicitConfig:
 
     All matrices are computed once at setup and reused every time step.
 
+    When moisture is active, ``geopotential_weights_virtual`` and
+    ``reference_virtual_temperature`` incorporate the virtual temperature
+    factor ``(1 + ε_v · q_ref)`` so the implicit solver captures the
+    moisture contribution to the pressure gradient.
+
     Attributes
     ----------
     coupling_matrix : jnp.ndarray
-        M = G·H + R·T_ref⊗Δσ, shape ``(n_levels, n_levels)``.
+        M = G_v·H + R·T_v_ref⊗Δσ, shape ``(n_levels, n_levels)``.
     coupling_eigvals : jnp.ndarray
         Eigenvalues of M, shape ``(n_levels,)``.
     coupling_p : jnp.ndarray
@@ -162,12 +197,21 @@ class PESemiImplicitConfig:
         Inverse eigenvector matrix P⁻¹, shape ``(n_levels, n_levels)``.
     geopotential_weights : jnp.ndarray
         G matrix from hydrostatic integration, shape ``(n_levels, n_levels)``.
+    geopotential_weights_virtual : jnp.ndarray
+        G_v = G · diag(1 + ε_v·q_ref), shape ``(n_levels, n_levels)``.
+        Used in the implicit divergence tendency and inverse solve.
+        Equals G when no reference humidity is provided.
     temp_implicit_weights : jnp.ndarray
         H matrix for temperature-divergence coupling, ``(n_levels, n_levels)``.
+        Always uses dry T_ref (relates D to dT/dt for prognostic temperature).
     dsigma : jnp.ndarray
         Layer thicknesses Δσ, shape ``(n_levels,)``.
     reference_temperature : jnp.ndarray
-        T_ref profile, shape ``(n_levels,)``.
+        Dry T_ref profile, shape ``(n_levels,)``.
+    reference_virtual_temperature : jnp.ndarray
+        T_v_ref = T_ref · (1 + ε_v·q_ref), shape ``(n_levels,)``.
+        Used in the pressure gradient term of the implicit solver.
+        Equals T_ref when no reference humidity is provided.
     gas_constant : float
         Specific gas constant R_d [J/(kg·K)].
     alpha : float
@@ -179,9 +223,11 @@ class PESemiImplicitConfig:
     coupling_p: jnp.ndarray
     coupling_p_inv: jnp.ndarray
     geopotential_weights: jnp.ndarray
+    geopotential_weights_virtual: jnp.ndarray
     temp_implicit_weights: jnp.ndarray
     dsigma: jnp.ndarray
     reference_temperature: jnp.ndarray
+    reference_virtual_temperature: jnp.ndarray
     gas_constant: float
     alpha: float = 0.5
 
@@ -192,6 +238,8 @@ def build_pe_semi_implicit_config(
     kappa: float,
     reference_temperature: np.ndarray,
     alpha: float = 0.5,
+    reference_humidity: np.ndarray | None = None,
+    epsilon_v: float = 0.0,
 ) -> PESemiImplicitConfig:
     """Build a :class:`PESemiImplicitConfig` from physical parameters.
 
@@ -207,6 +255,14 @@ def build_pe_semi_implicit_config(
         Reference temperature profile, shape ``(n_levels,)``.
     alpha : float
         Implicit weighting (0.5 = centred).
+    reference_humidity : np.ndarray or None
+        Reference specific humidity profile, shape ``(n_levels,)``.
+        When provided, the coupling matrix, geopotential weights, and
+        reference temperature used in the implicit solver are scaled by
+        the virtual temperature factor ``(1 + ε_v · q_ref)``.
+    epsilon_v : float
+        Virtual temperature coefficient ``R_v/R_d - 1 ≈ 0.608``.
+        Only used when ``reference_humidity`` is not None.
 
     Returns
     -------
@@ -215,7 +271,20 @@ def build_pe_semi_implicit_config(
     t_ref = np.asarray(reference_temperature)
     geo_w = geopotential_weights(levels, gas_constant)
     temp_w = temperature_implicit_weights(levels, kappa, t_ref)
-    coupling = pe_coupling_matrix(levels, gas_constant, kappa, t_ref)
+    coupling = pe_coupling_matrix(
+        levels, gas_constant, kappa, t_ref,
+        reference_humidity=reference_humidity, epsilon_v=epsilon_v,
+    )
+
+    # Virtual temperature scaling for the implicit solver
+    if reference_humidity is not None:
+        q_ref = np.asarray(reference_humidity)
+        virtual_factor = 1.0 + epsilon_v * q_ref
+        geo_w_v = geo_w * virtual_factor[np.newaxis, :]
+        t_v_ref = t_ref * virtual_factor
+    else:
+        geo_w_v = geo_w
+        t_v_ref = t_ref
 
     # Eigen-decompose M once so the implicit solve becomes O(L²) per mode
     # instead of O(L³) from jnp.linalg.solve.
@@ -232,9 +301,11 @@ def build_pe_semi_implicit_config(
         coupling_p=jnp.array(p_mat),
         coupling_p_inv=jnp.array(p_inv),
         geopotential_weights=jnp.array(geo_w),
+        geopotential_weights_virtual=jnp.array(geo_w_v),
         temp_implicit_weights=jnp.array(temp_w),
         dsigma=levels.dsigma,
         reference_temperature=jnp.array(t_ref),
+        reference_virtual_temperature=jnp.array(t_v_ref),
         gas_constant=gas_constant,
         alpha=alpha,
     )
@@ -269,18 +340,21 @@ def pe_implicit_terms(
     PrimitiveEquationState
         Implicit tendencies (same shapes as input state).
     """
-    geo_w = config.geopotential_weights
+    geo_w_v = config.geopotential_weights_virtual
     temp_w = config.temp_implicit_weights
     dsigma = config.dsigma
     t_ref = config.reference_temperature
+    tv_ref = config.reference_virtual_temperature
     r_gas = config.gas_constant
 
     eigenvalues = arrays.laplacian_eigenvalues  # (n_spec,)
 
-    # L_δ = -∇²(G @ T' + R·T_ref·lnps) where T' = T - T_ref
+    # L_δ = -∇²(G_v @ T' + R·T_v_ref·lnps) where T' = T - T_ref (dry)
     # T_ref is spatially constant → only mode (0,0) in spectral space
+    # G_v and T_v_ref include the virtual temperature factor when moisture
+    # is active; they equal G and T_ref in the dry case.
     t_prime = state.temperature.at[:, 0].add(-t_ref)
-    phi = geo_w @ t_prime + r_gas * t_ref[:, None] * state.log_surface_pressure[None, :]
+    phi = geo_w_v @ t_prime + r_gas * tv_ref[:, None] * state.log_surface_pressure[None, :]
     l_div = -eigenvalues[None, :] * phi
 
     # Temperature implicit tendency: -H @ divergence
@@ -342,10 +416,11 @@ def pe_implicit_inverse(
     PrimitiveEquationState
         Solved state (δ_new, T_new, lnps_new) in spectral space.
     """
-    geo_w = config.geopotential_weights  # (L, L)
+    geo_w_v = config.geopotential_weights_virtual  # (L, L)
     temp_w = config.temp_implicit_weights  # (L, L)
     dsigma = config.dsigma  # (L,)
-    t_ref = config.reference_temperature  # (L,)
+    t_ref = config.reference_temperature  # (L,) dry reference for T'
+    tv_ref = config.reference_virtual_temperature  # (L,) virtual ref for pressure gradient
     r_gas = config.gas_constant
     s = step_size
 
@@ -357,10 +432,12 @@ def pe_implicit_inverse(
     eigenvalues = arrays.laplacian_eigenvalues  # (n_spec,)
 
     # --- Step 1: geopotential intermediate ---
-    # Φ* = G @ T'* + R·T_ref·lnps*   where T'* = T* - T_ref
-    # T_ref is spatially constant → only mode (0,0) in spectral space
+    # Φ* = G_v @ T'* + R·T_v_ref·lnps*   where T'* = T* - T_ref (dry)
+    # G_v and T_v_ref include virtual temperature scaling when moisture
+    # is active; they equal G and T_ref in the dry case.
     t_prime_star = state.temperature.at[:, 0].add(-t_ref)
-    phi_star = geo_w @ t_prime_star + r_gas * t_ref[:, None] * state.log_surface_pressure[None, :]
+    lnps = state.log_surface_pressure
+    phi_star = geo_w_v @ t_prime_star + r_gas * tv_ref[:, None] * lnps[None, :]
 
     # --- Step 2: right-hand side for δ solve ---
     # rhs = δ* - s·eigenvalues·Φ*

@@ -58,6 +58,7 @@ def primitive_equation_tendencies(
     surface_geopotential: jnp.ndarray,
     diffusion_order: int = 4,
     diffusion_timescale: float = 2.0 * 3600.0,
+    reference_virtual_temperature: np.ndarray | None = None,
 ) -> Callable[[PrimitiveEquationState], PrimitiveEquationState]:
     """Build a JIT-compiled explicit tendency function for the primitive equations.
 
@@ -78,6 +79,12 @@ def primitive_equation_tendencies(
         Order of hyperdiffusion (4 = del-8). Set to 0 to disable.
     diffusion_timescale : float
         E-folding damping time for the smallest resolved scale [s].
+    reference_virtual_temperature : np.ndarray or None
+        Virtual reference temperature T_v_ref = T_ref·(1 + ε_v·q_ref),
+        shape ``(n_levels,)``.  When provided, the explicit pressure
+        gradient uses ``T_v - T_v_ref`` instead of ``T_v - T_ref``,
+        matching the implicit solver's virtual temperature linearization.
+        None uses T_ref (dry dynamics or backward-compatible behavior).
 
     Returns
     -------
@@ -97,6 +104,11 @@ def primitive_equation_tendencies(
 
     # Reference temperature for broadcasting
     t_ref_grid = jnp.asarray(reference_temperature)
+
+    # Virtual reference temperature for the explicit pressure gradient residual
+    tv_ref_grid: jnp.ndarray | None = None
+    if reference_virtual_temperature is not None:
+        tv_ref_grid = jnp.asarray(reference_virtual_temperature)
 
     # Pre-compute hyperdiffusion scaling array (constant for fixed order/timescale)
     diff_scaling: jnp.ndarray | None = None
@@ -119,6 +131,7 @@ def primitive_equation_tendencies(
             t_ref_grid,
             orography_tend,
             diff_scaling,
+            tv_ref_grid,
         )
 
     return tendency
@@ -138,6 +151,7 @@ def _tendency_impl(
     t_ref: jnp.ndarray,
     orography_tend: jnp.ndarray,
     diff_scaling: jnp.ndarray | None,
+    tv_ref: jnp.ndarray | None = None,
 ) -> PrimitiveEquationState:
     """Core PE explicit tendency computation."""
     n_levels = state.n_levels
@@ -201,6 +215,7 @@ def _tendency_impl(
         sin_lat,
         cos_lat,
         q_grid,
+        tv_ref,
     )
 
     # Step 7: Transform all products to spectral (batched)
@@ -246,6 +261,7 @@ def _grid_point_tendencies(
     sin_lat: jnp.ndarray,
     cos_lat: jnp.ndarray,
     q_grid: jnp.ndarray | None = None,
+    tv_ref: jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
     """Compute grid-point products and vertical tendency terms.
 
@@ -300,9 +316,16 @@ def _grid_point_tendencies(
     vert_mom_v = -vertical_advection(sd, v_cos_grid, levels)
 
     # Virtual temperature correction for pressure gradient (Phase 6b).
-    # Full T_v - T_ref = T' + ε'·q·T where T = T_ref + T'.
+    # When tv_ref (T_v_ref) is provided, the implicit solver linearizes
+    # around the virtual reference, so the explicit residual is the smaller
+    # T_v - T_v_ref instead of T_v - T_ref.
     # When humidity is absent, tv_prime = T' (dry dynamics unchanged).
-    tv_prime = t_prime_grid + epsilon_v * q_grid * t_grid if q_grid is not None else t_prime_grid
+    if q_grid is not None and tv_ref is not None:
+        tv_prime = t_grid * (1.0 + epsilon_v * q_grid) - tv_ref[:, None, None]
+    elif q_grid is not None:
+        tv_prime = t_prime_grid + epsilon_v * q_grid * t_grid
+    else:
+        tv_prime = t_prime_grid
 
     rt_grad_u = gas_constant * tv_prime * dlnps_dlam_bc
     rt_grad_v = gas_constant * tv_prime * cosphi_dlnps_dphi_bc
