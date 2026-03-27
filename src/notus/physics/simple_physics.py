@@ -179,6 +179,36 @@ class SimplePhysics:
         # Pre-compute lowest-level dsigma as a Python float (JIT-safe)
         self.dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
 
+    def compute_reference_humidity(
+        self,
+        reference_temperature: np.ndarray,
+    ) -> np.ndarray:
+        """Compute a reference humidity profile for the semi-implicit solver.
+
+        Returns an RH-based profile matching the initial condition convention:
+        ~70 % RH tapered to zero above σ = 0.3.  Used by ``build_pe_stepper``
+        to construct the virtual reference temperature ``T_v_ref``.
+
+        Parameters
+        ----------
+        reference_temperature : np.ndarray
+            Dry reference temperature profile, shape ``(n_levels,)``.
+
+        Returns
+        -------
+        np.ndarray
+            Reference specific humidity, shape ``(n_levels,)``.
+        """
+        sigma_full = np.asarray(self.levels.sigma_full)
+        p_ref = sigma_full * self.planet.reference_pressure
+        rh_profile = 0.7 * np.minimum(1.0, sigma_full / 0.3)
+        q_sat_ref = np.asarray(saturation_specific_humidity(
+            jnp.array(reference_temperature),
+            jnp.array(p_ref),
+            self.planet.epsilon_moisture,
+        ))
+        return rh_profile * q_sat_ref
+
     def __call__(
         self,
         state: PrimitiveEquationState,

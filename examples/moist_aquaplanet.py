@@ -78,18 +78,6 @@ def run_moist_aquaplanet(
         seed=42,
     )
 
-    # Reference humidity profile for virtual temperature in semi-implicit solver.
-    # Matches the initial RH-based profile: ~70% RH tapered above σ=0.3.
-    from notus.physics.moisture import saturation_specific_humidity
-
-    sigma_full = np.asarray(levels.sigma_full)
-    p_ref = sigma_full * EARTH.reference_pressure
-    rh_profile = 0.7 * np.minimum(1.0, sigma_full / 0.3)
-    q_sat_ref = np.asarray(
-        saturation_specific_humidity(jnp.array(ref_temps), jnp.array(p_ref), EARTH.epsilon_moisture)
-    )
-    ref_humidity = rh_profile * q_sat_ref
-
     forcing = SimplePhysics(transform, EARTH, levels)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
@@ -101,8 +89,6 @@ def run_moist_aquaplanet(
         dt=dt,
         spectral_filter=filt,
         forcing=forcing,
-        reference_humidity=ref_humidity,
-        implicit_physics=forcing.apply_implicit,
     )
 
     steps_per_day = int(86400 / dt)

@@ -205,6 +205,29 @@ def _compose_dynamics_physics(
     return combined
 
 
+def _detect_forcing_capabilities(
+    forcing: Forcing | None,
+    t_ref: np.ndarray,
+) -> tuple[
+    Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None,
+    np.ndarray | None,
+]:
+    """Auto-detect implicit physics and reference humidity from forcing.
+
+    If the forcing object exposes ``apply_implicit`` and/or
+    ``compute_reference_humidity``, they are extracted automatically.
+    """
+    implicit_physics: (
+        Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None
+    ) = getattr(forcing, "apply_implicit", None)
+
+    reference_humidity: np.ndarray | None = None
+    if forcing is not None and hasattr(forcing, "compute_reference_humidity"):
+        reference_humidity = forcing.compute_reference_humidity(t_ref)
+
+    return implicit_physics, reference_humidity
+
+
 def _compute_virtual_reference(
     t_ref: np.ndarray,
     reference_humidity: np.ndarray | None,
@@ -236,10 +259,6 @@ def build_pe_stepper(
     robert_coeff: float = 0.05,
     alpha: float = 0.5,
     forcing: Forcing | None = None,
-    reference_humidity: np.ndarray | None = None,
-    implicit_physics: (
-        Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None
-    ) = None,
 ) -> tuple[
     Callable[[PrimitiveEquationState], tuple[PrimitiveEquationState, PrimitiveEquationState]],
     Callable[
@@ -275,20 +294,19 @@ def build_pe_stepper(
     alpha : float
         Implicit weighting (0.5 = centred).
     forcing : Forcing or None
-        Physics forcing callable (e.g. Held-Suarez).  When provided,
-        its tendencies are added to the explicit dynamics tendencies
+        Physics forcing callable (e.g. Held-Suarez, SimplePhysics).
+        When provided, its tendencies are added to the explicit dynamics
         at each time step.  None disables physics forcing.
-    reference_humidity : np.ndarray or None
-        Reference specific humidity profile, shape ``(n_levels,)``.
-        When provided, the semi-implicit solver and explicit pressure
-        gradient linearize around the virtual reference temperature
-        T_v_ref = T_ref · (1 + ε_v · q_ref), absorbing the leading-order
-        moisture contribution into the implicit solve.
-    implicit_physics
-        Optional callable ``(state, dt_implicit) -> state`` applied after
-        each time step for implicit treatment of stiff physics terms
-        (e.g. surface fluxes, Rayleigh friction).  Called with
-        ``dt_implicit = dt`` for the Euler init and ``2·dt`` for leapfrog.
+
+        If the forcing object exposes optional capabilities, they are
+        wired automatically:
+
+        - ``apply_implicit(state, dt) -> state``: implicit treatment of
+          stiff physics (surface fluxes, friction, convection).  Called
+          with ``dt`` for Euler init and ``2·dt`` for leapfrog steps.
+        - ``compute_reference_humidity(T_ref) -> q_ref``: reference
+          humidity profile for virtual temperature linearization in the
+          semi-implicit solver.
 
     Returns
     -------
@@ -298,6 +316,9 @@ def build_pe_stepper(
     """
     arrays = transform.arrays
     t_ref = np.asarray(reference_temperature)
+
+    # Auto-detect capabilities from the forcing object
+    implicit_physics, reference_humidity = _detect_forcing_capabilities(forcing, t_ref)
 
     # Virtual temperature reference for the semi-implicit solver
     epsilon_v, tv_ref = _compute_virtual_reference(t_ref, reference_humidity, planet)
