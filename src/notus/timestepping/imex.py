@@ -98,12 +98,24 @@ def imex_leapfrog_step(
     dt: float,
     alpha: float = 0.5,
     robert_coeff: float = 0.05,
+    raw_alpha: float = 0.53,
 ) -> tuple[S, S]:
-    """One IMEX leapfrog step with Robert-Asselin filter.
+    """One IMEX leapfrog step with Robert-Asselin-Williams (RAW) filter.
 
     Evaluates explicit tendencies at the current time level and implicit
     terms at the previous time level, then solves the implicit system
-    and applies the Robert-Asselin filter.
+    and applies the RAW filter (Williams 2009, MWR).
+
+    The RAW filter improves on the standard Robert-Asselin filter by
+    compensating the amplitude damping of the physical mode.  The RA
+    increment ``d = r·(x_{n-1} - 2·x_n + x_{n+1})`` is split between
+    the current and future states::
+
+        x_n^f     = x_n     + (1 - raw_alpha) · d
+        x_{n+1}^f = x_{n+1} + raw_alpha · d
+
+    Setting ``raw_alpha = 0`` recovers the standard Robert-Asselin filter.
+    ``raw_alpha = 0.53`` is the Williams (2009) recommended value.
 
     Parameters
     ----------
@@ -123,13 +135,17 @@ def imex_leapfrog_step(
         Implicit weighting (0.5 = centred, standard).
     robert_coeff : float
         Robert-Asselin filter coefficient r (typically 0.05).
+    raw_alpha : float
+        Williams (2009) RAW filter parameter α (0.53 recommended).
+        0 = standard Robert-Asselin, 0.53 = RAW default.
 
     Returns
     -------
     tuple[S, S]
-        ``(filtered_current, future)`` ready for the next step.
+        ``(filtered_current, filtered_future)`` ready for the next step.
     """
     r = robert_coeff
+    a = raw_alpha
 
     # Explicit tendency at current time
     explicit_current = explicit_fn(current)
@@ -149,15 +165,24 @@ def imex_leapfrog_step(
     eta = 2.0 * dt * alpha
     future = inverse_fn(intermediate, eta)
 
-    # Robert-Asselin filter on current
+    # Robert-Asselin-Williams filter (Williams 2009)
+    # d = r·(x_{n-1} - 2·x_n + x_{n+1})
+    # x_n^f     = x_n     + (1 - α)·d
+    # x_{n+1}^f = x_{n+1} + α·d
     filtered_current = jax.tree.map(
-        lambda p, c, f: (1.0 - 2.0 * r) * c + r * (p + f),
+        lambda p, c, f: c + (1.0 - a) * r * (p - 2.0 * c + f),
+        previous,
+        current,
+        future,
+    )
+    filtered_future = jax.tree.map(
+        lambda p, c, f: f + a * r * (p - 2.0 * c + f),
         previous,
         current,
         future,
     )
 
-    return filtered_current, future
+    return filtered_current, filtered_future
 
 
 # =====================================================================
@@ -214,6 +239,7 @@ def build_pe_stepper(
     diffusion_order: int = 4,
     diffusion_timescale: float = 2.0 * 3600.0,
     robert_coeff: float = 0.05,
+    raw_alpha: float = 0.0,
     alpha: float = 0.5,
     forcing: Forcing | None = None,
     reference_humidity: np.ndarray | None = None,
@@ -249,6 +275,9 @@ def build_pe_stepper(
         E-folding damping time [s].
     robert_coeff : float
         Robert-Asselin filter coefficient (0.05 standard).
+    raw_alpha : float
+        Williams (2009) RAW filter parameter (0.53 recommended).
+        0 = standard Robert-Asselin, 0.53 = RAW default.
     alpha : float
         Implicit weighting (0.5 = centred).
     forcing : Forcing or None
@@ -358,6 +387,7 @@ def build_pe_stepper(
             dt,
             alpha=alpha,
             robert_coeff=robert_coeff,
+            raw_alpha=raw_alpha,
         )
         future = _apply_filter(future)
         future = _clip_humidity(future, transform)
