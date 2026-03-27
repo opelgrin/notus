@@ -38,7 +38,7 @@ from notus.operators.vector import uv_from_vordiv
 from notus.physics.simple_physics import SimplePhysics
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
-from notus.vertical.sigma import uniform_sigma_levels
+from notus.vertical.sigma import standard_sigma_levels
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ def run_moist_aquaplanet(
     spinup_days: int = 100,
     truncation: int = 21,
     n_levels: int = 20,
-    dt: float = 580.0,
+    dt: float = 900.0,
     output_path: str | None = None,
 ) -> bool:
     """Run a moist Frierson aquaplanet integration.
@@ -68,7 +68,7 @@ def run_moist_aquaplanet(
     # --- Setup ---
     grid = GaussianGrid(truncation=truncation)
     transform = SpectralTransform(grid, EARTH.radius)
-    levels = uniform_sigma_levels(n_levels)
+    levels = standard_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
         transform,
@@ -280,7 +280,7 @@ def main() -> None:
     parser.add_argument("--spinup", type=int, default=100, help="Spinup days before averaging")
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Number of vertical levels")
-    parser.add_argument("--dt", type=float, default=580.0, help="Timestep [s]")
+    parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     args = parser.parse_args()
 

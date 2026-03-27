@@ -185,6 +185,67 @@ def _clip_humidity(
     return state.replace(humidity=q_spec)
 
 
+def _compose_dynamics_physics(
+    dynamics_fn: Callable[[PrimitiveEquationState], PrimitiveEquationState],
+    forcing: Forcing | None,
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+) -> Callable[[PrimitiveEquationState], PrimitiveEquationState]:
+    """Compose dynamics and physics forcing into a single explicit tendency."""
+    if forcing is None:
+        return dynamics_fn
+
+    def combined(state: PrimitiveEquationState) -> PrimitiveEquationState:
+        dyn_tend = dynamics_fn(state)
+        lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
+        ps_grid = planet.reference_pressure * jnp.exp(lnps_grid)
+        phys_tend = forcing(state, ps_grid)
+        return jax.tree.map(jnp.add, dyn_tend, phys_tend)
+
+    return combined
+
+
+def _detect_forcing_capabilities(
+    forcing: Forcing | None,
+    t_ref: np.ndarray,
+) -> tuple[
+    Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None,
+    np.ndarray | None,
+]:
+    """Auto-detect implicit physics and reference humidity from forcing.
+
+    If the forcing object exposes ``apply_implicit`` and/or
+    ``compute_reference_humidity``, they are extracted automatically.
+    """
+    implicit_physics: (
+        Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None
+    ) = getattr(forcing, "apply_implicit", None)
+
+    reference_humidity: np.ndarray | None = None
+    if forcing is not None and hasattr(forcing, "compute_reference_humidity"):
+        reference_humidity = forcing.compute_reference_humidity(t_ref)
+
+    return implicit_physics, reference_humidity
+
+
+def _compute_virtual_reference(
+    t_ref: np.ndarray,
+    reference_humidity: np.ndarray | None,
+    planet: PlanetaryConstants,
+) -> tuple[float, np.ndarray | None]:
+    """Compute virtual temperature reference from humidity profile.
+
+    Returns ``(epsilon_v, T_v_ref)`` where ``T_v_ref`` is None when
+    no reference humidity is provided (dry dynamics).
+    """
+    if reference_humidity is None:
+        return 0.0, None
+    epsilon_v = 1.0 / planet.epsilon_moisture - 1.0
+    q_ref = np.asarray(reference_humidity)
+    tv_ref = t_ref * (1.0 + epsilon_v * q_ref)
+    return epsilon_v, tv_ref
+
+
 def build_pe_stepper(
     transform: SpectralTransform,
     planet: PlanetaryConstants,
@@ -233,9 +294,19 @@ def build_pe_stepper(
     alpha : float
         Implicit weighting (0.5 = centred).
     forcing : Forcing or None
-        Physics forcing callable (e.g. Held-Suarez).  When provided,
-        its tendencies are added to the explicit dynamics tendencies
+        Physics forcing callable (e.g. Held-Suarez, SimplePhysics).
+        When provided, its tendencies are added to the explicit dynamics
         at each time step.  None disables physics forcing.
+
+        If the forcing object exposes optional capabilities, they are
+        wired automatically:
+
+        - ``apply_implicit(state, dt) -> state``: implicit treatment of
+          stiff physics (surface fluxes, friction, convection).  Called
+          with ``dt`` for Euler init and ``2·dt`` for leapfrog steps.
+        - ``compute_reference_humidity(T_ref) -> q_ref``: reference
+          humidity profile for virtual temperature linearization in the
+          semi-implicit solver.
 
     Returns
     -------
@@ -246,6 +317,12 @@ def build_pe_stepper(
     arrays = transform.arrays
     t_ref = np.asarray(reference_temperature)
 
+    # Auto-detect capabilities from the forcing object
+    implicit_physics, reference_humidity = _detect_forcing_capabilities(forcing, t_ref)
+
+    # Virtual temperature reference for the semi-implicit solver
+    epsilon_v, tv_ref = _compute_virtual_reference(t_ref, reference_humidity, planet)
+
     # Build the explicit tendency function (JIT-compiled internally)
     explicit_fn = primitive_equation_tendencies(
         transform,
@@ -255,18 +332,13 @@ def build_pe_stepper(
         surface_geopotential,
         diffusion_order=diffusion_order,
         diffusion_timescale=diffusion_timescale,
+        reference_virtual_temperature=tv_ref,
     )
 
     # Compose dynamics + physics forcing if provided
-    if forcing is not None:
-        dynamics_fn = explicit_fn
-
-        def explicit_fn(state: PrimitiveEquationState) -> PrimitiveEquationState:
-            dyn_tend = dynamics_fn(state)
-            lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
-            ps_grid = planet.reference_pressure * jnp.exp(lnps_grid)
-            phys_tend = forcing(state, ps_grid)
-            return jax.tree.map(jnp.add, dyn_tend, phys_tend)
+    explicit_fn = _compose_dynamics_physics(
+        explicit_fn, forcing, transform, planet,
+    )
 
     # Build the semi-implicit config (precomputes G, H, M matrices)
     si_config = build_pe_semi_implicit_config(
@@ -275,6 +347,8 @@ def build_pe_stepper(
         planet.kappa,
         t_ref,
         alpha=alpha,
+        reference_humidity=reference_humidity,
+        epsilon_v=epsilon_v,
     )
 
     # Wrap implicit functions with partially applied config
@@ -302,14 +376,24 @@ def build_pe_stepper(
             updates["humidity"] = state.humidity * f[None, :]
         return state.replace(**updates)
 
+    # Post-step corrections: filter, humidity clipping, implicit physics
+    def _post_step(
+        state: PrimitiveEquationState,
+        dt_implicit: float,
+    ) -> PrimitiveEquationState:
+        state = _apply_filter(state)
+        state = _clip_humidity(state, transform)
+        if implicit_physics is not None:
+            state = implicit_physics(state, dt_implicit)
+        return state
+
     # Build init_fn
     @jax.jit
     def init_fn(
         state: PrimitiveEquationState,
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState]:
         previous, current = euler_init(state, explicit_fn, inverse_fn, dt)
-        current = _apply_filter(current)
-        current = _clip_humidity(current, transform)
+        current = _post_step(current, dt)
         return previous, current
 
     # Build step_fn
@@ -328,8 +412,7 @@ def build_pe_stepper(
             alpha=alpha,
             robert_coeff=robert_coeff,
         )
-        future = _apply_filter(future)
-        future = _clip_humidity(future, transform)
+        future = _post_step(future, 2.0 * dt)
         return filtered_current, future
 
     return init_fn, step_fn

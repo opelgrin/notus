@@ -38,7 +38,7 @@ from notus.physics.simple_physics import SimplePhysics
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
-from notus.vertical.sigma import SigmaLevels, uniform_sigma_levels
+from notus.vertical.sigma import SigmaLevels, standard_sigma_levels
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ def run_integration(
 
     grid = GaussianGrid(truncation=truncation)
     transform = SpectralTransform(grid, EARTH.radius)
-    levels = uniform_sigma_levels(n_levels)
+    levels = standard_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
         transform,
@@ -353,7 +353,7 @@ def main() -> None:
     parser.add_argument("--spinup", type=int, default=100, help="Spinup days")
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
-    parser.add_argument("--dt", type=float, default=600.0, help="Timestep [s]")
+    parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument(
         "--output",
         type=str,

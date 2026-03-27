@@ -112,18 +112,17 @@ def uniform_sigma_levels(n_levels: int) -> SigmaLevels:
 def standard_sigma_levels(n_levels: int = 20) -> SigmaLevels:
     """Create sigma levels with enhanced resolution near the surface and tropopause.
 
-    Uses a smooth stretching function that concentrates levels in the
-    planetary boundary layer (σ > 0.8) and near the tropopause (σ ≈ 0.2),
-    following the approach common in spectral GCMs for the Held-Suarez
-    benchmark.
+    Builds the layer thicknesses ``Δσ`` from a smooth weighting profile
+    and normalizes them to sum to 1.  The profile increases resolution
+    in three physically important regions:
 
-    The stretching is:
+    - upper atmosphere (small σ) for wave propagation and stability,
+    - tropopause neighborhood (σ ≈ 0.2),
+    - planetary boundary layer near the surface (σ > 0.8).
 
-        σ_k = (k/L)^α  for the upper atmosphere (uniform in log-pressure)
-
-    blended with linear spacing near the surface, where α controls the
-    concentration toward the surface.  For L=20 this produces a profile
-    similar to SPEEDY's 20-level configuration.
+    This yields a practical "standard" vertical coordinate for idealized
+    spectral GCM benchmarks (Held-Suarez, aquaplanet) while keeping the
+    implementation deterministic and monotone for any ``n_levels >= 1``.
 
     Parameters
     ----------
@@ -139,17 +138,22 @@ def standard_sigma_levels(n_levels: int = 20) -> SigmaLevels:
         msg = f"n_levels must be >= 1, got {n_levels}"
         raise ValueError(msg)
 
-    # Normalized index from 0 (top) to 1 (surface)
-    eta = np.linspace(0.0, 1.0, n_levels + 1)
+    # Base index in [0, 1] and layer centers.
+    eta_half = np.linspace(0.0, 1.0, n_levels + 1)
+    eta_mid = 0.5 * (eta_half[:-1] + eta_half[1:])
 
-    # Hybrid stretching: sinh-based to concentrate levels near both
-    # the surface and the tropopause.
-    # s(η) = sinh(b·η) / sinh(b)  with b controlling the stretching.
-    b = 2.5
-    sigma_half = np.sinh(b * eta) / np.sinh(b)
+    # Stretching profile from smooth local refinements.
+    # Larger weight -> smaller Δσ in that region.
+    weight = (
+        1.0
+        + 3.0 * np.exp(-((eta_mid - 0.03) / 0.08) ** 2)   # upper atmosphere
+        + 2.2 * np.exp(-((eta_mid - 0.20) / 0.10) ** 2)   # tropopause
+        + 3.5 * np.exp(-((eta_mid - 0.92) / 0.08) ** 2)   # surface layer
+    )
+    dsigma = 1.0 / weight
+    dsigma /= np.sum(dsigma)
 
-    # Ensure exact boundary values
-    sigma_half[0] = 0.0
-    sigma_half[-1] = 1.0
+    sigma_half = np.concatenate([[0.0], np.cumsum(dsigma)])
+    sigma_half[-1] = 1.0  # exact endpoint after floating-point cumsum
 
     return SigmaLevels(sigma_half)

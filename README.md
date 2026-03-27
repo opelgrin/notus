@@ -14,10 +14,11 @@ The model is planet-agnostic — it can simulate any rotating planet with an ide
 
 - **Spectral transform**: spherical harmonic decomposition (FFT in longitude, Legendre transform in latitude)
 - **Vertical coordinate**: sigma (p/ps) on a Lorenz grid
-- **Time stepping**: IMEX leapfrog with Robert-Asselin filter + semi-implicit 3D Helmholtz solver
+- **Time stepping**: IMEX leapfrog with Robert-Asselin filter + semi-implicit 3D Helmholtz solver (with virtual temperature linearization for moist dynamics)
+- **Implicit physics**: surface fluxes (sensible + latent heat), Rayleigh friction, and Betts-Miller convection treated with backward Euler for unconditional stability
 - **Filtering**: exponential spectral filter (Hou & Li 2007) + del-8 hyperdiffusion
 - **Physics**: Held-Suarez forcing, Frierson (2006/2007) simple physics (gray radiation, Betts-Miller convection, large-scale condensation, bulk surface fluxes), pluggable via `Forcing` protocol
-- **Moisture**: specific humidity as optional spectral tracer, surface evaporation, condensation with latent heating
+- **Moisture**: specific humidity as optional spectral tracer, surface evaporation, condensation with latent heating, virtual temperature feedback in both dynamics and semi-implicit solver
 - **Computation**: JAX (JIT compilation, GPU support, autodiff)
 
 ## Installation
@@ -100,7 +101,7 @@ See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
 - [x] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20, validated climatology (jets, temperature, eddies)
 - [x] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment, bulk surface flux, Frierson (2006) aquaplanet
 - [x] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, Betts-Miller convection, surface evaporation
-- [ ] **Phase 6b — Virtual temperature**: full T_v feedback following Dinosaur decomposition, moist budget fixes
+- [x] **Phase 6b — Virtual temperature + stability**: T_v in SI solver, implicit surface fluxes + BM convection (dt: 580s → 1200s)
 - [ ] **Phase 7 — Seasonal cycle**: orbital parameters, shortwave/longwave radiation, diurnal and annual cycles
 - [ ] **Phase 8 — Surface coupling**: slab ocean, simple land surface, Monin-Obukhov boundary layer
 
