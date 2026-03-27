@@ -38,7 +38,7 @@ from notus.operators.vector import uv_from_vordiv
 from notus.physics.simple_physics import SimplePhysics
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
-from notus.vertical.sigma import uniform_sigma_levels
+from notus.vertical.sigma import standard_sigma_levels
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ def run_moist_aquaplanet(
     # --- Setup ---
     grid = GaussianGrid(truncation=truncation)
     transform = SpectralTransform(grid, EARTH.radius)
-    levels = uniform_sigma_levels(n_levels)
+    levels = standard_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
         transform,
