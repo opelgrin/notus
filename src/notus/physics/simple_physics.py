@@ -26,6 +26,7 @@ from notus.physics.convection import (
     dry_convective_adjustment,
     large_scale_condensation,
 )
+from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import longwave_heating
 from notus.physics.surface import (
     PrescribedSST,
@@ -77,6 +78,10 @@ class SimplePhysicsConfig:
         Number of implicit condensation iterations.
     rh_condensation : float
         Relative humidity threshold for large-scale condensation.
+    implicit_surface : bool
+        When True, Rayleigh friction and surface fluxes (sensible +
+        latent heat) are excluded from the explicit tendencies and
+        should instead be applied implicitly via :meth:`apply_implicit`.
     """
 
     tau_equator: float = 6.0
@@ -95,6 +100,7 @@ class SimplePhysicsConfig:
     rh_ref: float = 0.7
     n_condensation_iterations: int = 3
     rh_condensation: float = 1.0
+    implicit_surface: bool = False
 
     def __post_init__(self) -> None:
         """Validate parameter ranges."""
@@ -196,11 +202,17 @@ class SimplePhysics:
         levels = self.levels
         planet = self.planet
         sin_lat = self.transform.grid.sin_lat
+        implicit = cfg.implicit_surface
 
         # --- Rayleigh friction (spectral space, diagonal) ---
-        k_v = self.k_v[:, None]  # (n_levels, 1)
-        dvort_spec = -k_v * state.vorticity
-        ddiv_spec = -k_v * state.divergence
+        # When implicit_surface=True, friction is applied via apply_implicit.
+        if implicit:
+            dvort_spec = jnp.zeros_like(state.vorticity)
+            ddiv_spec = jnp.zeros_like(state.divergence)
+        else:
+            k_v = self.k_v[:, None]  # (n_levels, 1)
+            dvort_spec = -k_v * state.vorticity
+            ddiv_spec = -k_v * state.divergence
 
         # --- Temperature tendencies (grid space) ---
         t_grid = jax.vmap(self.transform.spectral_to_grid)(
@@ -223,7 +235,7 @@ class SimplePhysics:
             alpha=cfg.alpha,
         )
 
-        # Surface winds (lowest level)
+        # Surface winds (lowest level) — needed for both explicit and moist fluxes
         lowest = levels.n_levels - 1
         u_cos_spec, v_cos_spec = uv_from_vordiv(
             state.vorticity[lowest],
@@ -239,17 +251,21 @@ class SimplePhysics:
         wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
 
         # Surface sensible heat flux
-        q_sfc = surface_sensible_heat_flux(
-            self.sst,
-            t_grid[lowest],
-            wind_speed,
-            surface_pressure,
-            planet.gravity,
-            planet.specific_heat_cp,
-            planet.gas_constant,
-            self.dsigma_lowest,
-            drag_coefficient=cfg.c_d,
-        )
+        # When implicit_surface=True, this is handled via apply_implicit.
+        if implicit:
+            q_sfc = jnp.zeros_like(t_grid[lowest])
+        else:
+            q_sfc = surface_sensible_heat_flux(
+                self.sst,
+                t_grid[lowest],
+                wind_speed,
+                surface_pressure,
+                planet.gravity,
+                planet.specific_heat_cp,
+                planet.gas_constant,
+                self.dsigma_lowest,
+                drag_coefficient=cfg.c_d,
+            )
 
         # --- Moist or dry pathway ---
         if state.humidity is not None:
@@ -330,17 +346,21 @@ class SimplePhysics:
         pressure = sigma * surface_pressure[None, :, :]
 
         # --- Surface evaporation ---
-        q_evap = surface_latent_heat_flux(
-            self.sst,
-            q_grid[lowest],
-            wind_speed,
-            surface_pressure,
-            planet.gravity,
-            planet.gas_constant,
-            self.dsigma_lowest,
-            planet.epsilon_moisture,
-            drag_coefficient=cfg.c_d,
-        )
+        # When implicit_surface=True, evaporation is handled via apply_implicit.
+        if cfg.implicit_surface:
+            q_evap = jnp.zeros_like(q_grid[lowest])
+        else:
+            q_evap = surface_latent_heat_flux(
+                self.sst,
+                q_grid[lowest],
+                wind_speed,
+                surface_pressure,
+                planet.gravity,
+                planet.gas_constant,
+                self.dsigma_lowest,
+                planet.epsilon_moisture,
+                drag_coefficient=cfg.c_d,
+            )
 
         # --- Betts-Miller convection ---
         dt_bm, dq_bm = betts_miller_convection(
@@ -382,3 +402,95 @@ class SimplePhysics:
         dq_grid = dq_grid.at[lowest].add(q_evap)
 
         return dt_grid, dq_grid
+
+    def apply_implicit(
+        self,
+        state: PrimitiveEquationState,
+        dt_implicit: float,
+    ) -> PrimitiveEquationState:
+        """Apply implicit surface fluxes and Rayleigh friction.
+
+        Treats the stiff boundary-layer terms with backward Euler:
+
+        - **Rayleigh friction**: ``ζ_new = ζ / (1 + dt·k_v)`` per level
+        - **Sensible heat flux**: backward Euler at lowest level toward SST
+        - **Latent heat flux**: backward Euler at lowest level toward q_sat(SST)
+
+        Should be called AFTER the IMEX time step with
+        ``dt_implicit = 2·dt`` for leapfrog or ``dt`` for the Euler init.
+
+        Parameters
+        ----------
+        state : PrimitiveEquationState
+            Post-IMEX state (spectral coefficients).
+        dt_implicit : float
+            Effective implicit timestep [s].
+
+        Returns
+        -------
+        PrimitiveEquationState
+            State with implicit surface corrections applied.
+        """
+        cfg = self.config
+        planet = self.planet
+        transform = self.transform
+        lowest = self.levels.n_levels - 1
+
+        # --- Rayleigh friction (spectral, diagonal, all levels) ---
+        damp = 1.0 / (1.0 + dt_implicit * self.k_v[:, None])
+        new_vort = state.vorticity * damp
+        new_div = state.divergence * damp
+
+        # --- Surface winds for drag computation ---
+        u_cos_spec, v_cos_spec = uv_from_vordiv(
+            state.vorticity[lowest],
+            state.divergence[lowest],
+            transform.arrays,
+        )
+        u_cos_grid = transform.spectral_to_grid(u_cos_spec)
+        v_cos_grid = transform.spectral_to_grid(v_cos_spec)
+        cos_lat = transform.grid.cos_lat[:, None]
+        cos_lat_safe = jnp.maximum(cos_lat, 1.0e-6)
+        u_grid = u_cos_grid / cos_lat_safe
+        v_grid = v_cos_grid / cos_lat_safe
+        wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
+
+        # --- Surface pressure and density ---
+        lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
+        ps_grid = planet.reference_pressure * jnp.exp(lnps_grid)
+        dp = self.dsigma_lowest * ps_grid
+        dp_safe = jnp.maximum(dp, 1.0)
+        sigma_lowest = 1.0 - 0.5 * self.dsigma_lowest
+
+        # --- Sensible heat flux (backward Euler at lowest level) ---
+        t_lowest_grid = transform.spectral_to_grid(state.temperature[lowest])
+        t_safe = jnp.maximum(t_lowest_grid, 1.0)
+        rho_sfc = ps_grid * sigma_lowest / (planet.gas_constant * t_safe)
+        k_sfc = planet.gravity * rho_sfc * cfg.c_d * wind_speed / dp_safe
+        t_corrected = (t_lowest_grid + dt_implicit * k_sfc * self.sst[:, None]) / (
+            1.0 + dt_implicit * k_sfc
+        )
+        new_t_lowest = transform.grid_to_spectral(t_corrected)
+        new_temp = state.temperature.at[lowest].set(new_t_lowest)
+
+        # --- Latent heat flux (backward Euler at lowest level) ---
+        new_humidity: jnp.ndarray | None = None
+        if state.humidity is not None:
+            q_lowest_grid = transform.spectral_to_grid(state.humidity[lowest])
+            q_sat_sfc = saturation_specific_humidity(
+                self.sst[:, None], ps_grid, planet.epsilon_moisture,
+            )
+            k_evap = planet.gravity * rho_sfc * cfg.c_d * wind_speed / dp_safe
+            q_corrected = (q_lowest_grid + dt_implicit * k_evap * q_sat_sfc) / (
+                1.0 + dt_implicit * k_evap
+            )
+            new_q_lowest = transform.grid_to_spectral(q_corrected)
+            new_humidity = state.humidity.at[lowest].set(new_q_lowest)
+
+        return PrimitiveEquationState(
+            vorticity=new_vort,
+            divergence=new_div,
+            temperature=new_temp,
+            log_surface_pressure=state.log_surface_pressure,
+            humidity=new_humidity if new_humidity is not None else state.humidity,
+        )

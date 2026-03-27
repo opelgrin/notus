@@ -51,7 +51,7 @@ def run_moist_aquaplanet(
     spinup_days: int = 100,
     truncation: int = 21,
     n_levels: int = 20,
-    dt: float = 650.0,
+    dt: float = 900.0,
     output_path: str | None = None,
 ) -> bool:
     """Run a moist Frierson aquaplanet integration.
@@ -90,7 +90,12 @@ def run_moist_aquaplanet(
     )
     ref_humidity = rh_profile * q_sat_ref
 
-    forcing = SimplePhysics(transform, EARTH, levels)
+    from notus.physics.simple_physics import SimplePhysicsConfig
+
+    forcing = SimplePhysics(
+        transform, EARTH, levels,
+        config=SimplePhysicsConfig(implicit_surface=True),
+    )
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,
@@ -102,6 +107,7 @@ def run_moist_aquaplanet(
         spectral_filter=filt,
         forcing=forcing,
         reference_humidity=ref_humidity,
+        implicit_physics=forcing.apply_implicit,
     )
 
     steps_per_day = int(86400 / dt)
