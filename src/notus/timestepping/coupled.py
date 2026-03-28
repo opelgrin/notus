@@ -16,6 +16,7 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
+from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
 from notus.physics.forcing import Forcing
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import STEFAN_BOLTZMANN
@@ -145,6 +146,9 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
     dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
     cfg = forcing.config if hasattr(forcing, "config") else None
     c_d = cfg.c_d if cfg is not None else 0.0015
+    surface_layer_cfg: SurfaceLayerConfig | None = (
+        cfg.surface_layer if cfg is not None and hasattr(cfg, "surface_layer") else None
+    )
     sw_tau_0 = cfg.sw_tau_0 if cfg is not None else 0.0
     heat_capacity = ocean_config.heat_capacity
     sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
@@ -168,8 +172,9 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
 
     def _surface_state(
         state: PrimitiveEquationState,
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        """Extract surface winds, pressure, temperature, humidity, and exchange coeff."""
+        ocean: OceanState,
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Extract surface winds, pressure, temperature, humidity, exchange coeff, and drag."""
         u_cos_spec, v_cos_spec = uv_from_vordiv(
             state.vorticity[lowest], state.divergence[lowest], transform.arrays,
         )
@@ -185,7 +190,21 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
         t_safe = jnp.maximum(t_lowest_grid, 1.0)
         dp_safe = jnp.maximum(dsigma_lowest * ps_grid, 1.0)
         rho_sfc = ps_grid * sigma_lowest_val / (planet.gas_constant * t_safe)
-        k_sfc = planet.gravity * rho_sfc * c_d * wind_speed / dp_safe
+
+        # Transfer coefficient: MO stability-dependent or constant
+        if surface_layer_cfg is not None:
+            sst = ocean.surface_temperature
+            sst_bc = sst[:, None] if sst.ndim == 1 else sst
+            t_sfc_2d = sst_bc * jnp.ones_like(t_lowest_grid)
+            _c_d_m, c_h = compute_transfer_coefficients(
+                t_sfc_2d, t_lowest_grid, wind_speed,
+                dsigma_lowest, planet.gravity, planet.gas_constant,
+                surface_layer_cfg,
+            )
+        else:
+            c_h = c_d
+
+        k_sfc = planet.gravity * rho_sfc * c_h * wind_speed / dp_safe
 
         q_lowest = jnp.zeros_like(t_lowest_grid)
         if state.humidity is not None:
@@ -193,7 +212,7 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
                 transform.spectral_to_grid(state.humidity[lowest]), 0.0,
             )
 
-        return wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc
+        return wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h
 
     def _coupled_post_step(
         state: PrimitiveEquationState,
@@ -209,7 +228,7 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
                 divergence=state.divergence * damp,
             )
 
-        wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc = _surface_state(state)
+        wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = _surface_state(state, ocean)
         insolation = _compute_insolation()
 
         # Approximate downward LW flux at surface
@@ -222,7 +241,7 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
             specific_heat_cp=planet.specific_heat_cp,
             epsilon=planet.epsilon_moisture,
             latent_heat=planet.latent_heat_vaporization,
-            drag_coefficient=c_d, surface_albedo=planet.surface_albedo,
+            drag_coefficient=c_h, surface_albedo=planet.surface_albedo,
             sw_tau_0=sw_tau_0,
         )
 

@@ -34,6 +34,7 @@ from notus.physics.radiation import (
     shortwave_heating,
 )
 from notus.physics.solar import OrbitalParameters, daily_mean_insolation
+from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
 from notus.physics.surface import (
     PrescribedSST,
     compute_sst,
@@ -135,6 +136,7 @@ class SimplePhysicsConfig:
     n_condensation_iterations: int = 3
     rh_condensation: float = 1.0
     implicit_surface: bool = True
+    surface_layer: SurfaceLayerConfig | None = None
 
     def __post_init__(self) -> None:
         """Validate parameter ranges."""
@@ -367,6 +369,20 @@ class SimplePhysics:
         v_grid = v_cos_grid / cos_lat_safe
         wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
 
+        # Transfer coefficient for surface fluxes
+        if cfg.surface_layer is not None:
+            _c_d, c_h = compute_transfer_coefficients(
+                self.sst[:, None] * jnp.ones_like(t_grid[lowest]),
+                t_grid[lowest],
+                wind_speed,
+                self.dsigma_lowest,
+                planet.gravity,
+                planet.gas_constant,
+                cfg.surface_layer,
+            )
+        else:
+            c_h = cfg.c_d
+
         # Surface sensible heat flux
         # When implicit_surface=True, this is handled via apply_implicit.
         if implicit:
@@ -381,7 +397,7 @@ class SimplePhysics:
                 planet.specific_heat_cp,
                 planet.gas_constant,
                 self.dsigma_lowest,
-                drag_coefficient=cfg.c_d,
+                drag_coefficient=c_h,
             )
 
         # --- Moist or dry pathway ---
@@ -393,6 +409,7 @@ class SimplePhysics:
                 wind_speed,
                 q_lw,
                 q_sfc,
+                drag_coefficient=c_h,
             )
         else:
             dt_grid = self._dry_physics(t_grid, q_lw, q_sfc)
@@ -446,12 +463,15 @@ class SimplePhysics:
         wind_speed: jnp.ndarray,
         q_lw: jnp.ndarray,
         q_sfc_sensible: jnp.ndarray,
+        *,
+        drag_coefficient: float | jnp.ndarray | None = None,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Moist physics pathway with condensation and convection."""
         cfg = self.config
         levels = self.levels
         planet = self.planet
         lowest = levels.n_levels - 1
+        c_d = drag_coefficient if drag_coefficient is not None else cfg.c_d
 
         # Transform humidity to grid
         q_grid = jax.vmap(self.transform.spectral_to_grid)(
@@ -476,7 +496,7 @@ class SimplePhysics:
                 planet.gas_constant,
                 self.dsigma_lowest,
                 planet.epsilon_moisture,
-                drag_coefficient=cfg.c_d,
+                drag_coefficient=c_d,
             )
 
         # --- Betts-Miller convection ---
@@ -592,7 +612,22 @@ class SimplePhysics:
         t_lowest_grid = transform.spectral_to_grid(state.temperature[lowest])
         t_safe = jnp.maximum(t_lowest_grid, 1.0)
         rho_sfc = ps_grid * sigma_lowest / (planet.gas_constant * t_safe)
-        k_sfc = planet.gravity * rho_sfc * cfg.c_d * wind_speed / dp_safe
+
+        # Transfer coefficient: MO stability-dependent or constant
+        if cfg.surface_layer is not None:
+            _c_d, c_h = compute_transfer_coefficients(
+                self.sst[:, None] * jnp.ones_like(t_lowest_grid),
+                t_lowest_grid,
+                wind_speed,
+                self.dsigma_lowest,
+                planet.gravity,
+                planet.gas_constant,
+                cfg.surface_layer,
+            )
+        else:
+            c_h = cfg.c_d
+
+        k_sfc = planet.gravity * rho_sfc * c_h * wind_speed / dp_safe
 
         # --- Sensible heat flux (exact exponential decay at lowest level) ---
         decay_sfc = jnp.exp(-dt_implicit * k_sfc)

@@ -71,7 +71,7 @@ def surface_sensible_heat_flux(
     gas_constant: float,
     dsigma_lowest: float,
     *,
-    drag_coefficient: float,
+    drag_coefficient: float | jnp.ndarray,
 ) -> jnp.ndarray:
     """Compute surface sensible heat flux tendency for the lowest level.
 
@@ -104,8 +104,10 @@ def surface_sensible_heat_flux(
         Specific gas constant for dry air [J/(kg·K)].
     dsigma_lowest : float
         Sigma thickness of the lowest model level.
-    drag_coefficient : float
-        Surface drag coefficient C_D (dimensionless).
+    drag_coefficient : float or jnp.ndarray
+        Surface drag coefficient C_D (dimensionless).  Scalar for
+        constant drag, or array ``(n_lat, n_lon)`` for spatially
+        varying (e.g. Monin-Obukhov).
 
     Returns
     -------
@@ -137,7 +139,7 @@ def surface_latent_heat_flux(
     dsigma_lowest: float,
     epsilon: float,
     *,
-    drag_coefficient: float,
+    drag_coefficient: float | jnp.ndarray,
 ) -> jnp.ndarray:
     """Compute surface evaporation tendency for the lowest level.
 
@@ -169,8 +171,9 @@ def surface_latent_heat_flux(
         Sigma thickness of the lowest model level.
     epsilon : float
         Ratio R_d / R_v (≈ 0.622).
-    drag_coefficient : float
-        Surface drag coefficient C_D (dimensionless).
+    drag_coefficient : float or jnp.ndarray
+        Surface drag coefficient C_D (dimensionless).  Scalar or
+        array ``(n_lat, n_lon)``.
 
     Returns
     -------
@@ -276,8 +279,8 @@ def compute_net_surface_flux(
     specific_heat_cp: float,
     epsilon: float,
     latent_heat: float,
-    drag_coefficient: float,
-    surface_albedo: float,
+    drag_coefficient: float | jnp.ndarray,
+    surface_albedo: float | jnp.ndarray,
     sw_tau_0: float,
 ) -> jnp.ndarray:
     """Compute net downward surface energy flux [W/m²].
@@ -312,10 +315,10 @@ def compute_net_surface_flux(
         Ratio R_d / R_v.
     latent_heat : float
         Latent heat of vaporization [J/kg].
-    drag_coefficient : float
-        Surface drag coefficient C_D.
-    surface_albedo : float
-        Surface albedo (0-1).
+    drag_coefficient : float or jnp.ndarray
+        Surface drag coefficient C_D.  Scalar or array ``(n_lat, n_lon)``.
+    surface_albedo : float or jnp.ndarray
+        Surface albedo (0-1).  Scalar or array ``(n_lat, n_lon)``.
     sw_tau_0 : float
         Shortwave optical depth (for surface-reaching SW fraction).
 

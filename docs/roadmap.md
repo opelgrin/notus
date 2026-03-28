@@ -216,22 +216,42 @@ Virtual temperature in the semi-implicit solver, plus implicit treatment of stif
 - The Robert-Asselin-Williams (RAW) filter was harmful for moist runs: it feeds computational mode energy back into the future state, amplifying convective noise. Standard RA with implicit physics is more stable than RAW with explicit physics.
 - Implicit physics adds negligible cost per step (one extra grid↔spectral round-trip for BM), but dt doubles, so net wallclock improves ~2x.
 
-## Phase 7 — Seasonal Cycle + Slab Ocean
+## Phase 7 — Seasonal Cycle + Slab Ocean (complete)
 
 Two-band radiation with water vapor feedback, annual cycle, and interactive slab ocean.
 
-**Plan:**
+**What was built:**
 - Solar geometry: orbital parameters (obliquity, eccentricity, longitude of perihelion), daily-mean insolation with annual cycle
-- Two-band radiation: Byrne/Isca LW with humidity-dependent optical depth (water vapor feedback), activate SW atmospheric absorption (Beer-Lambert)
+- Two-band radiation: Byrne/Isca LW with humidity-dependent optical depth (water vapor feedback), SW atmospheric absorption (Beer-Lambert)
 - Slab ocean: mixed-layer ocean with prescribed Q-flux, replacing prescribed SST
+- Q-flux diagnostic utility for computing implied ocean heat transport from prescribed SST equilibrium
 
-## Phase 8 — Surface Coupling + Diurnal Cycle
+## Phase 8 — Surface Coupling
 
-Land surface, boundary layer, and diurnal cycle.
+Stability-dependent surface fluxes, land surface model, and land-ocean contrast.
 
 **Plan:**
+- 8A: Monin-Obukhov surface layer — Louis (1979) stability functions, bulk Richardson number, replace constant C_D with stability-dependent transfer coefficients (validate on aquaplanet)
+- 8B: Surface type infrastructure — land-sea mask, per-gridpoint albedo and roughness lengths, idealized mask generators (aquaplanet, flat continent)
+- 8C: Bucket land surface model — Frierson (2006) / Manabe (1969) single-layer soil energy balance, bucket hydrology (P-E-R), evaporation resistance (beta function), moisture-dependent albedo, blended ocean-land fluxes via land_fraction weighting
+
+## Phase 9 — Topography
+
+Prescribed orography and its dynamical/physical effects.
+
+**Plan:**
+- Prescribed surface geopotential z_s(lat, lon) fed into the divergence tendency (∇²(g·z_s) term already wired in the dynamical core)
+- Spectral representation of orography with appropriate smoothing/filtering
+- Surface pressure initialization consistent with orography
+- Orographic effects on precipitation, flow deflection, rain shadows
+
+## Phase 10+ — Future Wishlist
+
+Optional extensions for further realism.
+
+**Candidates:**
 - Diurnal cycle (instantaneous solar zenith angle, time-of-day dependent insolation)
-- Simple land surface model (bucket hydrology, surface energy balance)
-- Monin-Obukhov boundary layer parameterization (stability-dependent drag, prognostic BL depth)
-- Upgrade from constant C_D to full surface similarity theory
-- Sea ice thermodynamics (optional)
+- Sea ice thermodynamics (ice fraction, ice temperature, albedo feedback, freezing/melting)
+- Snow cover (albedo feedback, insulation, melt hydrology)
+- Vegetation / land surface complexity (canopy, root zone, stomatal resistance)
+- Multi-layer soil model

@@ -48,6 +48,7 @@ class PlanetaryConstants:
     surface_albedo: float = 0.31
     latent_heat_vaporization: float = 2.5e6
     gas_constant_vapor: float = 461.5
+    von_karman: float = 0.4
 
     @property
     def epsilon_moisture(self) -> float:
