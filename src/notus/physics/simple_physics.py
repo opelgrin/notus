@@ -369,25 +369,25 @@ class SimplePhysics:
         v_grid = v_cos_grid / cos_lat_safe
         wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
 
-        # Transfer coefficient for surface fluxes
-        if cfg.surface_layer is not None:
-            _c_d, c_h = compute_transfer_coefficients(
-                self.sst[:, None] * jnp.ones_like(t_grid[lowest]),
-                t_grid[lowest],
-                wind_speed,
-                self.dsigma_lowest,
-                planet.gravity,
-                planet.gas_constant,
-                cfg.surface_layer,
-            )
-        else:
-            c_h = cfg.c_d
-
         # Surface sensible heat flux
         # When implicit_surface=True, this is handled via apply_implicit.
         if implicit:
             q_sfc = jnp.zeros_like(t_grid[lowest])
+            c_h = cfg.c_d  # unused, but needed for _moist_physics signature
         else:
+            # Transfer coefficient: MO or constant (only needed for explicit path)
+            if cfg.surface_layer is not None:
+                _c_d, c_h = compute_transfer_coefficients(
+                    self.sst[:, None] * jnp.ones_like(t_grid[lowest]),
+                    t_grid[lowest],
+                    wind_speed,
+                    self.dsigma_lowest,
+                    planet.gravity,
+                    planet.gas_constant,
+                    cfg.surface_layer,
+                )
+            else:
+                c_h = cfg.c_d
             q_sfc = surface_sensible_heat_flux(
                 self.sst,
                 t_grid[lowest],
