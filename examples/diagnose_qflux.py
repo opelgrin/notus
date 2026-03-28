@@ -30,7 +30,7 @@ jax.config.update("jax_enable_x64", True)
 
 from notus.constants import EARTH
 from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state
+from notus.initial_conditions import moist_aquaplanet_initial_state, save_restart
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.radiation import (
@@ -142,6 +142,7 @@ def run_diagnose_qflux(
     n_levels: int = 20,
     dt: float = 900.0,
     output_path: str = "qflux.npz",
+    restart_path: str | None = None,
 ) -> bool:
     """Run prescribed-SST integration and diagnose Q-flux."""
     print(f"Q-flux diagnosis: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
@@ -216,6 +217,11 @@ def run_diagnose_qflux(
         (prev, curr), _ = one_day_jit((prev, curr), None)
 
         if day > spinup_days:
+            # Save restart at end of spinup (for warm-starting coupled runs)
+            if day == spinup_days + 1 and restart_path is not None:
+                save_restart(restart_path, curr)
+                print(f"  Saved restart to {restart_path}")
+
             # Compute surface pressure
             lnps_grid = transform.spectral_to_grid(curr.log_surface_pressure)
             ps_grid = EARTH.reference_pressure * jnp.exp(lnps_grid)
@@ -282,6 +288,10 @@ def main() -> None:
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--output", type=str, default="qflux.npz", help="Output .npz path")
+    parser.add_argument(
+        "--save-restart", type=str, default=None,
+        help="Save atmospheric restart file at end of spinup (for warm-starting coupled runs)",
+    )
     args = parser.parse_args()
 
     passed = run_diagnose_qflux(
@@ -291,6 +301,7 @@ def main() -> None:
         n_levels=args.levels,
         dt=args.dt,
         output_path=args.output,
+        restart_path=args.save_restart,
     )
 
     sys.exit(0 if passed else 1)

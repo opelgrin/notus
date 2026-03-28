@@ -19,7 +19,11 @@ from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
 from notus.physics.forcing import Forcing
 from notus.physics.moisture import saturation_specific_humidity
-from notus.physics.radiation import STEFAN_BOLTZMANN
+from notus.physics.radiation import (
+    byrne_longwave_optical_depth,
+    longwave_optical_depth,
+    lw_down_surface,
+)
 from notus.physics.solar import daily_mean_insolation
 from notus.physics.surface import (
     OceanState,
@@ -151,6 +155,13 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
         cfg.surface_layer if cfg is not None and hasattr(cfg, "surface_layer") else None
     )
     sw_tau_0 = cfg.sw_tau_0 if cfg is not None else 0.0
+    radiation_scheme = cfg.radiation_scheme if cfg is not None else "frierson"
+    lw_tau_equator = cfg.tau_equator if cfg is not None else 6.0
+    lw_tau_pole = cfg.tau_pole if cfg is not None else 0.1
+    lw_linear_fraction = cfg.linear_fraction if cfg is not None else 0.1
+    lw_alpha = cfg.alpha if cfg is not None else 4.0
+    lw_byrne_a = cfg.byrne_a if cfg is not None else 0.8678
+    lw_byrne_b = cfg.byrne_b if cfg is not None else 1997.9
     heat_capacity = ocean_config.heat_capacity
     sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
 
@@ -232,8 +243,23 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
         wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = _surface_state(state, ocean)
         insolation = _compute_insolation()
 
-        # Approximate downward LW flux at surface
-        lw_down = STEFAN_BOLTZMANN * t_lowest_grid**4 * (1.0 - jnp.exp(-0.5))
+        # Downward LW flux at surface from the two-stream radiation solver
+        t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
+        if radiation_scheme == "byrne" and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity), 0.0,
+            )
+            tau_half = byrne_longwave_optical_depth(
+                levels.dsigma, q_grid, ps_grid, planet.reference_pressure,
+                byrne_a=lw_byrne_a, byrne_b=lw_byrne_b,
+            )
+        else:
+            tau_half = longwave_optical_depth(
+                levels.sigma_half, transform.grid.sin_lat,
+                tau_equator=lw_tau_equator, tau_pole=lw_tau_pole,
+                linear_fraction=lw_linear_fraction, alpha=lw_alpha,
+            )
+        lw_down = lw_down_surface(t_grid, tau_half)
 
         net_flux = compute_net_surface_flux(
             ocean.surface_temperature, t_lowest_grid, q_lowest,

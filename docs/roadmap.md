@@ -226,12 +226,44 @@ Two-band radiation with water vapor feedback, annual cycle, and interactive slab
 - Slab ocean: mixed-layer ocean with prescribed Q-flux, replacing prescribed SST
 - Q-flux diagnostic utility for computing implied ocean heat transport from prescribed SST equilibrium
 
+## Phase 8A — Monin-Obukhov Surface Layer (complete)
+
+Stability-dependent surface fluxes replacing the constant drag coefficient, plus several slab ocean coupling improvements discovered during validation.
+
+**What was built:**
+
+*Monin-Obukhov surface layer:*
+- Louis (1979) stability functions: bulk Richardson number, analytic correction factors for momentum and heat transfer coefficients
+- Neutral coefficients from log-profile: `C_DN = (k/ln(z/z0))²`, separate z0 for momentum and heat
+- `SurfaceLayerConfig` dataclass: roughness lengths, Louis parameters, Ri clamp
+- Wired into `SimplePhysics` (explicit and implicit paths) and coupled slab ocean stepper
+
+*Slab ocean coupling improvements:*
+- Real downward LW flux from the two-stream radiation solver (`lw_down_surface()`), replacing crude `σT⁴(1-exp(-0.5))` approximation that underestimated LW_down by 60%
+- Implicit slab ocean step: linearized Newton-style `T_new = T_old + dt·F/(C - dt·dF/dT_s)` for unconditional SST stability at any timestep
+- Forcing SST sync: coupled driver updates `forcing.sst` with ocean SST each day so explicit LW radiation uses the current ocean temperature (analogous to `forcing.day_of_year` pattern)
+
+*Warm-start infrastructure:*
+- `spinup_prescribed_sst()` in `timestepping/spinup.py`: runs prescribed-SST spinup and Q-flux diagnosis in memory, returning a `SpinupResult(state, q_flux, ...)` ready to feed directly into `build_coupled_pe_stepper`. No disk I/O required.
+- `save_restart()` / `load_restart()` in `initial_conditions.py` for optional disk-based restart files (useful when spinup and coupled runs are separate CLI invocations)
+
+**Validation:**
+- 28 unit tests for boundary layer module (362 total, all passing)
+- 100-day slab ocean aquaplanet stable with MO at dt=900 (warm start + diagnosed Q-flux)
+- MO produces physically correct differences from baseline: weaker surface fluxes (C_H≈0.0007 vs 0.0015), warmer equatorial SST, more moisture, stronger jets
+- `verify_mo.py` is fully self-contained: runs spinup + Q-flux diagnosis + baseline + MO comparison with zero external files
+
+**Lessons learned:**
+- Cold-starting a coupled slab ocean integration from an isothermal atmosphere creates violent radiative transients (T spike >500 K within days). The proper procedure is `spinup_prescribed_sst()` followed by coupled mode — standard practice in real GCMs but easy to forget in an idealized model.
+- The one-line LW_down approximation `σT_lowest⁴(1-exp(-0.5))` gives ~120 W/m² instead of ~300 W/m² from the actual two-stream solver. The approximation was self-consistent (Q-flux diagnosis and slab ocean used the same formula), but distorted the surface energy budget. With the real LW_down, the diagnosed Q-flux has a -145 W/m² global mean, reflecting the simplified radiation scheme's inherent energy imbalance — this is physically correct (the scheme doesn't conserve energy globally), not a bug.
+- The slab ocean surface energy balance `C·dT/dt = F(T_s)` is stiff because `dF/dT_s ≈ -6 W/m²/K` (from `4σT³` alone). Forward Euler overshoots at dt=900s when net fluxes are large. Linearized implicit stepping eliminates this constraint.
+- Side effects on `forcing` attributes (sst, day_of_year) cannot happen inside `jax.jit` — they cause tracer leaks. These must be set by the driver loop outside JIT, between scan calls.
+
 ## Phase 8 — Surface Coupling
 
-Stability-dependent surface fluxes, land surface model, and land-ocean contrast.
+Land surface model and land-ocean contrast.
 
 **Plan:**
-- 8A: Monin-Obukhov surface layer — Louis (1979) stability functions, bulk Richardson number, replace constant C_D with stability-dependent transfer coefficients (validate on aquaplanet)
 - 8B: Surface type infrastructure — land-sea mask, per-gridpoint albedo and roughness lengths, idealized mask generators (aquaplanet, flat continent)
 - 8C: Bucket land surface model — Frierson (2006) / Manabe (1969) single-layer soil energy balance, bucket hydrology (P-E-R), evaporation resistance (beta function), moisture-dependent albedo, blended ocean-land fluxes via land_fraction weighting
 

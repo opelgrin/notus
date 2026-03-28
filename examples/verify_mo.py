@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """Verify Monin-Obukhov surface layer on a slab ocean aquaplanet.
 
-Runs two 100-day integrations side by side:
+Runs two coupled integrations side by side:
   1. Baseline (constant C_D = 0.0015)
   2. MO-enabled (Louis 1979 stability-dependent transfer coefficients)
 
-Both should remain stable. Prints comparative diagnostics.
+By default, performs an in-memory prescribed-SST spinup to produce a
+warm atmospheric state and self-consistent Q-flux before switching to
+coupled mode. This avoids the violent cold-start transient.
 
 Usage
 -----
+    # Default: automatic spinup + coupled run
     uv run python examples/verify_mo.py
-    uv run python examples/verify_mo.py --days 300
+
+    # From pre-computed files (faster for repeated runs)
+    uv run python examples/verify_mo.py --restart-file restart.npz --q-flux-file qflux.npz
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ jax.config.update("jax_enable_x64", True)
 
 from notus.constants import EARTH
 from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state
+from notus.initial_conditions import load_restart, moist_aquaplanet_initial_state
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig
@@ -36,6 +41,7 @@ from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.solar import EARTH_ORBIT
 from notus.physics.surface import OceanState, PrescribedSST, SlabOceanConfig, compute_sst
 from notus.timestepping.coupled import build_coupled_pe_stepper
+from notus.timestepping.spinup import spinup_prescribed_sst
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import standard_sigma_levels
 
@@ -44,29 +50,22 @@ def run_one(
     label: str,
     config: SimplePhysicsConfig,
     n_days: int,
-    q_flux_data: jnp.ndarray | None = None,
+    warm_state: jnp.ndarray,
+    q_flux: jnp.ndarray,
+    ref_temps: np.ndarray,
+    surface_phi: jnp.ndarray,
     truncation: int = 21,
     n_levels: int = 20,
     dt: float = 900.0,
 ) -> dict:
-    """Run a single integration and return diagnostics."""
+    """Run a single coupled integration and return diagnostics."""
     grid = GaussianGrid(truncation=truncation)
     transform = SpectralTransform(grid, EARTH.radius)
     levels = standard_sigma_levels(n_levels)
 
-    state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
-        transform, EARTH, levels, initial_rh=0.7, seed=42,
-    )
-
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
 
     ocean_config = SlabOceanConfig(mixed_layer_depth=50.0)
-    if q_flux_data is not None:
-        q_flux = q_flux_data
-    else:
-        q_flux_amplitude = 30.0
-        q_flux = q_flux_amplitude * (1.0 - 2.0 * grid.sin_lat**2)
-
     sst_init = compute_sst(
         PrescribedSST(t_min=config.sst_t_min, t_delta=config.sst_t_delta, phi_w=config.sst_phi_w),
         grid.latitudes,
@@ -89,13 +88,15 @@ def run_one(
         p, c, o = step_fn(p, c, o)
         return (p, c, o), None
 
-    # Initialize
+    # Initialize from warm state
     forcing.day_of_year = jnp.float64(0.0)
-    prev, curr, ocean = init_fn(state, ocean)
+    forcing.sst = ocean.surface_temperature
+    prev, curr, ocean = init_fn(warm_state, ocean)
 
     t_start = time.perf_counter()
     for day in range(1, n_days + 1):
         forcing.day_of_year = jnp.float64(day % days_per_year)
+        forcing.sst = ocean.surface_temperature
         (prev, curr, ocean), _ = jax.lax.scan(scan_body, (prev, curr, ocean), None, length=steps_per_day)
 
         if day % 25 == 0 or day == n_days:
@@ -159,33 +160,64 @@ def run_one(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify MO surface layer")
-    parser.add_argument("--days", type=int, default=100, help="Integration days")
+    parser.add_argument("--days", type=int, default=100, help="Coupled integration days")
+    parser.add_argument("--spinup-days", type=int, default=100, help="Prescribed-SST spinup days")
+    parser.add_argument("--averaging-days", type=int, default=200, help="Q-flux averaging days")
     parser.add_argument(
         "--q-flux-file", type=str, default=None,
-        help="Q-flux .npz file from diagnose_qflux.py (recommended for stability)",
+        help="Pre-computed Q-flux .npz (skip in-memory diagnosis)",
+    )
+    parser.add_argument(
+        "--restart-file", type=str, default=None,
+        help="Pre-computed restart .npz (skip in-memory spinup)",
     )
     args = parser.parse_args()
 
     n_days = args.days
 
-    # Load diagnosed Q-flux if provided
-    q_flux_data = None
-    if args.q_flux_file is not None:
-        data = np.load(args.q_flux_file)
-        q_flux_data = jnp.array(data["q_flux"])
-        print(f"Using diagnosed Q-flux from {args.q_flux_file}")
-        print(f"  Q range: [{float(jnp.min(q_flux_data)):.1f}, {float(jnp.max(q_flux_data)):.1f}] W/m^2")
-    else:
-        print("Using analytic Q-flux: 30*(1-2sin^2(lat))")
+    # --- Setup ---
+    grid = GaussianGrid(truncation=21)
+    transform = SpectralTransform(grid, EARTH.radius)
+    levels = standard_sigma_levels(20)
 
-    print(f"\n=== MO Verification: {n_days}-day slab ocean aquaplanet (T21 L20) ===\n")
+    state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
+        transform, EARTH, levels, initial_rh=0.7, seed=42,
+    )
+
+    # --- Spinup + Q-flux: in-memory or from disk ---
+    if args.restart_file is not None and args.q_flux_file is not None:
+        # Both provided: load from disk
+        warm_state, _ = load_restart(args.restart_file)
+        data = np.load(args.q_flux_file)
+        q_flux = jnp.array(data["q_flux"])
+        print(f"Loaded restart from {args.restart_file}")
+        print(f"Loaded Q-flux from {args.q_flux_file}")
+        print(f"  Q range: [{float(jnp.min(q_flux)):.1f}, {float(jnp.max(q_flux)):.1f}] W/m^2")
+    else:
+        # In-memory spinup + Q-flux diagnosis
+        print(f"Running prescribed-SST spinup ({args.spinup_days}d spinup + {args.averaging_days}d averaging)...")
+        base_config = SimplePhysicsConfig(
+            radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT,
+        )
+        spinup_forcing = SimplePhysics(transform, EARTH, levels, config=base_config)
+        result = spinup_prescribed_sst(
+            state, spinup_forcing, transform, EARTH, levels,
+            ref_temps, surface_phi, dt=900.0,
+            spinup_days=args.spinup_days,
+            averaging_days=args.averaging_days,
+        )
+        warm_state = result.state
+        q_flux = result.q_flux
+        print()
+
+    print(f"=== MO Verification: {n_days}-day slab ocean aquaplanet (T21 L20) ===\n")
 
     # Baseline: constant C_D
     print("--- Baseline (constant C_D=0.0015) ---")
     baseline_cfg = SimplePhysicsConfig(
         radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT,
     )
-    r_base = run_one("BASE", baseline_cfg, n_days, q_flux_data=q_flux_data)
+    r_base = run_one("BASE", baseline_cfg, n_days, warm_state, q_flux, ref_temps, surface_phi)
 
     print()
 
@@ -195,7 +227,7 @@ def main() -> None:
         radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT,
         surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
     )
-    r_mo = run_one("MO", mo_cfg, n_days, q_flux_data=q_flux_data)
+    r_mo = run_one("MO", mo_cfg, n_days, warm_state, q_flux, ref_temps, surface_phi)
 
     # Summary
     print("\n" + "=" * 60)

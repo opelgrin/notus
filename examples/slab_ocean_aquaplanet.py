@@ -8,12 +8,19 @@ slab ocean replacing the prescribed SST.
 The slab ocean evolves via surface energy balance:
     dT_s/dt = (SW_abs + LW_down - sigma*T_s^4 - H - LE + Q_flux) / C_ocean
 
-A simple analytic Q-flux provides poleward heat transport.
+**Warm start recommended**: Cold-starting from an isothermal atmosphere
+creates violent transients that can destabilize the integration,
+especially with Monin-Obukhov surface layer. Use ``diagnose_qflux.py
+--save-restart`` to produce a spun-up atmospheric state, then pass it
+via ``--restart-file``.
 
 Usage
 -----
-    uv run python examples/slab_ocean_aquaplanet.py
-    uv run python examples/slab_ocean_aquaplanet.py --days 730 --spinup 365
+    # Step 1: Diagnose Q-flux and save restart
+    uv run python examples/diagnose_qflux.py --days 300 --save-restart restart.npz
+
+    # Step 2: Run slab ocean from warm start
+    uv run python examples/slab_ocean_aquaplanet.py --restart-file restart.npz --q-flux-file qflux.npz
 """
 
 from __future__ import annotations
@@ -32,7 +39,7 @@ jax.config.update("jax_enable_x64", True)
 from notus.constants import EARTH
 from notus.diagnostics import ZonalMeanState, compute_zonal_mean_state
 from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state
+from notus.initial_conditions import load_restart, moist_aquaplanet_initial_state
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
@@ -51,6 +58,7 @@ def run_slab_ocean_aquaplanet(
     dt: float = 900.0,
     q_flux_amplitude: float = 30.0,
     q_flux_file: str | None = None,
+    restart_file: str | None = None,
 ) -> bool:
     """Run a slab ocean aquaplanet with seasonal insolation.
 
@@ -74,12 +82,18 @@ def run_slab_ocean_aquaplanet(
     transform = SpectralTransform(grid, EARTH.radius)
     levels = standard_sigma_levels(n_levels)
 
-    state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
-        transform,
-        EARTH,
-        levels,
-        initial_rh=0.7,
-        seed=42,
+    # Warm start from restart, or cold start from isothermal IC
+    if restart_file is not None:
+        state, _ = load_restart(restart_file)
+        print(f"  Warm start from {restart_file}")
+    else:
+        state, _, _ = moist_aquaplanet_initial_state(
+            transform, EARTH, levels, initial_rh=0.7, seed=42,
+        )
+
+    # ref_temps and surface_phi always needed for semi-implicit solver
+    _, ref_temps, surface_phi = moist_aquaplanet_initial_state(
+        transform, EARTH, levels, initial_rh=0.7, seed=42,
     )
 
     # Physics: Byrne LW + SW + seasonal
@@ -229,6 +243,8 @@ def run_slab_ocean_aquaplanet(
     t_start = time.perf_counter()
     for day in range(2, n_days + 1):
         day_of_year = jnp.float64(day % days_per_year)
+        # Sync forcing SST with ocean for consistent LW radiation
+        forcing.sst = ocean.surface_temperature
         (prev, curr, ocean), _ = one_day_jit((prev, curr, ocean), day_of_year)
 
         if day > spinup_days:
@@ -291,6 +307,10 @@ def main() -> None:
     parser.add_argument(
         "--q-flux-file", type=str, default=None, help="Q-flux .npz file from diagnose_qflux.py"
     )
+    parser.add_argument(
+        "--restart-file", type=str, default=None,
+        help="Warm-start from restart .npz (from diagnose_qflux.py --save-restart)",
+    )
     args = parser.parse_args()
 
     passed = run_slab_ocean_aquaplanet(
@@ -301,6 +321,7 @@ def main() -> None:
         dt=args.dt,
         q_flux_amplitude=args.q_flux,
         q_flux_file=args.q_flux_file,
+        restart_file=args.restart_file,
     )
 
     sys.exit(0 if passed else 1)
