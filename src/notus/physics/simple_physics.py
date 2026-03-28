@@ -33,6 +33,7 @@ from notus.physics.radiation import (
     longwave_optical_depth,
     shortwave_heating,
 )
+from notus.physics.solar import OrbitalParameters, daily_mean_insolation
 from notus.physics.surface import (
     PrescribedSST,
     compute_sst,
@@ -74,6 +75,11 @@ class SimplePhysicsConfig:
         Shortwave pressure exponent for Beer-Lambert absorption.
     delta_s : float
         Insolation meridional distribution parameter.
+    orbital : OrbitalParameters or None
+        Orbital parameters for seasonal insolation.  When provided
+        together with a ``day_of_year`` set on the forcing object,
+        replaces the fixed Frierson insolation with time-varying
+        daily-mean insolation from solar geometry.
     sst_t_min : float
         Minimum SST (temperature floor) [K].
     sst_t_delta : float
@@ -115,6 +121,7 @@ class SimplePhysicsConfig:
     sw_tau_0: float = 0.0
     sw_exponent: float = 2.0
     delta_s: float = 1.4
+    orbital: OrbitalParameters | None = None
     sst_t_min: float = 271.0
     sst_t_delta: float = 29.0
     sst_phi_w: float = 26.0 * jnp.pi / 180.0
@@ -189,6 +196,9 @@ class SimplePhysics:
         self.planet = planet
         self.levels = levels
         self.config = config if config is not None else SimplePhysicsConfig()
+
+        # Day of year for seasonal insolation (set by the driver loop)
+        self.day_of_year: jnp.ndarray | None = None
 
         # Pre-compute prescribed SST profile: (n_lat,)
         sst_config = PrescribedSST(
@@ -316,6 +326,15 @@ class SimplePhysics:
 
         # --- Shortwave heating rate ---
         if cfg.sw_tau_0 > 0.0:
+            # Compute insolation: seasonal or fixed Frierson
+            sw_insolation = None
+            if self.day_of_year is not None and cfg.orbital is not None:
+                sw_insolation = daily_mean_insolation(
+                    sin_lat,
+                    self.day_of_year,
+                    planet.solar_constant,
+                    cfg.orbital,
+                )
             q_sw = shortwave_heating(
                 levels.sigma_half,
                 levels.dsigma,
@@ -327,6 +346,7 @@ class SimplePhysics:
                 sw_tau_0=cfg.sw_tau_0,
                 sw_exponent=cfg.sw_exponent,
                 delta_s=cfg.delta_s,
+                insolation=sw_insolation,
             )
             q_lw = q_lw + q_sw
 
