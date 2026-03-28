@@ -216,21 +216,22 @@ Virtual temperature in the semi-implicit solver, plus implicit treatment of stif
 - The Robert-Asselin-Williams (RAW) filter was harmful for moist runs: it feeds computational mode energy back into the future state, amplifying convective noise. Standard RA with implicit physics is more stable than RAW with explicit physics.
 - Implicit physics adds negligible cost per step (one extra grid↔spectral round-trip for BM), but dt doubles, so net wallclock improves ~2x.
 
-## Phase 7 — Seasonal Cycle + Slab Ocean
+## Phase 7 — Seasonal Cycle
 
-Two-band radiation with water vapor feedback, annual cycle, and interactive slab ocean.
-
-**Plan:**
-- Solar geometry: orbital parameters (obliquity, eccentricity, longitude of perihelion), daily-mean insolation with annual cycle
-- Two-band radiation: Byrne/Isca LW with humidity-dependent optical depth (water vapor feedback), activate SW atmospheric absorption (Beer-Lambert)
-- Slab ocean: mixed-layer ocean with prescribed Q-flux, replacing prescribed SST
-
-## Phase 8 — Surface Coupling + Diurnal Cycle
-
-Land surface, boundary layer, and diurnal cycle.
+Time-varying solar forcing for realistic seasonal behavior.
 
 **Plan:**
-- Diurnal cycle (instantaneous solar zenith angle, time-of-day dependent insolation)
+- Orbital parameters: obliquity, eccentricity, longitude of perihelion
+- Diurnal cycle (rotating solar zenith angle)
+- Annual cycle (varying declination angle)
+- Two-band (shortwave + longwave) radiation with water vapor feedback
+
+## Phase 8 — Surface Coupling
+
+Interactive surface for land-ocean-atmosphere coupling.
+
+**Plan:**
+- Slab ocean with prescribed ocean heat transport (Q-flux)
 - Simple land surface model (bucket hydrology, surface energy balance)
 - Monin-Obukhov boundary layer parameterization (stability-dependent drag, prognostic BL depth)
 - Upgrade from constant C_D to full surface similarity theory
