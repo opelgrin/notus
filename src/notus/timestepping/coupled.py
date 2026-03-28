@@ -18,6 +18,7 @@ from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
 from notus.physics.forcing import Forcing
+from notus.physics.surface_types import SurfaceProperties
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
@@ -70,6 +71,7 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
     forcing: Forcing,
     ocean_config: SlabOceanConfig,
     q_flux: jnp.ndarray,
+    surface_properties: SurfaceProperties | None = None,
     spectral_filter: jnp.ndarray | None = None,
     diffusion_order: int = 4,
     diffusion_timescale: float = 2.0 * 3600.0,
@@ -164,6 +166,8 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
     lw_byrne_b = cfg.byrne_b if cfg is not None else 1997.9
     heat_capacity = ocean_config.heat_capacity
     sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
+    # Surface properties: spatially varying albedo/roughness, or scalar defaults
+    sfc_albedo = surface_properties.albedo if surface_properties is not None else planet.surface_albedo
 
     def _compute_insolation() -> jnp.ndarray:
         """Compute TOA insolation (seasonal or fixed)."""
@@ -268,7 +272,7 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
             specific_heat_cp=planet.specific_heat_cp,
             epsilon=planet.epsilon_moisture,
             latent_heat=planet.latent_heat_vaporization,
-            drag_coefficient=c_h, surface_albedo=planet.surface_albedo,
+            drag_coefficient=c_h, surface_albedo=sfc_albedo,
             sw_tau_0=sw_tau_0,
         )
 

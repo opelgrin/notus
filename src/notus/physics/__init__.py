@@ -5,6 +5,7 @@ from notus.physics.forcing import Forcing, HeldSuarez
 from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.solar import EARTH_ORBIT, OrbitalParameters
 from notus.physics.surface import OceanState, SlabOceanConfig
+from notus.physics.surface_types import SurfaceProperties
 
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "SimplePhysicsConfig",
     "SlabOceanConfig",
     "SurfaceLayerConfig",
+    "SurfaceProperties",
 ]
