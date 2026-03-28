@@ -318,7 +318,7 @@ class SimplePhysics:
             )
 
         # --- Longwave heating rate ---
-        q_lw = longwave_heating(
+        q_lw, _lw_down_sfc = longwave_heating(
             t_grid,
             self.sst,
             tau_half,

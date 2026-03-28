@@ -33,9 +33,13 @@ from notus.grid import GaussianGrid
 from notus.initial_conditions import moist_aquaplanet_initial_state
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
-from notus.physics.moisture import saturation_specific_humidity
-from notus.physics.radiation import STEFAN_BOLTZMANN
+from notus.physics.radiation import (
+    byrne_longwave_optical_depth,
+    longwave_optical_depth,
+    lw_down_surface,
+)
 from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
+from notus.physics.surface import compute_net_surface_flux
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import standard_sigma_levels
@@ -49,6 +53,9 @@ def diagnose_surface_flux(
 ) -> jnp.ndarray:
     """Compute net downward surface energy flux [W/m²].
 
+    Uses the exact same ``compute_net_surface_flux`` function as the coupled
+    slab ocean stepper, ensuring self-consistent Q-flux diagnosis.
+
     Returns the zonal-mean net flux, shape ``(n_lat,)``.
     Positive means the ocean is gaining energy.
     """
@@ -58,7 +65,7 @@ def diagnose_surface_flux(
     lowest = levels.n_levels - 1
     sin_lat = transform.grid.sin_lat
 
-    # Atmospheric temperature at lowest level
+    # Atmospheric temperature at all levels (needed for LW radiation)
     t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
     t_lowest = t_grid[lowest]
 
@@ -76,48 +83,53 @@ def diagnose_surface_flux(
     v_grid = v_cos_grid / cos_lat_safe
     wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
 
-    # Surface density
-    t_air_safe = jnp.maximum(t_lowest, 1.0)
-    rho_sfc = surface_pressure / (planet.gas_constant * t_air_safe)
-
     sst = forcing.sst  # (n_lat,)
-    sst_bc = sst[:, None]
 
-    # --- SW absorbed at surface ---
+    # --- Insolation ---
     if cfg.sw_tau_0 > 0.0:
         insolation = (
             planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
         )
-        sw_surface = insolation[:, None] * jnp.exp(-cfg.sw_tau_0) * (1.0 - planet.surface_albedo)
     else:
-        sw_surface = jnp.zeros_like(t_lowest)
+        insolation = jnp.zeros_like(sin_lat)
 
-    # --- LW down at surface ---
-    # Approximate: use atmospheric emission at lowest level
-    # A better approach would extract it from the two-stream solver,
-    # but this is consistent with the coupled stepper's approximation.
-    lw_down = STEFAN_BOLTZMANN * t_lowest**4 * (1.0 - jnp.exp(-0.5))
+    # --- LW down at surface from the two-stream radiation solver ---
+    if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+        q_grid = jnp.maximum(
+            jax.vmap(transform.spectral_to_grid)(state.humidity), 0.0,
+        )
+        tau_half = byrne_longwave_optical_depth(
+            levels.dsigma, q_grid, surface_pressure,
+            planet.reference_pressure,
+            byrne_a=cfg.byrne_a, byrne_b=cfg.byrne_b,
+        )
+    else:
+        tau_half = longwave_optical_depth(
+            levels.sigma_half, sin_lat,
+            tau_equator=cfg.tau_equator, tau_pole=cfg.tau_pole,
+            linear_fraction=cfg.linear_fraction, alpha=cfg.alpha,
+        )
+    lw_down = lw_down_surface(t_grid, tau_half)
 
-    # --- LW up from surface ---
-    lw_up = STEFAN_BOLTZMANN * sst_bc**4
-
-    # --- Sensible heat flux (positive = upward) ---
-    h_flux = rho_sfc * planet.specific_heat_cp * cfg.c_d * wind_speed * (sst_bc - t_lowest)
-
-    # --- Latent heat flux (positive = upward) ---
+    # --- Humidity at lowest level ---
     q_lowest = jnp.zeros_like(t_lowest)
     if state.humidity is not None:
         q_lowest = jnp.maximum(
             transform.spectral_to_grid(state.humidity[lowest]),
             0.0,
         )
-    q_sat_sfc = saturation_specific_humidity(sst_bc, surface_pressure, planet.epsilon_moisture)
-    e_flux = (
-        rho_sfc * planet.latent_heat_vaporization * cfg.c_d * wind_speed * (q_sat_sfc - q_lowest)
-    )
 
-    # --- Net surface flux (positive = into ocean) ---
-    net_flux = sw_surface + lw_down - lw_up - h_flux - e_flux
+    # --- Net flux via the same function used by the coupled stepper ---
+    net_flux = compute_net_surface_flux(
+        sst, t_lowest, q_lowest, wind_speed, surface_pressure,
+        insolation, lw_down,
+        gravity=planet.gravity, gas_constant=planet.gas_constant,
+        specific_heat_cp=planet.specific_heat_cp,
+        epsilon=planet.epsilon_moisture,
+        latent_heat=planet.latent_heat_vaporization,
+        drag_coefficient=cfg.c_d, surface_albedo=planet.surface_albedo,
+        sw_tau_0=cfg.sw_tau_0,
+    )
 
     # Zonal mean
     return jnp.mean(net_flux, axis=-1)

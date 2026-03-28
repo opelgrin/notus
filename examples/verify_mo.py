@@ -44,6 +44,7 @@ def run_one(
     label: str,
     config: SimplePhysicsConfig,
     n_days: int,
+    q_flux_data: jnp.ndarray | None = None,
     truncation: int = 21,
     n_levels: int = 20,
     dt: float = 900.0,
@@ -60,8 +61,11 @@ def run_one(
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
 
     ocean_config = SlabOceanConfig(mixed_layer_depth=50.0)
-    q_flux_amplitude = 30.0
-    q_flux = q_flux_amplitude * (1.0 - 2.0 * grid.sin_lat**2)
+    if q_flux_data is not None:
+        q_flux = q_flux_data
+    else:
+        q_flux_amplitude = 30.0
+        q_flux = q_flux_amplitude * (1.0 - 2.0 * grid.sin_lat**2)
 
     sst_init = compute_sst(
         PrescribedSST(t_min=config.sst_t_min, t_delta=config.sst_t_delta, phi_w=config.sst_phi_w),
@@ -156,17 +160,32 @@ def run_one(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify MO surface layer")
     parser.add_argument("--days", type=int, default=100, help="Integration days")
+    parser.add_argument(
+        "--q-flux-file", type=str, default=None,
+        help="Q-flux .npz file from diagnose_qflux.py (recommended for stability)",
+    )
     args = parser.parse_args()
 
     n_days = args.days
-    print(f"=== MO Verification: {n_days}-day slab ocean aquaplanet (T21 L20) ===\n")
+
+    # Load diagnosed Q-flux if provided
+    q_flux_data = None
+    if args.q_flux_file is not None:
+        data = np.load(args.q_flux_file)
+        q_flux_data = jnp.array(data["q_flux"])
+        print(f"Using diagnosed Q-flux from {args.q_flux_file}")
+        print(f"  Q range: [{float(jnp.min(q_flux_data)):.1f}, {float(jnp.max(q_flux_data)):.1f}] W/m^2")
+    else:
+        print("Using analytic Q-flux: 30*(1-2sin^2(lat))")
+
+    print(f"\n=== MO Verification: {n_days}-day slab ocean aquaplanet (T21 L20) ===\n")
 
     # Baseline: constant C_D
     print("--- Baseline (constant C_D=0.0015) ---")
     baseline_cfg = SimplePhysicsConfig(
         radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT,
     )
-    r_base = run_one("BASE", baseline_cfg, n_days)
+    r_base = run_one("BASE", baseline_cfg, n_days, q_flux_data=q_flux_data)
 
     print()
 
@@ -176,7 +195,7 @@ def main() -> None:
         radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT,
         surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
     )
-    r_mo = run_one("MO", mo_cfg, n_days)
+    r_mo = run_one("MO", mo_cfg, n_days, q_flux_data=q_flux_data)
 
     # Summary
     print("\n" + "=" * 60)
