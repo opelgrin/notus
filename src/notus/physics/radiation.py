@@ -252,14 +252,19 @@ def shortwave_heating(
     sw_tau_0: float,
     sw_exponent: float,
     delta_s: float,
+    insolation: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """Compute shortwave heating rate via Beer-Lambert absorption.
 
-    Zenith-angle-averaged insolation following Frierson (2006)::
+    When ``insolation`` is not provided, uses the Frierson (2006)
+    zenith-angle-averaged formula::
 
         S(φ) = S₀/4 · [1 + δ_s · (1 − 3 sin²φ) / 4]
 
-    No diurnal cycle (Phase 7). Downward-only (no surface reflection).
+    When ``insolation`` is provided (e.g. from ``daily_mean_insolation``),
+    it is used directly, enabling seasonal forcing.
+
+    Downward-only (no surface reflection).
 
     Parameters
     ----------
@@ -283,6 +288,9 @@ def shortwave_heating(
         Shortwave pressure exponent.
     delta_s : float
         Insolation distribution parameter.
+    insolation : jnp.ndarray or None
+        Pre-computed TOA insolation [W/m²], shape ``(n_lat,)``.
+        When ``None``, uses the fixed Frierson profile.
 
     Returns
     -------
@@ -290,7 +298,8 @@ def shortwave_heating(
         Shortwave heating rate [K/s], shape ``(n_levels, n_lat, n_lon)``.
     """
     # Insolation profile: (n_lat,)
-    insolation = solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+    if insolation is None:
+        insolation = solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
 
     # SW optical depth at half-levels: (n_levels+1, n_lat)
     tau_sw_half = sw_tau_0 * sigma_half[:, None] ** sw_exponent
