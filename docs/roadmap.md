@@ -277,7 +277,16 @@ Prescribed orography and its dynamical/physical effects.
 - Surface pressure initialization consistent with orography
 - Orographic effects on precipitation, flow deflection, rain shadows
 
-## Phase 10+ — Future Wishlist
+## Phase 10 — Radiation Upgrade
+
+The current Byrne semi-gray scheme has a -145 W/m² global energy imbalance (SW surface and atmospheric absorption computed independently). Phase 10 fixes this and optionally upgrades to multi-band radiation.
+
+**Plan (tiered):**
+- Fix energy conservation in the semi-gray scheme: ensure SW reaching the surface equals TOA minus atmospheric absorption (currently computed independently, causing the imbalance). Minimal code change.
+- Multi-band gray (Isca-style): 2-3 LW bands + 2 SW bands with band-specific optical depths tuned to match RRTMGP in a mean sense. Gives water vapor feedback, CO2 sensitivity, and proper surface budgets without the weight of full correlated-k.
+- RRTMGP (aspirational): correlated-k method via pyrrtmgp or a JAX port. State-of-the-art accuracy for quantitative climate sensitivity experiments.
+
+## Phase 11+ — Future Wishlist
 
 Optional extensions for further realism.
 
