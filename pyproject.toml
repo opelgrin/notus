@@ -17,7 +17,6 @@ dev = [
     "cartopy>=0.23",
     "ruff>=0.15.7",
     "mypy>=1.19.1",
-    "jcm>=1.1.1",
 ]
 
 [build-system]

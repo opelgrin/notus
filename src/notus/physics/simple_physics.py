@@ -27,7 +27,12 @@ from notus.physics.convection import (
     large_scale_condensation,
 )
 from notus.physics.moisture import saturation_specific_humidity
-from notus.physics.radiation import longwave_heating
+from notus.physics.radiation import (
+    byrne_longwave_optical_depth,
+    longwave_heating,
+    longwave_optical_depth,
+    shortwave_heating,
+)
 from notus.physics.surface import (
     PrescribedSST,
     compute_sst,
@@ -45,14 +50,30 @@ class SimplePhysicsConfig:
 
     Parameters
     ----------
+    radiation_scheme : str
+        Longwave radiation scheme: ``"frierson"`` (gray, prescribed tau)
+        or ``"byrne"`` (humidity-dependent tau with water vapor feedback).
     tau_equator : float
-        Equatorial longwave optical depth.
+        Equatorial longwave optical depth (Frierson scheme only).
     tau_pole : float
-        Polar longwave optical depth.
+        Polar longwave optical depth (Frierson scheme only).
     linear_fraction : float
-        Fraction of LW optical depth with linear pressure dependence.
+        Fraction of LW optical depth with linear pressure dependence
+        (Frierson scheme only).
     alpha : float
-        Pressure exponent for the nonlinear part of LW optical depth.
+        Pressure exponent for the nonlinear part of LW optical depth
+        (Frierson scheme only).
+    byrne_a : float
+        Well-mixed gas absorption coefficient (Byrne scheme only).
+    byrne_b : float
+        Water vapor absorption coefficient (Byrne scheme only).
+    sw_tau_0 : float
+        Shortwave optical depth.  Zero disables atmospheric SW absorption
+        (Frierson convention).
+    sw_exponent : float
+        Shortwave pressure exponent for Beer-Lambert absorption.
+    delta_s : float
+        Insolation meridional distribution parameter.
     sst_t_min : float
         Minimum SST (temperature floor) [K].
     sst_t_delta : float
@@ -84,10 +105,16 @@ class SimplePhysicsConfig:
         should instead be applied implicitly via :meth:`apply_implicit`.
     """
 
+    radiation_scheme: str = "frierson"
     tau_equator: float = 6.0
     tau_pole: float = 0.1
     linear_fraction: float = 0.1
     alpha: float = 4.0
+    byrne_a: float = 0.8678
+    byrne_b: float = 1997.9
+    sw_tau_0: float = 0.0
+    sw_exponent: float = 2.0
+    delta_s: float = 1.4
     sst_t_min: float = 271.0
     sst_t_delta: float = 29.0
     sst_phi_w: float = 26.0 * jnp.pi / 180.0
@@ -104,6 +131,9 @@ class SimplePhysicsConfig:
 
     def __post_init__(self) -> None:
         """Validate parameter ranges."""
+        if self.radiation_scheme not in ("frierson", "byrne"):
+            msg = f"radiation_scheme must be 'frierson' or 'byrne', got '{self.radiation_scheme}'"
+            raise ValueError(msg)
         if self.sigma_b >= 1.0:
             msg = f"sigma_b must be < 1.0, got {self.sigma_b}"
             raise ValueError(msg)
@@ -249,21 +279,56 @@ class SimplePhysics:
             state.temperature,
         )  # (n_levels, n_lat, n_lon)
 
-        # Longwave heating rate (no atmospheric SW — Frierson convention)
+        # --- Longwave optical depth ---
+        if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+            q_grid_for_rad = jax.vmap(self.transform.spectral_to_grid)(
+                state.humidity,
+            )
+            q_grid_for_rad = jnp.maximum(q_grid_for_rad, 0.0)
+            tau_half = byrne_longwave_optical_depth(
+                levels.dsigma,
+                q_grid_for_rad,
+                surface_pressure,
+                planet.reference_pressure,
+                byrne_a=cfg.byrne_a,
+                byrne_b=cfg.byrne_b,
+            )
+        else:
+            tau_half = longwave_optical_depth(
+                levels.sigma_half,
+                sin_lat,
+                tau_equator=cfg.tau_equator,
+                tau_pole=cfg.tau_pole,
+                linear_fraction=cfg.linear_fraction,
+                alpha=cfg.alpha,
+            )
+
+        # --- Longwave heating rate ---
         q_lw = longwave_heating(
             t_grid,
             self.sst,
-            levels.sigma_half,
+            tau_half,
             levels.dsigma,
-            sin_lat,
             surface_pressure,
             planet.gravity,
             planet.specific_heat_cp,
-            tau_equator=cfg.tau_equator,
-            tau_pole=cfg.tau_pole,
-            linear_fraction=cfg.linear_fraction,
-            alpha=cfg.alpha,
         )
+
+        # --- Shortwave heating rate ---
+        if cfg.sw_tau_0 > 0.0:
+            q_sw = shortwave_heating(
+                levels.sigma_half,
+                levels.dsigma,
+                sin_lat,
+                surface_pressure,
+                planet.solar_constant,
+                planet.gravity,
+                planet.specific_heat_cp,
+                sw_tau_0=cfg.sw_tau_0,
+                sw_exponent=cfg.sw_exponent,
+                delta_s=cfg.delta_s,
+            )
+            q_lw = q_lw + q_sw
 
         # Surface winds (lowest level) — needed for both explicit and moist fluxes
         lowest = levels.n_levels - 1
