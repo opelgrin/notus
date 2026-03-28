@@ -17,6 +17,7 @@ dev = [
     "cartopy>=0.23",
     "ruff>=0.15.7",
     "mypy>=1.19.1",
+    "jcm>=1.1.1",
 ]
 
 [build-system]
@@ -124,6 +125,7 @@ allowed-confusables = [
     "T201",    # print() is the primary output mechanism
     "E402",    # Imports after jax.config.update
     "PLR2004", # Magic values (physical constants, thresholds)
+    "PLR0912", # Too many branches (driver functions)
     "PLR0915", # Too many statements
     "PLC0415", # Import not at top level
     "RET504",  # Unnecessary variable before return

@@ -203,13 +203,15 @@ class TestComputeNetLandFlux:
 
     def _make_args(self, t_land: float = 290.0, beta_val: float = 1.0) -> dict:
         n_lat, n_lon = 4, 8
+        # sw_down_surface = insolation * exp(-sw_tau_0) = 300 * exp(-0.22)
+        sw_down = 300.0 * jnp.exp(-0.22)
         return {
             "land_temperature": jnp.full((n_lat, n_lon), t_land),
             "t_air": jnp.full((n_lat, n_lon), 285.0),
             "q_air": jnp.full((n_lat, n_lon), 0.005),
             "wind_speed": jnp.full((n_lat, n_lon), 5.0),
             "surface_pressure": jnp.full((n_lat, n_lon), 1.0e5),
-            "insolation": jnp.full(n_lat, 300.0),
+            "sw_down_surface": jnp.full((n_lat, n_lon), sw_down),
             "lw_down": jnp.full((n_lat, n_lon), 300.0),
             "beta": jnp.full((n_lat, n_lon), beta_val),
             "gravity": 9.80616,
@@ -219,7 +221,6 @@ class TestComputeNetLandFlux:
             "latent_heat": 2.5e6,
             "drag_coefficient": 0.001,
             "surface_albedo": 0.25,
-            "sw_tau_0": 0.22,
         }
 
     def test_returns_tuple(self) -> None:

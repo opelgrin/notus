@@ -30,6 +30,7 @@ from notus.physics.convection import (
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
+    byrne_shortwave_optical_depth,
     longwave_heating,
     longwave_optical_depth,
     shortwave_heating,
@@ -66,9 +67,13 @@ class SimplePhysicsConfig:
         Pressure exponent for the nonlinear part of LW optical depth
         (Frierson scheme only).
     byrne_a : float
-        Well-mixed gas absorption coefficient (Byrne scheme only).
+        Well-mixed gas LW absorption coefficient (Byrne scheme only).
     byrne_b : float
-        Water vapor absorption coefficient (Byrne scheme only).
+        Water vapor LW absorption coefficient (Byrne scheme only).
+    byrne_sw_a : float
+        Well-mixed gas SW absorption coefficient (Byrne scheme only).
+    byrne_sw_b : float
+        Water vapor SW absorption coefficient (Byrne scheme only).
     sw_tau_0 : float
         Shortwave optical depth.  Zero disables atmospheric SW absorption
         (Frierson convention).
@@ -119,6 +124,8 @@ class SimplePhysicsConfig:
     alpha: float = 4.0
     byrne_a: float = 0.8678
     byrne_b: float = 1997.9
+    byrne_sw_a: float = 0.0
+    byrne_sw_b: float = 0.2
     sw_tau_0: float = 0.0
     sw_exponent: float = 2.0
     delta_s: float = 1.4
@@ -314,7 +321,23 @@ class SimplePhysics:
                     planet.solar_constant,
                     cfg.orbital,
                 )
-            q_lw += shortwave_heating(
+
+            # Humidity-dependent SW optical depth for Byrne scheme
+            tau_sw: jnp.ndarray | None = None
+            if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+                q_grid_for_rad = jax.vmap(self.transform.spectral_to_grid)(state.humidity)
+                q_grid_for_rad = jnp.maximum(q_grid_for_rad, 0.0)
+                tau_sw = byrne_shortwave_optical_depth(
+                    levels.dsigma,
+                    q_grid_for_rad,
+                    surface_pressure,
+                    planet.reference_pressure,
+                    sw_tau_0=cfg.sw_tau_0,
+                    byrne_sw_a=cfg.byrne_sw_a,
+                    byrne_sw_b=cfg.byrne_sw_b,
+                )
+
+            q_sw, _sw_down_sfc = shortwave_heating(
                 levels.sigma_half,
                 levels.dsigma,
                 sin_lat,
@@ -326,7 +349,9 @@ class SimplePhysics:
                 sw_exponent=cfg.sw_exponent,
                 delta_s=cfg.delta_s,
                 insolation=sw_insolation,
+                tau_sw_half=tau_sw,
             )
+            q_lw += q_sw
 
         return q_lw
 

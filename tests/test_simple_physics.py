@@ -18,6 +18,7 @@ from notus.operators import exponential_filter
 from notus.physics.convection import dry_convective_adjustment
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
+    byrne_shortwave_optical_depth,
     longwave_heating,
     longwave_optical_depth,
     shortwave_heating,
@@ -308,7 +309,7 @@ class TestShortwaveHeating:
         sin_lat = jnp.linspace(-0.5, 0.5, n_lat)
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
 
-        q_sw = shortwave_heating(
+        q_sw, sw_down_sfc = shortwave_heating(
             levels.sigma_half,
             levels.dsigma,
             sin_lat,
@@ -321,6 +322,7 @@ class TestShortwaveHeating:
             delta_s=1.4,
         )
         assert jnp.all(q_sw >= 0.0)
+        assert jnp.all(sw_down_sfc >= 0.0)
 
     def test_zero_optical_depth_gives_zero_heating(
         self,
@@ -331,7 +333,7 @@ class TestShortwaveHeating:
         sin_lat = jnp.zeros(n_lat)
         surface_pressure = jnp.ones((n_lat, n_lon)) * 1.0e5
 
-        q_sw = shortwave_heating(
+        q_sw, sw_down_sfc = shortwave_heating(
             levels.sigma_half,
             levels.dsigma,
             sin_lat,
@@ -344,6 +346,121 @@ class TestShortwaveHeating:
             delta_s=1.4,
         )
         np.testing.assert_allclose(q_sw, 0.0, atol=1e-30)
+        # With zero optical depth, full insolation reaches the surface
+        # sin_lat=0 → insolation = S₀/4 * (1 + delta_s/4)
+        expected_insol = EARTH.solar_constant / 4.0 * (1.0 + 1.4 / 4.0)
+        np.testing.assert_allclose(sw_down_sfc, expected_insol, rtol=1e-10)
+
+
+class TestShortwaveEnergyConservation:
+    """Verify SW column energy is conserved: atm absorbed + surface flux = TOA incoming."""
+
+    def test_column_budget_closes(self, levels: SigmaLevels) -> None:
+        """Atmospheric absorption + surface down = TOA incoming (no albedo)."""
+        n_lat, n_lon = 4, 8
+        sin_lat = jnp.linspace(-0.5, 0.5, n_lat)
+        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
+
+        q_sw, sw_down_sfc = shortwave_heating(
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            EARTH.solar_constant,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            sw_tau_0=0.22,
+            sw_exponent=2.0,
+            delta_s=1.4,
+        )
+        # Atmospheric absorption per column: integrate heating * dp / g
+        dp = levels.dsigma[:, None, None] * surface_pressure[None, :, :]
+        atm_absorbed = jnp.sum(
+            q_sw * EARTH.specific_heat_cp * dp / EARTH.gravity,
+            axis=0,
+        )  # (n_lat, n_lon)
+
+        # TOA incoming
+        insolation = EARTH.solar_constant / 4.0 * (1.0 + 1.4 * (1.0 - 3.0 * sin_lat**2) / 4.0)
+        toa = insolation[:, None] * jnp.ones((n_lat, n_lon))
+
+        residual = atm_absorbed + sw_down_sfc - toa
+        np.testing.assert_allclose(residual, 0.0, atol=1e-6)
+
+    def test_reflected_beam_absorbed(self, levels: SigmaLevels) -> None:
+        """Non-zero albedo increases atmospheric absorption via reflected beam."""
+        n_lat, n_lon = 4, 8
+        sin_lat = jnp.linspace(-0.5, 0.5, n_lat)
+        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
+
+        q_no_albedo, _ = shortwave_heating(
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            EARTH.solar_constant,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            sw_tau_0=0.22,
+            sw_exponent=2.0,
+            delta_s=1.4,
+            surface_albedo=0.0,
+        )
+        q_albedo, _ = shortwave_heating(
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            EARTH.solar_constant,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
+            sw_tau_0=0.22,
+            sw_exponent=2.0,
+            delta_s=1.4,
+            surface_albedo=0.3,
+        )
+        # With albedo, reflected beam adds atmospheric absorption
+        dp = levels.dsigma[:, None, None] * surface_pressure[None, :, :]
+        total_no = jnp.sum(q_no_albedo * dp, axis=0)
+        total_yes = jnp.sum(q_albedo * dp, axis=0)
+        assert jnp.all(total_yes > total_no)
+
+    def test_humidity_dependent_sw_tau(self, levels: SigmaLevels) -> None:
+        """SW optical depth should increase with humidity."""
+        n_lat, n_lon = 4, 8
+        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
+
+        dry_q = jnp.zeros((levels.n_levels, n_lat, n_lon))
+        moist_q = jnp.full((levels.n_levels, n_lat, n_lon), 0.01)
+
+        tau_dry = byrne_shortwave_optical_depth(
+            levels.dsigma,
+            dry_q,
+            surface_pressure,
+            1.0e5,
+        )
+        tau_moist = byrne_shortwave_optical_depth(
+            levels.dsigma,
+            moist_q,
+            surface_pressure,
+            1.0e5,
+        )
+        # Moist should have higher optical depth
+        assert jnp.all(tau_moist[-1] > tau_dry[-1])
+
+    def test_byrne_sw_tau_toa_zero(self, levels: SigmaLevels) -> None:
+        """SW optical depth should be zero at TOA."""
+        n_lat, n_lon = 4, 8
+        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
+        humidity = jnp.full((levels.n_levels, n_lat, n_lon), 0.005)
+
+        tau = byrne_shortwave_optical_depth(
+            levels.dsigma,
+            humidity,
+            surface_pressure,
+            1.0e5,
+        )
+        np.testing.assert_allclose(tau[0], 0.0, atol=1e-30)
 
 
 # ---------------------------------------------------------------------------

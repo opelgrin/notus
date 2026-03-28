@@ -320,8 +320,14 @@ def shortwave_heating(
     sw_exponent: float,
     delta_s: float,
     insolation: jnp.ndarray | None = None,
-) -> jnp.ndarray:
-    """Compute shortwave heating rate via Beer-Lambert absorption.
+    tau_sw_half: jnp.ndarray | None = None,
+    surface_albedo: float | jnp.ndarray = 0.0,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Compute shortwave heating rate and surface downward flux.
+
+    Uses Beer-Lambert absorption for the downward pass.  When
+    ``surface_albedo`` is nonzero, the reflected upward flux undergoes
+    a second absorption pass through the atmosphere.
 
     When ``insolation`` is not provided, uses the Frierson (2006)
     zenith-angle-averaged formula::
@@ -330,8 +336,6 @@ def shortwave_heating(
 
     When ``insolation`` is provided (e.g. from ``daily_mean_insolation``),
     it is used directly, enabling seasonal forcing.
-
-    Downward-only (no surface reflection).
 
     Parameters
     ----------
@@ -350,34 +354,142 @@ def shortwave_heating(
     specific_heat_cp : float
         Specific heat at constant pressure [J/(kg·K)].
     sw_tau_0 : float
-        Shortwave optical depth.
+        Shortwave optical depth (used only when ``tau_sw_half`` is None).
     sw_exponent : float
-        Shortwave pressure exponent.
+        Shortwave pressure exponent (used only when ``tau_sw_half`` is None).
     delta_s : float
         Insolation distribution parameter.
     insolation : jnp.ndarray or None
         Pre-computed TOA insolation [W/m²], shape ``(n_lat,)``.
         When ``None``, uses the fixed Frierson profile.
+    tau_sw_half : jnp.ndarray or None
+        Pre-computed SW optical depth at half-levels, shape
+        ``(n_levels+1, n_lat)`` or ``(n_levels+1, n_lat, n_lon)``.
+        When provided, overrides ``sw_tau_0``/``sw_exponent``.
+    surface_albedo : float or jnp.ndarray
+        Surface albedo (0-1) for reflected-beam absorption.
 
     Returns
     -------
-    jnp.ndarray
-        Shortwave heating rate [K/s], shape ``(n_levels, n_lat, n_lon)``.
+    tuple[jnp.ndarray, jnp.ndarray]
+        ``(heating_rate, sw_down_sfc)`` — shortwave heating rate [K/s]
+        shape ``(n_levels, n_lat, n_lon)`` and downward SW flux at the
+        surface [W/m²] shape ``(n_lat, n_lon)``.
     """
     # Insolation profile: (n_lat,)
     if insolation is None:
         insolation = solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
 
-    # SW optical depth at half-levels: (n_levels+1, n_lat)
-    tau_sw_half = sw_tau_0 * sigma_half[:, None] ** sw_exponent
+    # SW optical depth at half-levels
+    if tau_sw_half is None:
+        tau_sw_half = sw_tau_0 * sigma_half[:, None] ** sw_exponent
 
-    # Downward SW flux at half-levels: (n_levels+1, n_lat)
-    f_sw = insolation[None, :] * jnp.exp(-tau_sw_half)
+    n_lon = surface_pressure.shape[-1]
 
-    # Flux absorbed in each layer: (n_levels, n_lat)
-    f_absorbed = f_sw[:-1] - f_sw[1:]
+    # Ensure tau_sw_half is 3-D: (n_levels+1, n_lat, n_lon)
+    if tau_sw_half.ndim == 2:  # noqa: PLR2004
+        tau_sw_half_3d = jnp.broadcast_to(
+            tau_sw_half[:, :, None],
+            (*tau_sw_half.shape, n_lon),
+        )
+    else:
+        tau_sw_half_3d = tau_sw_half
+
+    # Downward SW flux at half-levels: (n_levels+1, n_lat, n_lon)
+    f_sw_down = insolation[None, :, None] * jnp.exp(-tau_sw_half_3d)
+
+    # SW reaching the surface (before reflection)
+    sw_down_sfc = f_sw_down[-1]  # (n_lat, n_lon)
+
+    # Downward absorption per layer: (n_levels, n_lat, n_lon)
+    f_absorbed_down = f_sw_down[:-1] - f_sw_down[1:]
+
+    # Reflected upward beam: surface reflects, then Beer-Lambert back up.
+    # tau from surface to level k = tau_surface - tau_k (reversed)
+    tau_surface = tau_sw_half_3d[-1:]  # (1, n_lat, n_lon)
+    tau_up = tau_surface - tau_sw_half_3d  # (n_levels+1, n_lat, n_lon)
+    f_sw_up = sw_down_sfc[None, :, :] * surface_albedo * jnp.exp(-tau_up)
+
+    # Upward absorption per layer (absorbed going from bottom to top)
+    f_absorbed_up = f_sw_up[1:] - f_sw_up[:-1]  # (n_levels, n_lat, n_lon)
+
+    # Total absorbed = downward + upward
+    f_absorbed = f_absorbed_down + f_absorbed_up
 
     # Heating rate: Q = g * F_absorbed / (cp * dp)
     dp = dsigma[:, None, None] * surface_pressure[None, :, :]  # (n_levels, n_lat, n_lon)
 
-    return gravity / specific_heat_cp * f_absorbed[:, :, None] / dp
+    heating_rate = gravity / specific_heat_cp * f_absorbed / dp
+
+    return heating_rate, sw_down_sfc
+
+
+def byrne_shortwave_optical_depth(
+    dsigma: jnp.ndarray,
+    humidity: jnp.ndarray,
+    surface_pressure: jnp.ndarray,
+    reference_pressure: float,
+    *,
+    sw_tau_0: float = 0.22,
+    byrne_sw_a: float = 0.0,
+    byrne_sw_b: float = 0.2,
+) -> jnp.ndarray:
+    """Compute humidity-dependent shortwave optical depth.
+
+    Analogous to :func:`byrne_longwave_optical_depth` but for shortwave
+    near-IR water vapor absorption::
+
+        dτ_sw/d(p/p₀) = a_sw + b_sw · q
+
+    The well-mixed component ``a_sw`` captures non-humidity-dependent
+    absorption (e.g. ozone), while ``b_sw`` captures near-IR H₂O bands.
+    The total column optical depth in a dry atmosphere equals
+    ``a_sw * (ps/p₀)``; to match the Frierson convention, the default
+    ``a_sw`` is zero and a separate ``sw_tau_0`` sets a floor.
+
+    Parameters
+    ----------
+    dsigma : jnp.ndarray
+        Layer thickness Δσ, shape ``(n_levels,)``.
+    humidity : jnp.ndarray
+        Specific humidity at full levels [kg/kg],
+        shape ``(n_levels, n_lat, n_lon)``.
+    surface_pressure : jnp.ndarray
+        Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+    reference_pressure : float
+        Reference pressure p₀ [Pa] (typically 1e5).
+    sw_tau_0 : float
+        Base shortwave optical depth (Frierson-style floor).
+    byrne_sw_a : float
+        Well-mixed gas SW absorption coefficient (default 0.0).
+    byrne_sw_b : float
+        Water vapor SW absorption coefficient (default 0.2).
+
+    Returns
+    -------
+    jnp.ndarray
+        SW optical depth at half-levels, shape ``(n_levels+1, n_lat, n_lon)``.
+    """
+    n_levels = dsigma.shape[0]
+
+    # Humidity-dependent increment per layer
+    ps_ratio = surface_pressure[None, :, :] / reference_pressure
+    dtau = (byrne_sw_a + byrne_sw_b * humidity) * dsigma[:, None, None] * ps_ratio
+
+    # Cumulative from TOA
+    tau_cumsum = jnp.cumsum(dtau, axis=0)  # (n_levels, n_lat, n_lon)
+
+    # Prepend zero at TOA
+    n_lat, n_lon = surface_pressure.shape
+    tau_toa = jnp.zeros((1, n_lat, n_lon))
+    tau_humidity = jnp.concatenate([tau_toa, tau_cumsum], axis=0)
+
+    # Add Frierson-style base optical depth: sw_tau_0 * sigma^2
+    # Use sigma at half-levels for consistency
+    sigma_half = jnp.concatenate([
+        jnp.zeros(1),
+        jnp.cumsum(dsigma),
+    ])  # (n_levels+1,)
+    tau_base = sw_tau_0 * sigma_half[:, None, None] ** 2
+
+    return tau_humidity + jnp.broadcast_to(tau_base, (n_levels + 1, n_lat, n_lon))

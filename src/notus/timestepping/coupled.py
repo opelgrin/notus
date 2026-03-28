@@ -21,8 +21,10 @@ from notus.physics.forcing import Forcing
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
+    byrne_shortwave_optical_depth,
     longwave_optical_depth,
     lw_down_surface,
+    shortwave_heating,
 )
 from notus.physics.solar import daily_mean_insolation
 from notus.physics.surface import (
@@ -172,6 +174,8 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         cfg.surface_layer if cfg is not None and hasattr(cfg, "surface_layer") else None
     )
     sw_tau_0 = cfg.sw_tau_0 if cfg is not None else 0.0
+    sw_exponent = cfg.sw_exponent if cfg is not None else 2.0
+    delta_s = cfg.delta_s if cfg is not None else 1.4
     radiation_scheme = cfg.radiation_scheme if cfg is not None else "frierson"
     lw_tau_equator = cfg.tau_equator if cfg is not None else 6.0
     lw_tau_pole = cfg.tau_pole if cfg is not None else 0.1
@@ -179,6 +183,8 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     lw_alpha = cfg.alpha if cfg is not None else 4.0
     lw_byrne_a = cfg.byrne_a if cfg is not None else 0.8678
     lw_byrne_b = cfg.byrne_b if cfg is not None else 1997.9
+    byrne_sw_a = cfg.byrne_sw_a if cfg is not None else 0.0
+    byrne_sw_b = cfg.byrne_sw_b if cfg is not None else 0.2
     ocean_heat_capacity = ocean_config.heat_capacity
     sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
 
@@ -196,23 +202,68 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     rh_cond = cfg.rh_condensation if cfg is not None else 1.0
     tau_adj = cfg.tau_adjustment if cfg is not None else 43200.0
 
-    def _compute_insolation() -> jnp.ndarray:
-        """Compute TOA insolation (seasonal or fixed)."""
+    def _compute_sw_down_surface(
+        state: PrimitiveEquationState,
+        ps_grid: jnp.ndarray,
+        effective_albedo: float | jnp.ndarray,
+    ) -> jnp.ndarray:
+        """Compute SW flux reaching the surface [W/m²].
+
+        Uses the same :func:`shortwave_heating` as the atmospheric column
+        so that atmospheric absorption + surface flux = TOA incoming.
+        """
         sin_lat = transform.grid.sin_lat
+        if sw_tau_0 <= 0.0:
+            n_lat, n_lon = ps_grid.shape
+            return jnp.zeros((n_lat, n_lon))
+
+        insolation: jnp.ndarray | None = None  # seasonal or fixed
         if (
             hasattr(forcing, "day_of_year")
             and forcing.day_of_year is not None
             and cfg is not None
             and cfg.orbital is not None
         ):
-            return daily_mean_insolation(
+            insolation = daily_mean_insolation(
                 sin_lat,
                 forcing.day_of_year,
                 planet.solar_constant,
                 cfg.orbital,
             )
-        delta_s = cfg.delta_s if cfg is not None else 1.4
-        return planet.solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+
+        # Humidity-dependent SW optical depth for Byrne scheme
+        tau_sw: jnp.ndarray | None = None
+        if radiation_scheme == "byrne" and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            tau_sw = byrne_shortwave_optical_depth(
+                levels.dsigma,
+                q_grid,
+                ps_grid,
+                planet.reference_pressure,
+                sw_tau_0=sw_tau_0,
+                byrne_sw_a=byrne_sw_a,
+                byrne_sw_b=byrne_sw_b,
+            )
+
+        _, sw_down_sfc = shortwave_heating(
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            ps_grid,
+            planet.solar_constant,
+            planet.gravity,
+            planet.specific_heat_cp,
+            sw_tau_0=sw_tau_0,
+            sw_exponent=sw_exponent,
+            delta_s=delta_s,
+            insolation=insolation,
+            tau_sw_half=tau_sw,
+            surface_albedo=effective_albedo,
+        )
+        return sw_down_sfc
 
     def _surface_state(
         state: PrimitiveEquationState,
@@ -327,7 +378,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             state,
             surface,
         )
-        insolation = _compute_insolation()
+        sw_down_sfc = _compute_sw_down_surface(state, ps_grid, sfc_albedo)
         lw_down, _t_grid, _q_grid = _compute_lw_down(state, ps_grid)
 
         ocean = surface.ocean
@@ -337,7 +388,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             q_lowest,
             wind_speed,
             ps_grid,
-            insolation,
+            sw_down_sfc,
             lw_down,
             gravity=planet.gravity,
             gas_constant=planet.gas_constant,
@@ -346,7 +397,6 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             latent_heat=planet.latent_heat_vaporization,
             drag_coefficient=c_h,
             surface_albedo=sfc_albedo,
-            sw_tau_0=sw_tau_0,
         )
         dflux_dt = surface_flux_derivative(
             ocean.surface_temperature,
@@ -424,7 +474,6 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             state,
             surface,
         )
-        insolation = _compute_insolation()
         lw_down, t_grid, q_grid = _compute_lw_down(state, ps_grid)
 
         ocean = surface.ocean
@@ -448,6 +497,9 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         else:
             effective_albedo = sfc_albedo
 
+        # SW surface flux: consistent with atmospheric absorption
+        sw_down_sfc = _compute_sw_down_surface(state, ps_grid, effective_albedo)
+
         # --- Ocean branch ---
         ocean_net_flux = compute_net_surface_flux(
             ocean.surface_temperature,
@@ -455,7 +507,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             q_lowest,
             wind_speed,
             ps_grid,
-            insolation,
+            sw_down_sfc,
             lw_down,
             gravity=planet.gravity,
             gas_constant=planet.gas_constant,
@@ -464,7 +516,6 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             latent_heat=planet.latent_heat_vaporization,
             drag_coefficient=c_h,
             surface_albedo=effective_albedo,
-            sw_tau_0=sw_tau_0,
         )
         ocean_dflux = surface_flux_derivative(
             ocean.surface_temperature,
@@ -494,7 +545,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             q_lowest,
             wind_speed,
             ps_grid,
-            insolation,
+            sw_down_sfc,
             lw_down,
             beta,
             gravity=planet.gravity,
@@ -504,7 +555,6 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             latent_heat=planet.latent_heat_vaporization,
             drag_coefficient=c_h,
             surface_albedo=effective_albedo,
-            sw_tau_0=sw_tau_0,
         )
         land_dflux = land_flux_derivative(
             land.soil_temperature,
