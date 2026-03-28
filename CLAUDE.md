@@ -49,13 +49,15 @@ The model follows a standard spectral-transform GCM pipeline: grid-point physics
 - `PrimitiveEquationState` / `ShallowWaterState` — immutable JAX pytree dataclasses holding spectral coefficients
 - `SigmaLevels` — vertical sigma coordinate definition
 - `PlanetaryConstants` — planet parameters (Earth predefined as `EARTH`)
-- `Forcing` protocol — physics interface; implementations: `HeldSuarezForcing`, `SimplePhysicsForcing`, etc.
+- `Forcing` protocol — physics interface; implementations: `HeldSuarez`, `SimplePhysics`
+- `SurfaceState` — wraps `OceanState` (slab ocean SST) + optional `LandState` (soil temperature, bucket depth)
 - `build_pe_stepper()` — factory that wires dynamics + physics + semi-implicit solver into a single `step(state, dt)` callable
+- `build_coupled_pe_stepper()` — extends `build_pe_stepper` with slab ocean and optional bucket land surface
 
 **Module layout under `src/notus/`:**
 - `operators/` — spectral operators (Laplacian, derivatives, filtering, wind reconstruction)
 - `dynamics/` — tendency computations for shallow water and primitive equations
-- `physics/` — parameterizations (radiation, convection, moisture, boundary layer, surface/slab ocean, solar geometry)
+- `physics/` — parameterizations (radiation, convection, moisture, boundary layer, surface/slab ocean, bucket land, solar geometry)
 - `timestepping/` — IMEX leapfrog, semi-implicit Helmholtz solvers, spinup utilities
 - `vertical/` — sigma coordinate, vertical finite-difference operators
 

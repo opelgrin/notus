@@ -259,13 +259,54 @@ Stability-dependent surface fluxes replacing the constant drag coefficient, plus
 - The slab ocean surface energy balance `C·dT/dt = F(T_s)` is stiff because `dF/dT_s ≈ -6 W/m²/K` (from `4σT³` alone). Forward Euler overshoots at dt=900s when net fluxes are large. Linearized implicit stepping eliminates this constraint.
 - Side effects on `forcing` attributes (sst, day_of_year) cannot happen inside `jax.jit` — they cause tracer leaks. These must be set by the driver loop outside JIT, between scan calls.
 
-## Phase 8 — Surface Coupling
+## Phase 8B — Surface Type Infrastructure (complete)
 
-Land surface model and land-ocean contrast.
+Per-gridpoint surface properties and idealized land-sea mask generators.
 
-**Plan:**
-- 8B: Surface type infrastructure — land-sea mask, per-gridpoint albedo and roughness lengths, idealized mask generators (aquaplanet, flat continent)
-- 8C: Bucket land surface model — Frierson (2006) / Manabe (1969) single-layer soil energy balance, bucket hydrology (P-E-R), evaporation resistance (beta function), moisture-dependent albedo, blended ocean-land fluxes via land_fraction weighting
+**What was built:**
+- `SurfaceProperties` dataclass (JAX pytree): land_fraction, albedo, z0_momentum, z0_heat — all (n_lat, n_lon)
+- `aquaplanet_surface()`: uniform ocean surface (default)
+- `flat_continent_surface()`: rectangular continent with land/ocean blended properties
+- Default physical constants: ocean (z0=1e-4, albedo=0.06), land (z0=0.05, albedo=0.25)
+- `build_coupled_pe_stepper` accepts `surface_properties` for spatially varying albedo and roughness
+
+**Validation:**
+- 20 unit tests for surface properties, mask generators
+- 4 integration tests: aquaplanet and flat continent 10-day coupled runs, continent cooler than aquaplanet, SST in physical range
+
+## Phase 8C — Bucket Land Surface Model (complete)
+
+Frierson (2006) / Manabe (1969) single-layer soil energy balance with bucket hydrology, evaporation resistance, and blended ocean-land fluxes.
+
+**What was built:**
+
+*Bucket land model:*
+- `BucketLandConfig`: soil heat capacity (4×10⁶ J/(m²·K), ~2 m moist soil), bucket capacity (0.15 m), beta parameters, moisture-dependent albedo option
+- `LandState` (JAX pytree): soil_temperature (n_lat, n_lon), bucket_depth (n_lat, n_lon)
+- `SurfaceState`: wraps OceanState + optional LandState for clean coupled stepper signature
+- `beta_function`: evaporation resistance β = min(1, W/W_crit) — linear ramp from dry (no evaporation) to saturated (unlimited)
+- `compute_net_land_flux`: F_net = SW + LW_down − σT⁴ − H − β·L·E_pot, returns both net flux and evaporation rate
+- `land_flux_derivative`: dF/dT_land for linearized implicit stepping
+- `step_land_implicit`: same linearized Newton scheme as slab ocean, unconditionally stable
+- `step_bucket_hydrology`: dW/dt = P − E, clamped to [0, W_max] (overflow = runoff)
+- `diagnose_precipitation`: column-integrated moisture sink from Betts-Miller convection + large-scale condensation
+- `moisture_dependent_albedo`: Frierson (2006) α = α_wet + (α_dry − α_wet)·(1 − W/W_max), blended with ocean albedo via land_fraction
+
+*Coupled stepper:*
+- `build_coupled_pe_stepper` accepts `land_config`, uses `SurfaceState` (backward compatible: land=None → ocean-only path)
+- Land+ocean path: separate energy balances, precipitation diagnostic, blended implicit atmospheric decay toward (1−f)·SST + f·T_land
+- Monin-Obukhov `compute_transfer_coefficients` accepts spatially varying z0 overrides from SurfaceProperties
+
+**Validation:**
+- 37 unit tests for all new functions (pytree round-trip, beta, fluxes, stepping, hydrology, albedo, precipitation)
+- 4 integration tests: 10-day coupled land-ocean run stable, SST/T_land/bucket in physical ranges
+- All 397 non-slow tests pass, all 8 slow integration tests pass (including ocean-only regression)
+
+**Lessons learned:**
+- The implicit atmospheric decay at the lowest level MUST be applied at land points (decaying toward T_land), not just ocean. Without it, the lowest-level temperature at land points is unconstrained and creates dynamical instability from large air-surface temperature contrasts within 2-3 days.
+- Soil heat capacity of 1×10⁶ J/(m²·K) (thin dry soil) is too low for stability at T21 with dt=900s — the land heats rapidly when the bucket drains and evaporative cooling vanishes. Default of 4×10⁶ (~2 m moist soil) provides stable integration while maintaining realistic diurnal/synoptic response.
+- The explicit LW radiation in `SimplePhysics.__call__` uses `self.sst` as the surface emission boundary. For coupled land runs, this means LW radiation over land uses the ocean SST rather than T_land. The error is modest (~10 W/m² for a 15 K difference) because the land energy balance in the coupled post-step uses the correct T_land. A future improvement would pass the blended surface temperature through `forcing.sst`, but this requires updating it every timestep (not just per-day), which is incompatible with `jax.lax.scan`.
+- The bucket drains significantly over 10 days (0.11 → 0.01 m) as evaporation exceeds precipitation during the cold-start transient. In equilibrium, the precipitation-evaporation balance should maintain the bucket near its critical depth.
 
 ## Phase 9 — Topography
 
