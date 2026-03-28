@@ -138,7 +138,7 @@ class SimplePhysicsConfig:
 
     def __post_init__(self) -> None:
         """Validate parameter ranges."""
-        if self.radiation_scheme not in ("frierson", "byrne"):
+        if self.radiation_scheme not in {"frierson", "byrne"}:
             msg = f"radiation_scheme must be 'frierson' or 'byrne', got '{self.radiation_scheme}'"
             raise ValueError(msg)
         if self.sigma_b >= 1.0:
@@ -242,11 +242,13 @@ class SimplePhysics:
         sigma_full = np.asarray(self.levels.sigma_full)
         p_ref = sigma_full * self.planet.reference_pressure
         rh_profile = 0.7 * np.minimum(1.0, sigma_full / 0.3)
-        q_sat_ref = np.asarray(saturation_specific_humidity(
-            jnp.array(reference_temperature),
-            jnp.array(p_ref),
-            self.planet.epsilon_moisture,
-        ))
+        q_sat_ref = np.asarray(
+            saturation_specific_humidity(
+                jnp.array(reference_temperature),
+                jnp.array(p_ref),
+                self.planet.epsilon_moisture,
+            )
+        )
         return rh_profile * q_sat_ref
 
     def __call__(
@@ -348,7 +350,7 @@ class SimplePhysics:
                 delta_s=cfg.delta_s,
                 insolation=sw_insolation,
             )
-            q_lw = q_lw + q_sw
+            q_lw += q_sw
 
         # Surface winds (lowest level) — needed for both explicit and moist fluxes
         lowest = levels.n_levels - 1
@@ -595,21 +597,19 @@ class SimplePhysics:
         # --- Sensible heat flux (exact exponential decay at lowest level) ---
         decay_sfc = jnp.exp(-dt_implicit * k_sfc)
         t_corrected = self.sst[:, None] + (t_lowest_grid - self.sst[:, None]) * decay_sfc
-        new_temp = state.temperature.at[lowest].set(
-            transform.grid_to_spectral(t_corrected)
-        )
+        new_temp = state.temperature.at[lowest].set(transform.grid_to_spectral(t_corrected))
 
         # --- Latent heat flux (exact exponential decay at lowest level) ---
         new_humidity: jnp.ndarray | None = None
         if state.humidity is not None:
             q_lowest_grid = transform.spectral_to_grid(state.humidity[lowest])
             q_sat_sfc = saturation_specific_humidity(
-                self.sst[:, None], ps_grid, planet.epsilon_moisture,
+                self.sst[:, None],
+                ps_grid,
+                planet.epsilon_moisture,
             )
             q_corrected = q_sat_sfc + (q_lowest_grid - q_sat_sfc) * decay_sfc
-            new_humidity = state.humidity.at[lowest].set(
-                transform.grid_to_spectral(q_corrected)
-            )
+            new_humidity = state.humidity.at[lowest].set(transform.grid_to_spectral(q_corrected))
 
         return PrimitiveEquationState(
             vorticity=new_vort,

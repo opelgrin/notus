@@ -8,7 +8,7 @@ coupled implicit surface treatment.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -19,6 +19,7 @@ from notus.operators.vector import uv_from_vordiv
 from notus.physics.forcing import Forcing
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import STEFAN_BOLTZMANN
+from notus.physics.solar import daily_mean_insolation
 from notus.physics.surface import (
     OceanState,
     SlabOceanConfig,
@@ -53,7 +54,7 @@ class _ExplicitOnlyForcing:
         return self._forcing(state, surface_pressure)
 
 
-def build_coupled_pe_stepper(
+def build_coupled_pe_stepper(  # noqa: PLR0915
     transform: SpectralTransform,
     planet: PlanetaryConstants,
     levels: SigmaLevels,
@@ -142,8 +143,57 @@ def build_coupled_pe_stepper(
 
     lowest = levels.n_levels - 1
     dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
-    c_d = forcing.config.c_d if hasattr(forcing, "config") else 0.0015
+    cfg = forcing.config if hasattr(forcing, "config") else None
+    c_d = cfg.c_d if cfg is not None else 0.0015
+    sw_tau_0 = cfg.sw_tau_0 if cfg is not None else 0.0
     heat_capacity = ocean_config.heat_capacity
+    sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
+
+    def _compute_insolation() -> jnp.ndarray:
+        """Compute TOA insolation (seasonal or fixed)."""
+        sin_lat = transform.grid.sin_lat
+        if (
+            hasattr(forcing, "day_of_year")
+            and forcing.day_of_year is not None
+            and cfg is not None
+            and cfg.orbital is not None
+        ):
+            return daily_mean_insolation(
+                sin_lat, forcing.day_of_year, planet.solar_constant, cfg.orbital,
+            )
+        delta_s = cfg.delta_s if cfg is not None else 1.4
+        return planet.solar_constant / 4.0 * (
+            1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0
+        )
+
+    def _surface_state(
+        state: PrimitiveEquationState,
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Extract surface winds, pressure, temperature, humidity, and exchange coeff."""
+        u_cos_spec, v_cos_spec = uv_from_vordiv(
+            state.vorticity[lowest], state.divergence[lowest], transform.arrays,
+        )
+        cos_lat_safe = jnp.maximum(transform.grid.cos_lat[:, None], 1.0e-6)
+        u_grid = transform.spectral_to_grid(u_cos_spec) / cos_lat_safe
+        v_grid = transform.spectral_to_grid(v_cos_spec) / cos_lat_safe
+        wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
+
+        lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
+        ps_grid = planet.reference_pressure * jnp.exp(lnps_grid)
+        t_lowest_grid = transform.spectral_to_grid(state.temperature[lowest])
+
+        t_safe = jnp.maximum(t_lowest_grid, 1.0)
+        dp_safe = jnp.maximum(dsigma_lowest * ps_grid, 1.0)
+        rho_sfc = ps_grid * sigma_lowest_val / (planet.gas_constant * t_safe)
+        k_sfc = planet.gravity * rho_sfc * c_d * wind_speed / dp_safe
+
+        q_lowest = jnp.zeros_like(t_lowest_grid)
+        if state.humidity is not None:
+            q_lowest = jnp.maximum(
+                transform.spectral_to_grid(state.humidity[lowest]), 0.0,
+            )
+
+        return wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc
 
     def _coupled_post_step(
         state: PrimitiveEquationState,
@@ -151,8 +201,6 @@ def build_coupled_pe_stepper(
         dt_implicit: float,
     ) -> tuple[PrimitiveEquationState, OceanState]:
         """Apply coupled implicit physics and update ocean SST."""
-        sst = ocean.surface_temperature
-
         # --- Rayleigh friction (exact exponential decay) ---
         if hasattr(forcing, "k_v"):
             damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
@@ -161,97 +209,42 @@ def build_coupled_pe_stepper(
                 divergence=state.divergence * damp,
             )
 
-        # --- Surface winds ---
-        u_cos_spec, v_cos_spec = uv_from_vordiv(
-            state.vorticity[lowest],
-            state.divergence[lowest],
-            transform.arrays,
-        )
-        u_cos_grid = transform.spectral_to_grid(u_cos_spec)
-        v_cos_grid = transform.spectral_to_grid(v_cos_spec)
-        cos_lat = transform.grid.cos_lat[:, None]
-        cos_lat_safe = jnp.maximum(cos_lat, 1.0e-6)
-        u_grid = u_cos_grid / cos_lat_safe
-        v_grid = v_cos_grid / cos_lat_safe
-        wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
+        wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc = _surface_state(state)
+        insolation = _compute_insolation()
 
-        # --- Surface pressure and exchange coefficient ---
-        lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
-        ps_grid = planet.reference_pressure * jnp.exp(lnps_grid)
-        dp = dsigma_lowest * ps_grid
-        dp_safe = jnp.maximum(dp, 1.0)
-        t_lowest_grid = transform.spectral_to_grid(state.temperature[lowest])
-        t_safe = jnp.maximum(t_lowest_grid, 1.0)
-        sigma_lowest = 1.0 - 0.5 * dsigma_lowest
-        rho_sfc = ps_grid * sigma_lowest / (planet.gas_constant * t_safe)
-        k_sfc = planet.gravity * rho_sfc * c_d * wind_speed / dp_safe
-
-        # --- Compute net surface flux for ocean SST update ---
-        # Insolation: get from the forcing's day_of_year if available
-        sin_lat = transform.grid.sin_lat
-        cfg = forcing.config if hasattr(forcing, "config") else None
-        sw_tau_0 = cfg.sw_tau_0 if cfg is not None else 0.0
-
-        if hasattr(forcing, "day_of_year") and forcing.day_of_year is not None and cfg is not None and cfg.orbital is not None:
-            from notus.physics.solar import daily_mean_insolation
-            insolation = daily_mean_insolation(
-                sin_lat, forcing.day_of_year, planet.solar_constant, cfg.orbital,
-            )
-        else:
-            delta_s = cfg.delta_s if cfg is not None else 1.4
-            insolation = planet.solar_constant / 4.0 * (
-                1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0
-            )
-
-        # Downward LW flux at surface: recompute from atmospheric temperature
-        # Simple estimate: LW_down at surface = sigma * T_lowest^4 * (1 - transmissivity_lowest)
-        # For accuracy, use the full two-stream solver's surface LW_down.
-        # Approximation: atmosphere radiates as a gray body at the lowest level temperature
+        # Approximate downward LW flux at surface
         lw_down = STEFAN_BOLTZMANN * t_lowest_grid**4 * (1.0 - jnp.exp(-0.5))
 
-        # Get humidity at lowest level
-        q_lowest = jnp.zeros_like(t_lowest_grid)
-        if state.humidity is not None:
-            q_lowest = jnp.maximum(
-                transform.spectral_to_grid(state.humidity[lowest]), 0.0,
-            )
-
         net_flux = compute_net_surface_flux(
-            sst, t_lowest_grid, q_lowest, wind_speed, ps_grid, insolation, lw_down,
-            gravity=planet.gravity,
-            gas_constant=planet.gas_constant,
+            ocean.surface_temperature, t_lowest_grid, q_lowest,
+            wind_speed, ps_grid, insolation, lw_down,
+            gravity=planet.gravity, gas_constant=planet.gas_constant,
             specific_heat_cp=planet.specific_heat_cp,
             epsilon=planet.epsilon_moisture,
             latent_heat=planet.latent_heat_vaporization,
-            drag_coefficient=c_d,
-            surface_albedo=planet.surface_albedo,
+            drag_coefficient=c_d, surface_albedo=planet.surface_albedo,
             sw_tau_0=sw_tau_0,
         )
 
-        # --- Update ocean SST ---
-        # Zonal-mean net flux for 1-D SST
-        net_flux_zm = jnp.mean(net_flux, axis=-1)
-        ocean = step_slab_ocean(ocean, net_flux_zm, q_flux, heat_capacity, dt_implicit)
+        # Update ocean SST (zonal-mean flux for 1-D SST)
+        ocean = step_slab_ocean(
+            ocean, jnp.mean(net_flux, axis=-1), q_flux, heat_capacity, dt_implicit,
+        )
         new_sst = ocean.surface_temperature
 
-        # --- Implicit atmospheric decay toward new SST ---
+        # Implicit atmospheric decay toward new SST
         decay_sfc = jnp.exp(-dt_implicit * k_sfc)
-        if new_sst.ndim == 1:
-            sst_bc = new_sst[:, None]
-        else:
-            sst_bc = new_sst
+        sst_bc = new_sst[:, None] if new_sst.ndim == 1 else new_sst
         t_corrected = sst_bc + (t_lowest_grid - sst_bc) * decay_sfc
         new_temp = state.temperature.at[lowest].set(
             transform.grid_to_spectral(t_corrected),
         )
 
-        # --- Implicit latent heat flux toward q_sat(new SST) ---
+        # Implicit latent heat flux toward q_sat(new SST)
         new_humidity = state.humidity
         if state.humidity is not None:
             q_lowest_grid = transform.spectral_to_grid(state.humidity[lowest])
-            q_sat_sfc = saturation_specific_humidity(
-                sst_bc, ps_grid, planet.epsilon_moisture,
-            )
+            q_sat_sfc = saturation_specific_humidity(sst_bc, ps_grid, planet.epsilon_moisture)
             q_corrected = q_sat_sfc + (q_lowest_grid - q_sat_sfc) * decay_sfc
             new_humidity = state.humidity.at[lowest].set(
                 transform.grid_to_spectral(q_corrected),

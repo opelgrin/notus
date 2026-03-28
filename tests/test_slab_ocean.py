@@ -5,7 +5,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from notus.physics.surface import (
     OceanState,
@@ -52,9 +51,11 @@ class TestOceanState:
 
     def test_jit_compatible(self) -> None:
         """OceanState should pass through JIT."""
+
         @jax.jit
         def identity(o: OceanState) -> OceanState:
             return o
+
         ocean = OceanState(surface_temperature=jnp.array([300.0]))
         result = identity(ocean)
         np.testing.assert_allclose(result.surface_temperature, 300.0)
@@ -112,15 +113,21 @@ class TestStepSlabOcean:
         """Verify dT = F * dt / C for a known flux."""
         sst0 = 290.0
         flux = 200.0  # W/m²
-        dt = 3600.0   # 1 hour
+        dt = 3600.0  # 1 hour
         c_ocean = 2.0e8  # J/(m²·K)
 
         ocean = OceanState(surface_temperature=jnp.array([sst0]))
         ocean_new = step_slab_ocean(
-            ocean, jnp.array([flux]), jnp.array([0.0]), c_ocean, dt,
+            ocean,
+            jnp.array([flux]),
+            jnp.array([0.0]),
+            c_ocean,
+            dt,
         )
 
         expected = sst0 + flux * dt / c_ocean
         np.testing.assert_allclose(
-            float(ocean_new.surface_temperature[0]), expected, rtol=1e-10,
+            float(ocean_new.surface_temperature[0]),
+            expected,
+            rtol=1e-10,
         )

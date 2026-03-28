@@ -57,7 +57,7 @@ def run_byrne_aquaplanet(
     """
     print(f"Byrne aquaplanet: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
     print(f"  Spinup: {spinup_days} days, averaging: {n_days - spinup_days} days")
-    print(f"  Radiation: Byrne LW (a=0.8678, b=1997.9) + SW (tau=0.22)")
+    print("  Radiation: Byrne LW (a=0.8678, b=1997.9) + SW (tau=0.22)")
 
     if n_days <= spinup_days:
         print(f"ERROR: n_days ({n_days}) must be > spinup_days ({spinup_days})")

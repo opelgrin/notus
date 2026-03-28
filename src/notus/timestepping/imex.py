@@ -217,9 +217,9 @@ def _detect_forcing_capabilities(
     If the forcing object exposes ``apply_implicit`` and/or
     ``compute_reference_humidity``, they are extracted automatically.
     """
-    implicit_physics: (
-        Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None
-    ) = getattr(forcing, "apply_implicit", None)
+    implicit_physics: Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None = (
+        getattr(forcing, "apply_implicit", None)
+    )
 
     reference_humidity: np.ndarray | None = None
     if forcing is not None and hasattr(forcing, "compute_reference_humidity"):
@@ -337,7 +337,10 @@ def build_pe_stepper(
 
     # Compose dynamics + physics forcing if provided
     explicit_fn = _compose_dynamics_physics(
-        explicit_fn, forcing, transform, planet,
+        explicit_fn,
+        forcing,
+        transform,
+        planet,
     )
 
     # Build the semi-implicit config (precomputes G, H, M matrices)

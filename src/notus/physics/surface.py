@@ -325,10 +325,7 @@ def compute_net_surface_flux(
         Net surface flux [W/m²], shape ``(n_lat, n_lon)``.
     """
     # Broadcast SST to (n_lat, n_lon) if needed
-    if surface_temperature.ndim == 1:
-        t_s = surface_temperature[:, None]
-    else:
-        t_s = surface_temperature
+    t_s = surface_temperature[:, None] if surface_temperature.ndim == 1 else surface_temperature
 
     # SW absorbed at surface: TOA * exp(-tau_sw) * (1 - albedo)
     sw_surface = insolation[:, None] * jnp.exp(-sw_tau_0) * (1.0 - surface_albedo)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from notus.physics.solar import (
     EARTH_ORBIT,
@@ -124,7 +123,7 @@ class TestDailyMeanInsolation:
 
         total = jnp.zeros(len(sin_lat))
         for d in days:
-            total = total + daily_mean_insolation(sin_lat, d, SOLAR_CONSTANT, EARTH_ORBIT)
+            total += daily_mean_insolation(sin_lat, d, SOLAR_CONSTANT, EARTH_ORBIT)
         annual_mean = total / len(days)
 
         global_mean = float(jnp.mean(annual_mean))

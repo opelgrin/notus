@@ -111,9 +111,10 @@ def longwave_heating(
     n_lat, n_lon = surface_pressure.shape
 
     # Ensure tau_half is 3-D: (n_levels+1, n_lat, n_lon)
-    if tau_half.ndim == 2:
+    if tau_half.ndim == 2:  # noqa: PLR2004
         tau_half = jnp.broadcast_to(
-            tau_half[:, :, None], (*tau_half.shape, n_lon),
+            tau_half[:, :, None],
+            (*tau_half.shape, n_lon),
         )
 
     # Layer optical thickness and transmissivity: (n_levels, n_lat, n_lon)
