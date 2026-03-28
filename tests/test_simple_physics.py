@@ -17,7 +17,6 @@ from notus.initial_conditions import simple_physics_initial_state
 from notus.operators import exponential_filter
 from notus.physics.convection import dry_convective_adjustment
 from notus.physics.radiation import (
-    byrne_longwave_optical_depth,
     longwave_heating,
     longwave_optical_depth,
     shortwave_heating,
@@ -221,18 +220,17 @@ class TestLongwaveHeating:
         surface_temperature = jnp.full((n_lat,), t_uniform)
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
         sin_lat = jnp.zeros(n_lat)
-        tau_half = longwave_optical_depth(
-            levels.sigma_half, sin_lat, **LW_DEFAULTS,
-        )
 
         q_lw = longwave_heating(
             temperature,
             surface_temperature,
-            tau_half,
+            levels.sigma_half,
             levels.dsigma,
+            sin_lat,
             surface_pressure,
             EARTH.gravity,
             EARTH.specific_heat_cp,
+            **LW_DEFAULTS,
         )
 
         assert jnp.max(jnp.abs(q_lw)) < 1.0e-4
@@ -248,18 +246,17 @@ class TestLongwaveHeating:
         surface_temperature = jnp.full((n_lat,), 300.0)
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
         sin_lat = jnp.zeros(n_lat)
-        tau_half = longwave_optical_depth(
-            levels.sigma_half, sin_lat, **LW_DEFAULTS,
-        )
 
         q_lw = longwave_heating(
             temperature,
             surface_temperature,
-            tau_half,
+            levels.sigma_half,
             levels.dsigma,
+            sin_lat,
             surface_pressure,
             EARTH.gravity,
             EARTH.specific_heat_cp,
+            **LW_DEFAULTS,
         )
 
         assert float(jnp.mean(q_lw[-1])) > 0.0
@@ -272,18 +269,17 @@ class TestLongwaveHeating:
         surface_temperature = jnp.ones(n_lat) * 280.0
         surface_pressure = jnp.ones((n_lat, n_lon)) * 1.0e5
         sin_lat = jnp.zeros(n_lat)
-        tau_half = longwave_optical_depth(
-            levels.sigma_half, sin_lat, **LW_DEFAULTS,
-        )
 
         q_lw = longwave_heating(
             temperature,
             surface_temperature,
-            tau_half,
+            levels.sigma_half,
             levels.dsigma,
+            sin_lat,
             surface_pressure,
             EARTH.gravity,
             EARTH.specific_heat_cp,
+            **LW_DEFAULTS,
         )
         assert q_lw.shape == (n_levels, n_lat, n_lon)
 
@@ -338,81 +334,6 @@ class TestShortwaveHeating:
             delta_s=1.4,
         )
         np.testing.assert_allclose(q_sw, 0.0, atol=1e-30)
-
-
-# ---------------------------------------------------------------------------
-# Unit tests: Byrne humidity-dependent optical depth
-# ---------------------------------------------------------------------------
-
-
-class TestByrneOpticalDepth:
-    """Verify Byrne/Isca humidity-dependent LW optical depth."""
-
-    def test_toa_is_zero(self, levels: SigmaLevels) -> None:
-        """Optical depth at TOA should be zero."""
-        n_lat, n_lon = 4, 8
-        humidity = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.005
-        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
-        tau = byrne_longwave_optical_depth(
-            levels.dsigma, humidity, surface_pressure, 1.0e5,
-        )
-        np.testing.assert_allclose(tau[0], 0.0)
-
-    def test_increases_with_humidity(self, levels: SigmaLevels) -> None:
-        """More humidity should produce larger optical depth."""
-        n_lat, n_lon = 4, 8
-        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
-
-        q_dry = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.001
-        q_wet = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.01
-        tau_dry = byrne_longwave_optical_depth(
-            levels.dsigma, q_dry, surface_pressure, 1.0e5,
-        )
-        tau_wet = byrne_longwave_optical_depth(
-            levels.dsigma, q_wet, surface_pressure, 1.0e5,
-        )
-        # Surface optical depth should be larger for wetter atmosphere
-        assert float(jnp.mean(tau_wet[-1])) > float(jnp.mean(tau_dry[-1]))
-
-    def test_3d_shape(self, levels: SigmaLevels) -> None:
-        """Output should be (n_levels+1, n_lat, n_lon)."""
-        n_lat, n_lon = 4, 8
-        humidity = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.005
-        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
-        tau = byrne_longwave_optical_depth(
-            levels.dsigma, humidity, surface_pressure, 1.0e5,
-        )
-        assert tau.shape == (levels.n_levels + 1, n_lat, n_lon)
-
-    def test_dry_limit_matches_well_mixed(self, levels: SigmaLevels) -> None:
-        """With zero humidity, optical depth should equal a * column integral."""
-        n_lat, n_lon = 2, 4
-        humidity = jnp.zeros((levels.n_levels, n_lat, n_lon))
-        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
-        a = 0.8678
-        tau = byrne_longwave_optical_depth(
-            levels.dsigma, humidity, surface_pressure, 1.0e5, byrne_a=a,
-        )
-        # Total tau at surface = a * sum(dsigma) * (ps/p0) = a * 1.0 * 1.0
-        np.testing.assert_allclose(float(jnp.mean(tau[-1])), a, rtol=1e-10)
-
-    def test_longwave_heating_with_3d_tau(self, levels: SigmaLevels) -> None:
-        """longwave_heating should work with 3-D Byrne optical depth."""
-        n_lat, n_lon = 4, 8
-        temperature = jnp.full((levels.n_levels, n_lat, n_lon), 260.0)
-        surface_temperature = jnp.full((n_lat,), 280.0)
-        surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
-        humidity = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.005
-        tau_half = byrne_longwave_optical_depth(
-            levels.dsigma, humidity, surface_pressure, 1.0e5,
-        )
-        q_lw = longwave_heating(
-            temperature, surface_temperature, tau_half,
-            levels.dsigma, surface_pressure,
-            EARTH.gravity, EARTH.specific_heat_cp,
-        )
-        assert q_lw.shape == (levels.n_levels, n_lat, n_lon)
-        assert bool(jnp.all(jnp.isfinite(q_lw)))
 
 
 # ---------------------------------------------------------------------------
