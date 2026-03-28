@@ -50,6 +50,7 @@ def run_slab_ocean_aquaplanet(
     n_levels: int = 20,
     dt: float = 900.0,
     q_flux_amplitude: float = 30.0,
+    q_flux_file: str | None = None,
 ) -> bool:
     """Run a slab ocean aquaplanet with seasonal insolation.
 
@@ -59,7 +60,10 @@ def run_slab_ocean_aquaplanet(
     print(f"Slab ocean aquaplanet: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
     print(f"  Spinup: {spinup_days} days, averaging: {n_days - spinup_days} days")
     print(f"  Seasonal cycle: obliquity={np.degrees(EARTH_ORBIT.obliquity):.1f} deg")
-    print(f"  Slab ocean: 50m mixed layer, Q-flux amplitude={q_flux_amplitude:.0f} W/m^2")
+    if q_flux_file is not None:
+        print(f"  Q-flux: from {q_flux_file}")
+    else:
+        print(f"  Slab ocean: 50m mixed layer, Q-flux amplitude={q_flux_amplitude:.0f} W/m^2")
 
     if n_days <= spinup_days:
         print(f"ERROR: n_days ({n_days}) must be > spinup_days ({spinup_days})")
@@ -90,9 +94,14 @@ def run_slab_ocean_aquaplanet(
     ocean_config = SlabOceanConfig(mixed_layer_depth=50.0)
     sin_lat = grid.sin_lat
 
-    # Q-flux: poleward heat transport Q = Q0 * (1 - 2*sin^2(lat))
-    # Positive at poles, negative at equator → warms poles, cools tropics
-    q_flux = q_flux_amplitude * (1.0 - 2.0 * sin_lat**2)
+    # Q-flux: from diagnosed file or analytic fallback
+    if q_flux_file is not None:
+        data = np.load(q_flux_file)
+        q_flux = jnp.array(data["q_flux"])
+        print(f"  Loaded Q-flux: [{float(jnp.min(q_flux)):.1f}, {float(jnp.max(q_flux)):.1f}] W/m^2")
+    else:
+        # Simple analytic: poleward heat transport
+        q_flux = q_flux_amplitude * (1.0 - 2.0 * sin_lat**2)
 
     # Initialize SST from the Frierson profile
     sst_init = compute_sst(
@@ -283,6 +292,7 @@ def main() -> None:
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--q-flux", type=float, default=30.0, help="Q-flux amplitude [W/m^2]")
+    parser.add_argument("--q-flux-file", type=str, default=None, help="Q-flux .npz file from diagnose_qflux.py")
     args = parser.parse_args()
 
     passed = run_slab_ocean_aquaplanet(
@@ -292,6 +302,7 @@ def main() -> None:
         n_levels=args.levels,
         dt=args.dt,
         q_flux_amplitude=args.q_flux,
+        q_flux_file=args.q_flux_file,
     )
 
     sys.exit(0 if passed else 1)
