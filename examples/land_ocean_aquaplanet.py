@@ -63,6 +63,7 @@ def run_land_ocean(
     dt: float = 900.0,
     prescribed_spinup_days: int = 100,
     prescribed_averaging_days: int = 100,
+    scheme: str = "byrne",
 ) -> bool:
     """Run a land-ocean coupled aquaplanet with bucket hydrology.
 
@@ -90,11 +91,10 @@ def run_land_ocean(
     )
 
     # --- Physics configuration ---
-    config = SimplePhysicsConfig(
-        radiation_scheme="byrne",
-        sw_tau_0=0.22,
-        orbital=EARTH_ORBIT,
-    )
+    if scheme == "speedy":
+        config = SimplePhysicsConfig(radiation_scheme="speedy", orbital=EARTH_ORBIT)
+    else:
+        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
 
     # --- Surface configuration ---
@@ -363,6 +363,7 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
+    parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
     parser.add_argument(
         "--prescribe-spinup", type=int, default=100, help="Prescribed-SST spinup days"
     )
@@ -379,6 +380,7 @@ def main() -> None:
         dt=args.dt,
         prescribed_spinup_days=args.prescribe_spinup,
         prescribed_averaging_days=args.prescribe_avg,
+        scheme=args.scheme,
     )
     sys.exit(0 if passed else 1)
 

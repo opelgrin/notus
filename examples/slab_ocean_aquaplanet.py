@@ -66,6 +66,7 @@ def run_slab_ocean_aquaplanet(
     q_flux_amplitude: float = 30.0,
     q_flux_file: str | None = None,
     restart_file: str | None = None,
+    scheme: str = "byrne",
 ) -> bool:
     """Run a slab ocean aquaplanet with seasonal insolation.
 
@@ -111,12 +112,10 @@ def run_slab_ocean_aquaplanet(
         seed=42,
     )
 
-    # Physics: Byrne LW + SW + seasonal
-    config = SimplePhysicsConfig(
-        radiation_scheme="byrne",
-        sw_tau_0=0.22,
-        orbital=EARTH_ORBIT,
-    )
+    if scheme == "speedy":
+        config = SimplePhysicsConfig(radiation_scheme="speedy", orbital=EARTH_ORBIT)
+    else:
+        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
 
     # Slab ocean
@@ -319,6 +318,7 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
+    parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
     parser.add_argument("--q-flux", type=float, default=30.0, help="Q-flux amplitude [W/m^2]")
     parser.add_argument(
         "--q-flux-file", type=str, default=None, help="Q-flux .npz file from diagnose_qflux.py"
@@ -340,6 +340,7 @@ def main() -> None:
         q_flux_amplitude=args.q_flux,
         q_flux_file=args.q_flux_file,
         restart_file=args.restart_file,
+        scheme=args.scheme,
     )
 
     sys.exit(0 if passed else 1)

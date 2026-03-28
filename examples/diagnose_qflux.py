@@ -185,6 +185,7 @@ def run_diagnose_qflux(
     dt: float = 900.0,
     output_path: str = "qflux.npz",
     restart_path: str | None = None,
+    scheme: str = "byrne",
 ) -> bool:
     """Run prescribed-SST integration and diagnose Q-flux."""
     print(f"Q-flux diagnosis: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
@@ -207,10 +208,10 @@ def run_diagnose_qflux(
         seed=42,
     )
 
-    config = SimplePhysicsConfig(
-        radiation_scheme="byrne",
-        sw_tau_0=0.22,
-    )
+    if scheme == "speedy":
+        config = SimplePhysicsConfig(radiation_scheme="speedy")
+    else:
+        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
@@ -329,6 +330,7 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
+    parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
     parser.add_argument("--output", type=str, default="qflux.npz", help="Output .npz path")
     parser.add_argument(
         "--save-restart",
@@ -346,6 +348,7 @@ def main() -> None:
         dt=args.dt,
         output_path=args.output,
         restart_path=args.save_restart,
+        scheme=args.scheme,
     )
 
     sys.exit(0 if passed else 1)

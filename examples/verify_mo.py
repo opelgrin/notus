@@ -183,6 +183,7 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=100, help="Coupled integration days")
     parser.add_argument("--spinup-days", type=int, default=100, help="Prescribed-SST spinup days")
     parser.add_argument("--averaging-days", type=int, default=200, help="Q-flux averaging days")
+    parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
     parser.add_argument(
         "--q-flux-file",
         type=str,
@@ -225,11 +226,14 @@ def main() -> None:
         # In-memory spinup + Q-flux diagnosis
         sd, ad = args.spinup_days, args.averaging_days
         print(f"Running prescribed-SST spinup ({sd}d spinup + {ad}d averaging)...")
-        base_config = SimplePhysicsConfig(
-            radiation_scheme="byrne",
-            sw_tau_0=0.22,
-            orbital=EARTH_ORBIT,
-        )
+        if args.scheme == "speedy":
+            base_config = SimplePhysicsConfig(radiation_scheme="speedy", orbital=EARTH_ORBIT)
+        else:
+            base_config = SimplePhysicsConfig(
+                radiation_scheme="byrne",
+                sw_tau_0=0.22,
+                orbital=EARTH_ORBIT,
+            )
         spinup_forcing = SimplePhysics(transform, EARTH, levels, config=base_config)
         result = spinup_prescribed_sst(
             state,
@@ -251,23 +255,33 @@ def main() -> None:
 
     # Baseline: constant C_D
     print("--- Baseline (constant C_D=0.0015) ---")
-    baseline_cfg = SimplePhysicsConfig(
-        radiation_scheme="byrne",
-        sw_tau_0=0.22,
-        orbital=EARTH_ORBIT,
-    )
+    if args.scheme == "speedy":
+        baseline_cfg = SimplePhysicsConfig(radiation_scheme="speedy", orbital=EARTH_ORBIT)
+    else:
+        baseline_cfg = SimplePhysicsConfig(
+            radiation_scheme="byrne",
+            sw_tau_0=0.22,
+            orbital=EARTH_ORBIT,
+        )
     r_base = run_one("BASE", baseline_cfg, n_days, warm_state, q_flux, ref_temps, surface_phi)
 
     print()
 
     # MO-enabled
     print("--- Monin-Obukhov (Louis 1979, z0=1e-4) ---")
-    mo_cfg = SimplePhysicsConfig(
-        radiation_scheme="byrne",
-        sw_tau_0=0.22,
-        orbital=EARTH_ORBIT,
-        surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
-    )
+    if args.scheme == "speedy":
+        mo_cfg = SimplePhysicsConfig(
+            radiation_scheme="speedy",
+            orbital=EARTH_ORBIT,
+            surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
+        )
+    else:
+        mo_cfg = SimplePhysicsConfig(
+            radiation_scheme="byrne",
+            sw_tau_0=0.22,
+            orbital=EARTH_ORBIT,
+            surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
+        )
     r_mo = run_one("MO", mo_cfg, n_days, warm_state, q_flux, ref_temps, surface_phi)
 
     # Summary

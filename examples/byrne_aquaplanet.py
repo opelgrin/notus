@@ -50,14 +50,14 @@ def run_byrne_aquaplanet(
     n_levels: int = 20,
     dt: float = 900.0,
     output_path: str | None = None,
+    scheme: str = "byrne",
 ) -> bool:
-    """Run a moist aquaplanet with Byrne two-band radiation.
+    """Run a moist aquaplanet with Byrne or SPEEDY radiation.
 
     Returns True if the integration completes without blowup.
     """
-    print(f"Byrne aquaplanet: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
+    print(f"Moist aquaplanet ({scheme}): T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
     print(f"  Spinup: {spinup_days} days, averaging: {n_days - spinup_days} days")
-    print("  Radiation: Byrne LW (a=0.8678, b=1997.9) + SW (tau=0.22)")
 
     if n_days <= spinup_days:
         print(f"ERROR: n_days ({n_days}) must be > spinup_days ({spinup_days})")
@@ -76,10 +76,10 @@ def run_byrne_aquaplanet(
         seed=42,
     )
 
-    config = SimplePhysicsConfig(
-        radiation_scheme="byrne",
-        sw_tau_0=0.22,
-    )
+    if scheme == "speedy":
+        config = SimplePhysicsConfig(radiation_scheme="speedy")
+    else:
+        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
@@ -279,6 +279,7 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Number of vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
+    parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
     parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     args = parser.parse_args()
 
@@ -289,6 +290,7 @@ def main() -> None:
         n_levels=args.levels,
         dt=args.dt,
         output_path=args.output,
+        scheme=args.scheme,
     )
 
     sys.exit(0 if passed else 1)
