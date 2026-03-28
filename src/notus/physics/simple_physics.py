@@ -21,6 +21,7 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
+from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
 from notus.physics.convection import (
     betts_miller_convection,
     dry_convective_adjustment,
@@ -113,7 +114,7 @@ class SimplePhysicsConfig:
 
     radiation_scheme: str = "frierson"
     tau_equator: float = 6.0
-    tau_pole: float = 0.1
+    tau_pole: float = 1.5
     linear_fraction: float = 0.1
     alpha: float = 4.0
     byrne_a: float = 0.8678
@@ -135,6 +136,7 @@ class SimplePhysicsConfig:
     n_condensation_iterations: int = 3
     rh_condensation: float = 1.0
     implicit_surface: bool = True
+    surface_layer: SurfaceLayerConfig | None = None
 
     def __post_init__(self) -> None:
         """Validate parameter ranges."""
@@ -206,7 +208,7 @@ class SimplePhysics:
             t_delta=self.config.sst_t_delta,
             phi_w=self.config.sst_phi_w,
         )
-        self.sst = compute_sst(sst_config, transform.grid.latitudes)
+        self.sst: jnp.ndarray = compute_sst(sst_config, transform.grid.latitudes)
 
         # Pre-compute Rayleigh friction coefficient per level
         sigma_full = np.asarray(levels.sigma_full)
@@ -251,6 +253,140 @@ class SimplePhysics:
         )
         return rh_profile * q_sat_ref
 
+    @property
+    def _sst_2d(self) -> jnp.ndarray:
+        """Broadcast SST to 2-D ``(n_lat, n_lon)`` if needed."""
+        if self.sst.ndim == 1:
+            return self.sst[:, None]
+        return self.sst
+
+    def _compute_radiation_heating(
+        self,
+        t_grid: jnp.ndarray,
+        state: PrimitiveEquationState,
+        surface_pressure: jnp.ndarray,
+    ) -> jnp.ndarray:
+        """Compute total radiative heating rate [K/s]."""
+        cfg = self.config
+        levels = self.levels
+        planet = self.planet
+        sin_lat = self.transform.grid.sin_lat
+
+        # Longwave optical depth
+        if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+            q_grid_for_rad = jax.vmap(self.transform.spectral_to_grid)(state.humidity)
+            q_grid_for_rad = jnp.maximum(q_grid_for_rad, 0.0)
+            tau_half = byrne_longwave_optical_depth(
+                levels.dsigma,
+                q_grid_for_rad,
+                surface_pressure,
+                planet.reference_pressure,
+                byrne_a=cfg.byrne_a,
+                byrne_b=cfg.byrne_b,
+            )
+        else:
+            tau_half = longwave_optical_depth(
+                levels.sigma_half,
+                sin_lat,
+                tau_equator=cfg.tau_equator,
+                tau_pole=cfg.tau_pole,
+                linear_fraction=cfg.linear_fraction,
+                alpha=cfg.alpha,
+            )
+
+        q_lw, _lw_down_sfc = longwave_heating(
+            t_grid,
+            self.sst,
+            tau_half,
+            levels.dsigma,
+            surface_pressure,
+            planet.gravity,
+            planet.specific_heat_cp,
+        )
+
+        # Shortwave
+        if cfg.sw_tau_0 > 0.0:
+            sw_insolation = None
+            if self.day_of_year is not None and cfg.orbital is not None:
+                sw_insolation = daily_mean_insolation(
+                    sin_lat,
+                    self.day_of_year,
+                    planet.solar_constant,
+                    cfg.orbital,
+                )
+            q_lw += shortwave_heating(
+                levels.sigma_half,
+                levels.dsigma,
+                sin_lat,
+                surface_pressure,
+                planet.solar_constant,
+                planet.gravity,
+                planet.specific_heat_cp,
+                sw_tau_0=cfg.sw_tau_0,
+                sw_exponent=cfg.sw_exponent,
+                delta_s=cfg.delta_s,
+                insolation=sw_insolation,
+            )
+
+        return q_lw
+
+    def _compute_surface_exchange(
+        self,
+        state: PrimitiveEquationState,
+        t_grid: jnp.ndarray,
+        surface_pressure: jnp.ndarray,
+    ) -> tuple[jnp.ndarray, jnp.ndarray, float | jnp.ndarray]:
+        """Compute surface winds, sensible heat flux, and drag coefficient.
+
+        Returns
+        -------
+        tuple[wind_speed, q_sfc, c_h]
+        """
+        cfg = self.config
+        planet = self.planet
+        lowest = self.levels.n_levels - 1
+
+        u_cos_spec, v_cos_spec = uv_from_vordiv(
+            state.vorticity[lowest],
+            state.divergence[lowest],
+            self.transform.arrays,
+        )
+        cos_lat_safe = jnp.maximum(self.transform.grid.cos_lat[:, None], 1.0e-6)
+        u_grid = self.transform.spectral_to_grid(u_cos_spec) / cos_lat_safe
+        v_grid = self.transform.spectral_to_grid(v_cos_spec) / cos_lat_safe
+        wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
+
+        if cfg.implicit_surface:
+            return wind_speed, jnp.zeros_like(t_grid[lowest]), cfg.c_d
+
+        # Transfer coefficient: MO or constant
+        c_h: float | jnp.ndarray
+        if cfg.surface_layer is not None:
+            _c_d, c_h = compute_transfer_coefficients(
+                self._sst_2d * jnp.ones_like(t_grid[lowest]),
+                t_grid[lowest],
+                wind_speed,
+                self.dsigma_lowest,
+                planet.gravity,
+                planet.gas_constant,
+                cfg.surface_layer,
+            )
+        else:
+            c_h = cfg.c_d
+
+        q_sfc = surface_sensible_heat_flux(
+            self.sst,
+            t_grid[lowest],
+            wind_speed,
+            surface_pressure,
+            planet.gravity,
+            planet.specific_heat_cp,
+            planet.gas_constant,
+            self.dsigma_lowest,
+            drag_coefficient=c_h,
+        )
+        return wind_speed, q_sfc, c_h
+
     def __call__(
         self,
         state: PrimitiveEquationState,
@@ -271,118 +407,29 @@ class SimplePhysics:
             Tendencies due to simple physics forcing (spectral coefficients).
         """
         cfg = self.config
-        levels = self.levels
-        planet = self.planet
-        sin_lat = self.transform.grid.sin_lat
         implicit = cfg.implicit_surface
 
         # --- Rayleigh friction (spectral space, diagonal) ---
-        # When implicit_surface=True, friction is applied via apply_implicit.
         if implicit:
             dvort_spec = jnp.zeros_like(state.vorticity)
             ddiv_spec = jnp.zeros_like(state.divergence)
         else:
-            k_v = self.k_v[:, None]  # (n_levels, 1)
+            k_v = self.k_v[:, None]
             dvort_spec = -k_v * state.vorticity
             ddiv_spec = -k_v * state.divergence
 
-        # --- Temperature tendencies (grid space) ---
-        t_grid = jax.vmap(self.transform.spectral_to_grid)(
-            state.temperature,
-        )  # (n_levels, n_lat, n_lon)
+        # --- Grid-space temperature ---
+        t_grid = jax.vmap(self.transform.spectral_to_grid)(state.temperature)
 
-        # --- Longwave optical depth ---
-        if cfg.radiation_scheme == "byrne" and state.humidity is not None:
-            q_grid_for_rad = jax.vmap(self.transform.spectral_to_grid)(
-                state.humidity,
-            )
-            q_grid_for_rad = jnp.maximum(q_grid_for_rad, 0.0)
-            tau_half = byrne_longwave_optical_depth(
-                levels.dsigma,
-                q_grid_for_rad,
-                surface_pressure,
-                planet.reference_pressure,
-                byrne_a=cfg.byrne_a,
-                byrne_b=cfg.byrne_b,
-            )
-        else:
-            tau_half = longwave_optical_depth(
-                levels.sigma_half,
-                sin_lat,
-                tau_equator=cfg.tau_equator,
-                tau_pole=cfg.tau_pole,
-                linear_fraction=cfg.linear_fraction,
-                alpha=cfg.alpha,
-            )
+        # --- Radiation ---
+        q_lw = self._compute_radiation_heating(t_grid, state, surface_pressure)
 
-        # --- Longwave heating rate ---
-        q_lw = longwave_heating(
+        # --- Surface exchange ---
+        wind_speed, q_sfc, c_h = self._compute_surface_exchange(
+            state,
             t_grid,
-            self.sst,
-            tau_half,
-            levels.dsigma,
             surface_pressure,
-            planet.gravity,
-            planet.specific_heat_cp,
         )
-
-        # --- Shortwave heating rate ---
-        if cfg.sw_tau_0 > 0.0:
-            # Compute insolation: seasonal or fixed Frierson
-            sw_insolation = None
-            if self.day_of_year is not None and cfg.orbital is not None:
-                sw_insolation = daily_mean_insolation(
-                    sin_lat,
-                    self.day_of_year,
-                    planet.solar_constant,
-                    cfg.orbital,
-                )
-            q_sw = shortwave_heating(
-                levels.sigma_half,
-                levels.dsigma,
-                sin_lat,
-                surface_pressure,
-                planet.solar_constant,
-                planet.gravity,
-                planet.specific_heat_cp,
-                sw_tau_0=cfg.sw_tau_0,
-                sw_exponent=cfg.sw_exponent,
-                delta_s=cfg.delta_s,
-                insolation=sw_insolation,
-            )
-            q_lw += q_sw
-
-        # Surface winds (lowest level) — needed for both explicit and moist fluxes
-        lowest = levels.n_levels - 1
-        u_cos_spec, v_cos_spec = uv_from_vordiv(
-            state.vorticity[lowest],
-            state.divergence[lowest],
-            self.transform.arrays,
-        )
-        u_cos_grid = self.transform.spectral_to_grid(u_cos_spec)
-        v_cos_grid = self.transform.spectral_to_grid(v_cos_spec)
-        cos_lat = self.transform.grid.cos_lat[:, None]
-        cos_lat_safe = jnp.maximum(cos_lat, 1.0e-6)
-        u_grid = u_cos_grid / cos_lat_safe
-        v_grid = v_cos_grid / cos_lat_safe
-        wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
-
-        # Surface sensible heat flux
-        # When implicit_surface=True, this is handled via apply_implicit.
-        if implicit:
-            q_sfc = jnp.zeros_like(t_grid[lowest])
-        else:
-            q_sfc = surface_sensible_heat_flux(
-                self.sst,
-                t_grid[lowest],
-                wind_speed,
-                surface_pressure,
-                planet.gravity,
-                planet.specific_heat_cp,
-                planet.gas_constant,
-                self.dsigma_lowest,
-                drag_coefficient=cfg.c_d,
-            )
 
         # --- Moist or dry pathway ---
         if state.humidity is not None:
@@ -393,6 +440,7 @@ class SimplePhysics:
                 wind_speed,
                 q_lw,
                 q_sfc,
+                drag_coefficient=c_h,
             )
         else:
             dt_grid = self._dry_physics(t_grid, q_lw, q_sfc)
@@ -400,9 +448,7 @@ class SimplePhysics:
 
         # Transform to spectral
         dt_spec = jax.vmap(self.transform.grid_to_spectral)(dt_grid)
-
         zero_lnps = jnp.zeros_like(state.log_surface_pressure)
-
         humidity_tend: jnp.ndarray | None = None
         if dq_grid is not None:
             humidity_tend = jax.vmap(self.transform.grid_to_spectral)(dq_grid)
@@ -446,12 +492,15 @@ class SimplePhysics:
         wind_speed: jnp.ndarray,
         q_lw: jnp.ndarray,
         q_sfc_sensible: jnp.ndarray,
+        *,
+        drag_coefficient: float | jnp.ndarray | None = None,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Moist physics pathway with condensation and convection."""
         cfg = self.config
         levels = self.levels
         planet = self.planet
         lowest = levels.n_levels - 1
+        c_d = drag_coefficient if drag_coefficient is not None else cfg.c_d
 
         # Transform humidity to grid
         q_grid = jax.vmap(self.transform.spectral_to_grid)(
@@ -476,7 +525,7 @@ class SimplePhysics:
                 planet.gas_constant,
                 self.dsigma_lowest,
                 planet.epsilon_moisture,
-                drag_coefficient=cfg.c_d,
+                drag_coefficient=c_d,
             )
 
         # --- Betts-Miller convection ---
@@ -592,11 +641,27 @@ class SimplePhysics:
         t_lowest_grid = transform.spectral_to_grid(state.temperature[lowest])
         t_safe = jnp.maximum(t_lowest_grid, 1.0)
         rho_sfc = ps_grid * sigma_lowest / (planet.gas_constant * t_safe)
-        k_sfc = planet.gravity * rho_sfc * cfg.c_d * wind_speed / dp_safe
+
+        # Transfer coefficient: MO stability-dependent or constant
+        c_h: float | jnp.ndarray
+        if cfg.surface_layer is not None:
+            _c_d, c_h = compute_transfer_coefficients(
+                self._sst_2d * jnp.ones_like(t_lowest_grid),
+                t_lowest_grid,
+                wind_speed,
+                self.dsigma_lowest,
+                planet.gravity,
+                planet.gas_constant,
+                cfg.surface_layer,
+            )
+        else:
+            c_h = cfg.c_d
+
+        k_sfc = planet.gravity * rho_sfc * c_h * wind_speed / dp_safe
 
         # --- Sensible heat flux (exact exponential decay at lowest level) ---
         decay_sfc = jnp.exp(-dt_implicit * k_sfc)
-        t_corrected = self.sst[:, None] + (t_lowest_grid - self.sst[:, None]) * decay_sfc
+        t_corrected = self._sst_2d + (t_lowest_grid - self._sst_2d) * decay_sfc
         new_temp = state.temperature.at[lowest].set(transform.grid_to_spectral(t_corrected))
 
         # --- Latent heat flux (exact exponential decay at lowest level) ---
@@ -604,7 +669,7 @@ class SimplePhysics:
         if state.humidity is not None:
             q_lowest_grid = transform.spectral_to_grid(state.humidity[lowest])
             q_sat_sfc = saturation_specific_humidity(
-                self.sst[:, None],
+                self._sst_2d,
                 ps_grid,
                 planet.epsilon_moisture,
             )

@@ -986,6 +986,7 @@ class TestMoistInitialConditions:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestMoistAquaplanetIntegration:
     def test_10_day_stability(
         self,

@@ -174,9 +174,9 @@ def large_scale_condensation(
         Positive values indicate condensation.
     """
     # Implicit denominator factor (Frierson 2006 eq. 21):
-    # L²ε / (cp R_v T²) where R_v = R_d / ε, so
-    # L²ε / (cp (R_d/ε) T²) = L²ε² / (cp R_d T²)
-    lv2_eps2_over_cp_rd = latent_heat**2 * epsilon**2 / (specific_heat_cp * gas_constant)
+    # L/cp · dq_sat/dT where dq_sat/dT = L·q_sat/(R_v·T²)
+    # = L² / (cp R_v T²) = L² ε / (cp R_d T²)  since R_v = R_d / ε
+    lv2_eps_over_cp_rd = latent_heat**2 * epsilon / (specific_heat_cp * gas_constant)
 
     def _iterate(
         carry: tuple[jnp.ndarray, jnp.ndarray],
@@ -188,7 +188,7 @@ def large_scale_condensation(
 
         # Implicit correction (Frierson 2006 eq. 21)
         # denominator accounts for latent heating feedback on q_sat
-        lv_factor = lv2_eps2_over_cp_rd / t**2
+        lv_factor = lv2_eps_over_cp_rd / t**2
         dq = -excess / (1.0 + lv_factor * q_sat)
 
         # Only condense where supersaturated (dq must be negative)

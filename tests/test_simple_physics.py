@@ -35,7 +35,7 @@ jax.config.update("jax_enable_x64", True)
 # Default Frierson LW parameters used across tests
 LW_DEFAULTS = {
     "tau_equator": 6.0,
-    "tau_pole": 0.1,
+    "tau_pole": 1.5,
     "linear_fraction": 0.1,
     "alpha": 4.0,
 }
@@ -174,7 +174,7 @@ class TestLongwaveOpticalDepth:
             sin_lat,
             **LW_DEFAULTS,
         )
-        np.testing.assert_allclose(tau[1, 0], 0.1)
+        np.testing.assert_allclose(tau[1, 0], 1.5)
 
     def test_monotonically_increasing_downward(self) -> None:
         """Optical depth should increase from TOA to surface."""
@@ -227,7 +227,7 @@ class TestLongwaveHeating:
             **LW_DEFAULTS,
         )
 
-        q_lw = longwave_heating(
+        q_lw, _lw_down = longwave_heating(
             temperature,
             surface_temperature,
             tau_half,
@@ -256,7 +256,7 @@ class TestLongwaveHeating:
             **LW_DEFAULTS,
         )
 
-        q_lw = longwave_heating(
+        q_lw, _lw_down = longwave_heating(
             temperature,
             surface_temperature,
             tau_half,
@@ -282,7 +282,7 @@ class TestLongwaveHeating:
             **LW_DEFAULTS,
         )
 
-        q_lw = longwave_heating(
+        q_lw, _lw_down = longwave_heating(
             temperature,
             surface_temperature,
             tau_half,
@@ -431,7 +431,7 @@ class TestByrneOpticalDepth:
             surface_pressure,
             1.0e5,
         )
-        q_lw = longwave_heating(
+        q_lw, _lw_down = longwave_heating(
             temperature,
             surface_temperature,
             tau_half,
@@ -796,6 +796,7 @@ class TestSimplePhysicsForcing:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestSimplePhysicsIntegration:
     """Short integration to verify stability and physical plausibility."""
 

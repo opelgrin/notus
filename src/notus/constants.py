@@ -34,7 +34,9 @@ class PlanetaryConstants:
     solar_constant : float
         Total solar irradiance, S₀ [W/m²].
     surface_albedo : float
-        Planetary surface albedo (dimensionless, 0-1).
+        Surface albedo (dimensionless, 0-1).  For aquaplanet
+        configurations this should be the ocean surface albedo (~0.06),
+        not the planetary Bond albedo.
     """
 
     name: str
@@ -45,9 +47,10 @@ class PlanetaryConstants:
     specific_heat_cp: float
     reference_pressure: float = 1.0e5
     solar_constant: float = 1360.0
-    surface_albedo: float = 0.31
+    surface_albedo: float = 0.06
     latent_heat_vaporization: float = 2.5e6
     gas_constant_vapor: float = 461.5
+    von_karman: float = 0.4
 
     @property
     def epsilon_moisture(self) -> float:

@@ -76,7 +76,7 @@ def longwave_heating(
     surface_pressure: jnp.ndarray,
     gravity: float,
     specific_heat_cp: float,
-) -> jnp.ndarray:
+) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Compute longwave radiative heating rate using two-stream model.
 
     Upward and downward fluxes are computed at half-level interfaces via
@@ -105,8 +105,10 @@ def longwave_heating(
 
     Returns
     -------
-    jnp.ndarray
-        Longwave heating rate [K/s], shape ``(n_levels, n_lat, n_lon)``.
+    tuple[jnp.ndarray, jnp.ndarray]
+        ``(heating_rate, lw_down_sfc)`` — longwave heating rate [K/s]
+        shape ``(n_levels, n_lat, n_lon)`` and downward LW flux at the
+        surface [W/m²] shape ``(n_lat, n_lon)``.
     """
     n_lat, n_lon = surface_pressure.shape
 
@@ -179,7 +181,71 @@ def longwave_heating(
     df_net = f_net[:-1] - f_net[1:]  # (n_levels, n_lat, n_lon)
     dp = dsigma[:, None, None] * surface_pressure[None, :, :]
 
-    return -gravity / specific_heat_cp * df_net / dp
+    heating_rate = -gravity / specific_heat_cp * df_net / dp
+
+    # Downward LW flux at the surface (last half-level interface)
+    lw_down_sfc = f_down[-1]  # (n_lat, n_lon)
+
+    return heating_rate, lw_down_sfc
+
+
+def lw_down_surface(
+    temperature: jnp.ndarray,
+    tau_half: jnp.ndarray,
+) -> jnp.ndarray:
+    """Compute downward longwave flux at the surface from the two-stream model.
+
+    Performs only the downward scan (half the cost of ``longwave_heating``).
+    Useful for surface energy balance in the slab ocean without recomputing
+    the full heating rate.
+
+    Parameters
+    ----------
+    temperature : jnp.ndarray
+        Temperature at full levels, shape ``(n_levels, n_lat, n_lon)``.
+    tau_half : jnp.ndarray
+        Longwave optical depth at half-levels, shape
+        ``(n_levels+1, n_lat)`` or ``(n_levels+1, n_lat, n_lon)``.
+
+    Returns
+    -------
+    jnp.ndarray
+        Downward LW flux at the surface [W/m²], shape ``(n_lat, n_lon)``.
+    """
+    n_lon = temperature.shape[-1]
+
+    # Ensure tau_half is 3-D
+    if tau_half.ndim == 2:  # noqa: PLR2004
+        tau_half = jnp.broadcast_to(
+            tau_half[:, :, None],
+            (*tau_half.shape, n_lon),
+        )
+
+    # Layer transmissivity
+    dtau = tau_half[1:] - tau_half[:-1]
+    transmissivity = jnp.exp(-dtau)
+
+    # Blackbody emission at each full level
+    bb = STEFAN_BOLTZMANN * temperature**4
+
+    # Downward scan from TOA to surface
+    def _downward_step(
+        f_down: jnp.ndarray,
+        layer: tuple[jnp.ndarray, jnp.ndarray],
+    ) -> tuple[jnp.ndarray, None]:
+        trans_k, bb_k = layer
+        f_down_new = f_down * trans_k + bb_k * (1.0 - trans_k)
+        return f_down_new, None
+
+    n_lat = temperature.shape[1]
+    f_down_toa = jnp.zeros((n_lat, n_lon))
+    f_down_sfc, _ = jax.lax.scan(
+        _downward_step,
+        f_down_toa,
+        (transmissivity, bb),
+    )
+
+    return f_down_sfc
 
 
 def byrne_longwave_optical_depth(

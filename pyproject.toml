@@ -39,6 +39,11 @@ exclude = [
     "tests/",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: multi-day integration tests (skip with -m 'not slow')",
+]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100
@@ -91,7 +96,7 @@ extend-ignore = [
 ]
 allowed-confusables = [
     "φ", "λ", "μ", "ζ", "δ", "ψ", "χ", "Ω", "Σ", "Δ",  # Greek letters for math
-    "π", "κ", "ν", "σ", "τ", "α", "β",
+    "π", "κ", "ν", "σ", "τ", "α", "β", "ρ",
     "²", "³", "⁴", "⁻", "ⁱ",  # Superscripts for equations
     "ₙ", "ₘ", "ₛ", "ₖ", "ᵐ",  # Subscripts
     "→", "·", "×", "∂", "∇", "∫", "−", "√",  # Math operators
@@ -112,6 +117,7 @@ allowed-confusables = [
     "PLC2701", # Private import from external module
     "PLC0415", # Import not at top level
     "E402",    # Module-level import after pytest.importorskip guard
+    "RUF069",  # Floating point equality (exact values in test assertions)
 ]
 
 "examples/**" = [

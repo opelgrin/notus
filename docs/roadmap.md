@@ -216,22 +216,124 @@ Virtual temperature in the semi-implicit solver, plus implicit treatment of stif
 - The Robert-Asselin-Williams (RAW) filter was harmful for moist runs: it feeds computational mode energy back into the future state, amplifying convective noise. Standard RA with implicit physics is more stable than RAW with explicit physics.
 - Implicit physics adds negligible cost per step (one extra grid↔spectral round-trip for BM), but dt doubles, so net wallclock improves ~2x.
 
-## Phase 7 — Seasonal Cycle + Slab Ocean
+## Phase 7 — Seasonal Cycle + Slab Ocean (complete)
 
 Two-band radiation with water vapor feedback, annual cycle, and interactive slab ocean.
 
-**Plan:**
+**What was built:**
 - Solar geometry: orbital parameters (obliquity, eccentricity, longitude of perihelion), daily-mean insolation with annual cycle
-- Two-band radiation: Byrne/Isca LW with humidity-dependent optical depth (water vapor feedback), activate SW atmospheric absorption (Beer-Lambert)
+- Two-band radiation: Byrne/Isca LW with humidity-dependent optical depth (water vapor feedback), SW atmospheric absorption (Beer-Lambert)
 - Slab ocean: mixed-layer ocean with prescribed Q-flux, replacing prescribed SST
+- Q-flux diagnostic utility for computing implied ocean heat transport from prescribed SST equilibrium
 
-## Phase 8 — Surface Coupling + Diurnal Cycle
+## Phase 8A — Monin-Obukhov Surface Layer (complete)
 
-Land surface, boundary layer, and diurnal cycle.
+Stability-dependent surface fluxes replacing the constant drag coefficient, plus several slab ocean coupling improvements discovered during validation.
+
+**What was built:**
+
+*Monin-Obukhov surface layer:*
+- Louis (1979) stability functions: bulk Richardson number, analytic correction factors for momentum and heat transfer coefficients
+- Neutral coefficients from log-profile: `C_DN = (k/ln(z/z0))²`, separate z0 for momentum and heat
+- `SurfaceLayerConfig` dataclass: roughness lengths, Louis parameters, Ri clamp
+- Wired into `SimplePhysics` (explicit and implicit paths) and coupled slab ocean stepper
+
+*Slab ocean coupling improvements:*
+- Real downward LW flux from the two-stream radiation solver (`lw_down_surface()`), replacing crude `σT⁴(1-exp(-0.5))` approximation that underestimated LW_down by 60%
+- Implicit slab ocean step: linearized Newton-style `T_new = T_old + dt·F/(C - dt·dF/dT_s)` for unconditional SST stability at any timestep
+- Forcing SST sync: coupled driver updates `forcing.sst` with ocean SST each day so explicit LW radiation uses the current ocean temperature (analogous to `forcing.day_of_year` pattern)
+
+*Warm-start infrastructure:*
+- `spinup_prescribed_sst()` in `timestepping/spinup.py`: runs prescribed-SST spinup and Q-flux diagnosis in memory, returning a `SpinupResult(state, q_flux, ...)` ready to feed directly into `build_coupled_pe_stepper`. No disk I/O required.
+- `save_restart()` / `load_restart()` in `initial_conditions.py` for optional disk-based restart files (useful when spinup and coupled runs are separate CLI invocations)
+
+**Validation:**
+- 28 unit tests for boundary layer module (362 total, all passing)
+- 100-day slab ocean aquaplanet stable with MO at dt=900 (warm start + diagnosed Q-flux)
+- MO produces physically correct differences from baseline: weaker surface fluxes (C_H≈0.0007 vs 0.0015), warmer equatorial SST, more moisture, stronger jets
+- `verify_mo.py` is fully self-contained: runs spinup + Q-flux diagnosis + baseline + MO comparison with zero external files
+
+**Lessons learned:**
+- Cold-starting a coupled slab ocean integration from an isothermal atmosphere creates violent radiative transients (T spike >500 K within days). The proper procedure is `spinup_prescribed_sst()` followed by coupled mode — standard practice in real GCMs but easy to forget in an idealized model.
+- The one-line LW_down approximation `σT_lowest⁴(1-exp(-0.5))` gives ~120 W/m² instead of ~300 W/m² from the actual two-stream solver. The approximation was self-consistent (Q-flux diagnosis and slab ocean used the same formula), but distorted the surface energy budget. With the real LW_down, the diagnosed Q-flux has a -145 W/m² global mean, reflecting the simplified radiation scheme's inherent energy imbalance — this is physically correct (the scheme doesn't conserve energy globally), not a bug.
+- The slab ocean surface energy balance `C·dT/dt = F(T_s)` is stiff because `dF/dT_s ≈ -6 W/m²/K` (from `4σT³` alone). Forward Euler overshoots at dt=900s when net fluxes are large. Linearized implicit stepping eliminates this constraint.
+- Side effects on `forcing` attributes (sst, day_of_year) cannot happen inside `jax.jit` — they cause tracer leaks. These must be set by the driver loop outside JIT, between scan calls.
+
+## Phase 8B — Surface Type Infrastructure (complete)
+
+Per-gridpoint surface properties and idealized land-sea mask generators.
+
+**What was built:**
+- `SurfaceProperties` dataclass (JAX pytree): land_fraction, albedo, z0_momentum, z0_heat — all (n_lat, n_lon)
+- `aquaplanet_surface()`: uniform ocean surface (default)
+- `flat_continent_surface()`: rectangular continent with land/ocean blended properties
+- Default physical constants: ocean (z0=1e-4, albedo=0.06), land (z0=0.05, albedo=0.25)
+- `build_coupled_pe_stepper` accepts `surface_properties` for spatially varying albedo and roughness
+
+**Validation:**
+- 20 unit tests for surface properties, mask generators
+- 4 integration tests: aquaplanet and flat continent 10-day coupled runs, continent cooler than aquaplanet, SST in physical range
+
+## Phase 8C — Bucket Land Surface Model (complete)
+
+Frierson (2006) / Manabe (1969) single-layer soil energy balance with bucket hydrology, evaporation resistance, and blended ocean-land fluxes.
+
+**What was built:**
+
+*Bucket land model:*
+- `BucketLandConfig`: soil heat capacity (4×10⁶ J/(m²·K), ~2 m moist soil), bucket capacity (0.15 m), beta parameters, moisture-dependent albedo option
+- `LandState` (JAX pytree): soil_temperature (n_lat, n_lon), bucket_depth (n_lat, n_lon)
+- `SurfaceState`: wraps OceanState + optional LandState for clean coupled stepper signature
+- `beta_function`: evaporation resistance β = min(1, W/W_crit) — linear ramp from dry (no evaporation) to saturated (unlimited)
+- `compute_net_land_flux`: F_net = SW + LW_down − σT⁴ − H − β·L·E_pot, returns both net flux and evaporation rate
+- `land_flux_derivative`: dF/dT_land for linearized implicit stepping
+- `step_land_implicit`: same linearized Newton scheme as slab ocean, unconditionally stable
+- `step_bucket_hydrology`: dW/dt = P − E, clamped to [0, W_max] (overflow = runoff)
+- `diagnose_precipitation`: column-integrated moisture sink from Betts-Miller convection + large-scale condensation
+- `moisture_dependent_albedo`: Frierson (2006) α = α_wet + (α_dry − α_wet)·(1 − W/W_max), blended with ocean albedo via land_fraction
+
+*Coupled stepper:*
+- `build_coupled_pe_stepper` accepts `land_config`, uses `SurfaceState` (backward compatible: land=None → ocean-only path)
+- Land+ocean path: separate energy balances, precipitation diagnostic, blended implicit atmospheric decay toward (1−f)·SST + f·T_land
+- Monin-Obukhov `compute_transfer_coefficients` accepts spatially varying z0 overrides from SurfaceProperties
+
+**Validation:**
+- 37 unit tests for all new functions (pytree round-trip, beta, fluxes, stepping, hydrology, albedo, precipitation)
+- 4 integration tests: 10-day coupled land-ocean run stable, SST/T_land/bucket in physical ranges
+- All 397 non-slow tests pass, all 8 slow integration tests pass (including ocean-only regression)
+
+**Lessons learned:**
+- The implicit atmospheric decay at the lowest level MUST be applied at land points (decaying toward T_land), not just ocean. Without it, the lowest-level temperature at land points is unconstrained and creates dynamical instability from large air-surface temperature contrasts within 2-3 days.
+- Soil heat capacity of 1×10⁶ J/(m²·K) (thin dry soil) is too low for stability at T21 with dt=900s — the land heats rapidly when the bucket drains and evaporative cooling vanishes. Default of 4×10⁶ (~2 m moist soil) provides stable integration while maintaining realistic diurnal/synoptic response.
+- The explicit LW radiation in `SimplePhysics.__call__` uses `self.sst` as the surface emission boundary. For coupled land runs, this means LW radiation over land uses the ocean SST rather than T_land. The error is modest (~10 W/m² for a 15 K difference) because the land energy balance in the coupled post-step uses the correct T_land. A future improvement would pass the blended surface temperature through `forcing.sst`, but this requires updating it every timestep (not just per-day), which is incompatible with `jax.lax.scan`.
+- The bucket drains significantly over 10 days (0.11 → 0.01 m) as evaporation exceeds precipitation during the cold-start transient. In equilibrium, the precipitation-evaporation balance should maintain the bucket near its critical depth.
+
+## Phase 9 — Topography
+
+Prescribed orography and its dynamical/physical effects.
 
 **Plan:**
+- Prescribed surface geopotential z_s(lat, lon) fed into the divergence tendency (∇²(g·z_s) term already wired in the dynamical core)
+- Spectral representation of orography with appropriate smoothing/filtering
+- Surface pressure initialization consistent with orography
+- Orographic effects on precipitation, flow deflection, rain shadows
+
+## Phase 10 — Radiation Upgrade
+
+The current Byrne semi-gray scheme has a -145 W/m² global energy imbalance (SW surface and atmospheric absorption computed independently). Phase 10 fixes this and optionally upgrades to multi-band radiation.
+
+**Plan (tiered):**
+- Fix energy conservation in the semi-gray scheme: ensure SW reaching the surface equals TOA minus atmospheric absorption (currently computed independently, causing the imbalance). Minimal code change.
+- Multi-band gray (Isca-style): 2-3 LW bands + 2 SW bands with band-specific optical depths tuned to match RRTMGP in a mean sense. Gives water vapor feedback, CO2 sensitivity, and proper surface budgets without the weight of full correlated-k.
+- RRTMGP (aspirational): correlated-k method via pyrrtmgp or a JAX port. State-of-the-art accuracy for quantitative climate sensitivity experiments.
+
+## Phase 11+ — Future Wishlist
+
+Optional extensions for further realism.
+
+**Candidates:**
 - Diurnal cycle (instantaneous solar zenith angle, time-of-day dependent insolation)
-- Simple land surface model (bucket hydrology, surface energy balance)
-- Monin-Obukhov boundary layer parameterization (stability-dependent drag, prognostic BL depth)
-- Upgrade from constant C_D to full surface similarity theory
-- Sea ice thermodynamics (optional)
+- Sea ice thermodynamics (ice fraction, ice temperature, albedo feedback, freezing/melting)
+- Snow cover (albedo feedback, insulation, melt hydrology)
+- Vegetation / land surface complexity (canopy, root zone, stomatal resistance)
+- Multi-layer soil model

@@ -8,12 +8,20 @@ slab ocean replacing the prescribed SST.
 The slab ocean evolves via surface energy balance:
     dT_s/dt = (SW_abs + LW_down - sigma*T_s^4 - H - LE + Q_flux) / C_ocean
 
-A simple analytic Q-flux provides poleward heat transport.
+**Warm start recommended**: Cold-starting from an isothermal atmosphere
+creates violent transients that can destabilize the integration,
+especially with Monin-Obukhov surface layer. Use ``diagnose_qflux.py
+--save-restart`` to produce a spun-up atmospheric state, then pass it
+via ``--restart-file``.
 
 Usage
 -----
-    uv run python examples/slab_ocean_aquaplanet.py
-    uv run python examples/slab_ocean_aquaplanet.py --days 730 --spinup 365
+    # Step 1: Diagnose Q-flux and save restart
+    uv run python examples/diagnose_qflux.py --days 300 --save-restart restart.npz
+
+    # Step 2: Run slab ocean from warm start
+    uv run python examples/slab_ocean_aquaplanet.py \
+        --restart-file restart.npz --q-flux-file qflux.npz
 """
 
 from __future__ import annotations
@@ -32,12 +40,18 @@ jax.config.update("jax_enable_x64", True)
 from notus.constants import EARTH
 from notus.diagnostics import ZonalMeanState, compute_zonal_mean_state
 from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state
+from notus.initial_conditions import load_restart, moist_aquaplanet_initial_state
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.solar import EARTH_ORBIT
-from notus.physics.surface import OceanState, PrescribedSST, SlabOceanConfig, compute_sst
+from notus.physics.surface import (
+    OceanState,
+    PrescribedSST,
+    SlabOceanConfig,
+    SurfaceState,
+    compute_sst,
+)
 from notus.timestepping.coupled import build_coupled_pe_stepper
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import standard_sigma_levels
@@ -51,6 +65,7 @@ def run_slab_ocean_aquaplanet(
     dt: float = 900.0,
     q_flux_amplitude: float = 30.0,
     q_flux_file: str | None = None,
+    restart_file: str | None = None,
 ) -> bool:
     """Run a slab ocean aquaplanet with seasonal insolation.
 
@@ -74,7 +89,21 @@ def run_slab_ocean_aquaplanet(
     transform = SpectralTransform(grid, EARTH.radius)
     levels = standard_sigma_levels(n_levels)
 
-    state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
+    # Warm start from restart, or cold start from isothermal IC
+    if restart_file is not None:
+        state, _ = load_restart(restart_file)
+        print(f"  Warm start from {restart_file}")
+    else:
+        state, _, _ = moist_aquaplanet_initial_state(
+            transform,
+            EARTH,
+            levels,
+            initial_rh=0.7,
+            seed=42,
+        )
+
+    # ref_temps and surface_phi always needed for semi-implicit solver
+    _, ref_temps, surface_phi = moist_aquaplanet_initial_state(
         transform,
         EARTH,
         levels,
@@ -111,6 +140,7 @@ def run_slab_ocean_aquaplanet(
         grid.latitudes,
     )
     ocean = OceanState(surface_temperature=sst_init)
+    surface = SurfaceState(ocean=ocean)
 
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_coupled_pe_stepper(
@@ -133,7 +163,7 @@ def run_slab_ocean_aquaplanet(
         carry: tuple,
         day_of_year: jnp.ndarray,
     ) -> tuple[tuple, None]:
-        prev, curr, oc = carry
+        prev, curr, sfc = carry
         # Set day_of_year for seasonal insolation
         forcing.day_of_year = day_of_year
 
@@ -141,22 +171,22 @@ def run_slab_ocean_aquaplanet(
             carry: tuple,
             _: None,
         ) -> tuple[tuple, None]:
-            p, c, o = carry
-            p, c, o = step_fn(p, c, o)
-            return (p, c, o), None
+            p, c, s = carry
+            p, c, s = step_fn(p, c, s)
+            return (p, c, s), None
 
-        (prev, curr, oc), _ = jax.lax.scan(step, (prev, curr, oc), None, length=steps_per_day)
-        return (prev, curr, oc), None
+        (prev, curr, sfc), _ = jax.lax.scan(step, (prev, curr, sfc), None, length=steps_per_day)
+        return (prev, curr, sfc), None
 
     one_day_jit = jax.jit(one_day)
 
     # --- Initialize ---
     print("Initializing...")
     t0 = time.perf_counter()
-    prev, curr, ocean = init_fn(state, ocean)
+    prev, curr, surface = init_fn(state, surface)
 
     # Force compilation on first day
-    (prev, curr, ocean), _ = one_day_jit((prev, curr, ocean), jnp.float64(0.0))
+    (prev, curr, surface), _ = one_day_jit((prev, curr, surface), jnp.float64(0.0))
     t_compile = time.perf_counter() - t0
     print(f"Day 1 (incl. JIT compile): {t_compile:.1f}s")
 
@@ -229,14 +259,16 @@ def run_slab_ocean_aquaplanet(
     t_start = time.perf_counter()
     for day in range(2, n_days + 1):
         day_of_year = jnp.float64(day % days_per_year)
-        (prev, curr, ocean), _ = one_day_jit((prev, curr, ocean), day_of_year)
+        # Sync forcing SST with ocean for consistent LW radiation
+        forcing.sst = surface.ocean.surface_temperature
+        (prev, curr, surface), _ = one_day_jit((prev, curr, surface), day_of_year)
 
         if day > spinup_days:
             _accumulate(curr)
 
         if day <= 10 or day % 50 == 0 or day == n_days:
             elapsed = time.perf_counter() - t_start
-            if not _print_status(day, curr, ocean, elapsed):
+            if not _print_status(day, curr, surface.ocean, elapsed):
                 return False
 
     total_time = time.perf_counter() - t0
@@ -244,7 +276,7 @@ def run_slab_ocean_aquaplanet(
     print(f"Averaged over {n_averaging_samples} daily samples")
 
     # --- Print summary ---
-    sst_final = np.asarray(ocean.surface_temperature)
+    sst_final = np.asarray(surface.ocean.surface_temperature)
     lat_deg = np.degrees(np.asarray(grid.latitudes))
     eq_idx = np.argmin(np.abs(lat_deg))
     pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
@@ -291,6 +323,12 @@ def main() -> None:
     parser.add_argument(
         "--q-flux-file", type=str, default=None, help="Q-flux .npz file from diagnose_qflux.py"
     )
+    parser.add_argument(
+        "--restart-file",
+        type=str,
+        default=None,
+        help="Warm-start from restart .npz (from diagnose_qflux.py --save-restart)",
+    )
     args = parser.parse_args()
 
     passed = run_slab_ocean_aquaplanet(
@@ -301,6 +339,7 @@ def main() -> None:
         dt=args.dt,
         q_flux_amplitude=args.q_flux,
         q_flux_file=args.q_flux_file,
+        restart_file=args.restart_file,
     )
 
     sys.exit(0 if passed else 1)

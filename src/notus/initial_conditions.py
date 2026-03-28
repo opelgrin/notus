@@ -1,7 +1,8 @@
-"""Analytic initial conditions for dynamical core validation.
+"""Initial conditions and restart files for the dynamical core.
 
-Implements the Jablonowski & Williamson (2006) baroclinic instability
-test case and the Held-Suarez (1994) isothermal rest state.
+Analytic initial conditions for validation (Jablonowski-Williamson,
+Held-Suarez, aquaplanet), plus save/load of restart states for warm-
+starting coupled integrations.
 
 References
 ----------
@@ -512,3 +513,72 @@ def moist_aquaplanet_initial_state(
 
     moist_state = state.replace(humidity=q_spec)
     return moist_state, ref_temps, surf_geo
+
+
+# ---------------------------------------------------------------------------
+# Restart file I/O
+# ---------------------------------------------------------------------------
+
+
+def save_restart(
+    path: str,
+    state: PrimitiveEquationState,
+    *,
+    ocean_sst: jnp.ndarray | np.ndarray | None = None,
+) -> None:
+    """Save atmospheric (and optionally ocean) state to a restart file.
+
+    The restart file is a ``.npz`` archive containing the spectral
+    coefficients for all prognostic fields.  Coupled runs should save
+    ``ocean_sst`` so the slab ocean can be warm-started too.
+
+    Parameters
+    ----------
+    path : str
+        Output file path (should end in ``.npz``).
+    state : PrimitiveEquationState
+        Atmospheric state in spectral space.
+    ocean_sst : jnp.ndarray or None
+        Ocean surface temperature [K] to include in the restart.
+    """
+    data: dict[str, np.ndarray] = {
+        "vorticity": np.asarray(state.vorticity),
+        "divergence": np.asarray(state.divergence),
+        "temperature": np.asarray(state.temperature),
+        "log_surface_pressure": np.asarray(state.log_surface_pressure),
+    }
+    if state.humidity is not None:
+        data["humidity"] = np.asarray(state.humidity)
+    if ocean_sst is not None:
+        data["ocean_sst"] = np.asarray(ocean_sst)
+    np.savez(path, **data)  # type: ignore[arg-type]
+
+
+def load_restart(
+    path: str,
+) -> tuple[PrimitiveEquationState, jnp.ndarray | None]:
+    """Load atmospheric (and optionally ocean) state from a restart file.
+
+    Parameters
+    ----------
+    path : str
+        Path to the ``.npz`` restart file.
+
+    Returns
+    -------
+    state : PrimitiveEquationState
+        Atmospheric state in spectral space.
+    ocean_sst : jnp.ndarray or None
+        Ocean surface temperature [K], or ``None`` if not saved.
+    """
+    data = np.load(path)
+    humidity = jnp.array(data["humidity"]) if "humidity" in data else None
+    state = PrimitiveEquationState(
+        vorticity=jnp.array(data["vorticity"]),
+        divergence=jnp.array(data["divergence"]),
+        temperature=jnp.array(data["temperature"]),
+        log_surface_pressure=jnp.array(data["log_surface_pressure"]),
+        humidity=humidity,
+    )
+    ocean_sst = jnp.array(data["ocean_sst"]) if "ocean_sst" in data else None
+    return state, ocean_sst
