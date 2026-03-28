@@ -19,18 +19,14 @@ from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
 from notus.physics.forcing import Forcing
 from notus.physics.moisture import saturation_specific_humidity
-from notus.physics.radiation import (
-    STEFAN_BOLTZMANN,
-    byrne_longwave_optical_depth,
-    longwave_optical_depth,
-    lw_down_surface,
-)
+from notus.physics.radiation import STEFAN_BOLTZMANN
 from notus.physics.solar import daily_mean_insolation
 from notus.physics.surface import (
     OceanState,
     SlabOceanConfig,
     compute_net_surface_flux,
-    step_slab_ocean,
+    step_slab_ocean_implicit,
+    surface_flux_derivative,
 )
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
@@ -155,13 +151,6 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
         cfg.surface_layer if cfg is not None and hasattr(cfg, "surface_layer") else None
     )
     sw_tau_0 = cfg.sw_tau_0 if cfg is not None else 0.0
-    radiation_scheme = cfg.radiation_scheme if cfg is not None else "frierson"
-    lw_tau_equator = cfg.tau_equator if cfg is not None else 6.0
-    lw_tau_pole = cfg.tau_pole if cfg is not None else 0.1
-    lw_linear_fraction = cfg.linear_fraction if cfg is not None else 0.1
-    lw_alpha = cfg.alpha if cfg is not None else 4.0
-    lw_byrne_a = cfg.byrne_a if cfg is not None else 0.8678
-    lw_byrne_b = cfg.byrne_b if cfg is not None else 1997.9
     heat_capacity = ocean_config.heat_capacity
     sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
 
@@ -243,23 +232,8 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
         wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = _surface_state(state, ocean)
         insolation = _compute_insolation()
 
-        # Downward LW flux at surface from the two-stream radiation solver
-        t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
-        if radiation_scheme == "byrne" and state.humidity is not None:
-            q_grid = jnp.maximum(
-                jax.vmap(transform.spectral_to_grid)(state.humidity), 0.0,
-            )
-            tau_half = byrne_longwave_optical_depth(
-                levels.dsigma, q_grid, ps_grid, planet.reference_pressure,
-                byrne_a=lw_byrne_a, byrne_b=lw_byrne_b,
-            )
-        else:
-            tau_half = longwave_optical_depth(
-                levels.sigma_half, transform.grid.sin_lat,
-                tau_equator=lw_tau_equator, tau_pole=lw_tau_pole,
-                linear_fraction=lw_linear_fraction, alpha=lw_alpha,
-            )
-        lw_down = lw_down_surface(t_grid, tau_half)
+        # Approximate downward LW flux at surface
+        lw_down = STEFAN_BOLTZMANN * t_lowest_grid**4 * (1.0 - jnp.exp(-0.5))
 
         net_flux = compute_net_surface_flux(
             ocean.surface_temperature, t_lowest_grid, q_lowest,
@@ -272,9 +246,24 @@ def build_coupled_pe_stepper(  # noqa: PLR0915
             sw_tau_0=sw_tau_0,
         )
 
-        # Update ocean SST (zonal-mean flux for 1-D SST)
-        ocean = step_slab_ocean(
-            ocean, jnp.mean(net_flux, axis=-1), q_flux, heat_capacity, dt_implicit,
+        # Derivative of net flux w.r.t. SST (for implicit step)
+        dflux_dt = surface_flux_derivative(
+            ocean.surface_temperature, wind_speed, ps_grid,
+            gas_constant=planet.gas_constant,
+            specific_heat_cp=planet.specific_heat_cp,
+            epsilon=planet.epsilon_moisture,
+            latent_heat=planet.latent_heat_vaporization,
+            drag_coefficient=c_h,
+        )
+
+        # Update ocean SST (linearized implicit, zonal-mean for 1-D SST)
+        ocean = step_slab_ocean_implicit(
+            ocean,
+            jnp.mean(net_flux, axis=-1),
+            jnp.mean(dflux_dt, axis=-1),
+            q_flux,
+            heat_capacity,
+            dt_implicit,
         )
         new_sst = ocean.surface_temperature
 

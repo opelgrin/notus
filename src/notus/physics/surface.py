@@ -357,7 +357,7 @@ def step_slab_ocean(
     heat_capacity: float,
     dt: float,
 ) -> OceanState:
-    """Advance the slab ocean by one timestep.
+    """Advance the slab ocean by one timestep (forward Euler).
 
     Parameters
     ----------
@@ -379,3 +379,125 @@ def step_slab_ocean(
     """
     sst_new = ocean.surface_temperature + dt * (net_surface_flux + q_flux) / heat_capacity
     return OceanState(surface_temperature=sst_new)
+
+
+def step_slab_ocean_implicit(
+    ocean: OceanState,
+    net_surface_flux: jnp.ndarray,
+    dflux_dt_s: jnp.ndarray,
+    q_flux: jnp.ndarray,
+    heat_capacity: float,
+    dt: float,
+) -> OceanState:
+    r"""Advance the slab ocean by one timestep (linearized implicit).
+
+    Linearizes the surface flux around the current SST and solves
+    implicitly for unconditional stability::
+
+        C · (T_new - T_old) / dt = F(T_old) + dF/dT_s · (T_new - T_old) + Q
+
+    giving::
+
+        T_new = T_old + dt · (F + Q) / (C - dt · dF/dT_s)
+
+    where ``dF/dT_s < 0`` (more emission and sensible/latent flux at
+    higher SST), so the denominator ``C - dt · dF/dT_s > C``, ensuring
+    unconditional stability for any timestep.
+
+    Parameters
+    ----------
+    ocean : OceanState
+        Current ocean state.
+    net_surface_flux : jnp.ndarray
+        Net downward surface flux evaluated at current SST [W/m²].
+    dflux_dt_s : jnp.ndarray
+        Derivative of net flux with respect to SST [W/(m²·K)].
+        Should be negative (more cooling at higher T_s).
+    q_flux : jnp.ndarray
+        Prescribed ocean heat transport [W/m²].
+    heat_capacity : float
+        Ocean heat capacity per unit area [J/(m²·K)].
+    dt : float
+        Timestep [s].
+
+    Returns
+    -------
+    OceanState
+        Updated ocean state.
+    """
+    sst_new = ocean.surface_temperature + dt * (
+        net_surface_flux + q_flux
+    ) / (heat_capacity - dt * dflux_dt_s)
+    return OceanState(surface_temperature=sst_new)
+
+
+def surface_flux_derivative(
+    surface_temperature: jnp.ndarray,
+    wind_speed: jnp.ndarray,
+    surface_pressure: jnp.ndarray,
+    *,
+    gas_constant: float,
+    specific_heat_cp: float,
+    epsilon: float,
+    latent_heat: float,
+    drag_coefficient: float | jnp.ndarray,
+) -> jnp.ndarray:
+    r"""Derivative of net surface flux with respect to SST.
+
+    .. math::
+        \frac{dF}{dT_s} = -4\sigma T_s^3
+            - \rho \, c_p \, C_H \, |V|
+            - \rho \, L \, C_H \, |V| \, \frac{dq_{sat}}{dT_s}
+
+    The Clausius-Clapeyron derivative is::
+
+        dq_sat/dT_s ≈ L · ε · e_sat / (R_d · T_s²) · q_sat / e_sat
+                     = L · q_sat / (R_v · T_s²)
+
+    This derivative is always negative (higher SST → more cooling),
+    ensuring the implicit denominator is always > C.
+
+    Parameters
+    ----------
+    surface_temperature : jnp.ndarray
+        SST [K].
+    wind_speed : jnp.ndarray
+        Lowest-level wind speed [m/s].
+    surface_pressure : jnp.ndarray
+        Surface pressure [Pa].
+    gas_constant : float
+        Specific gas constant for dry air [J/(kg·K)].
+    specific_heat_cp : float
+        Specific heat at constant pressure [J/(kg·K)].
+    epsilon : float
+        Ratio R_d / R_v.
+    latent_heat : float
+        Latent heat of vaporization [J/kg].
+    drag_coefficient : float or jnp.ndarray
+        Surface drag coefficient C_H.
+
+    Returns
+    -------
+    jnp.ndarray
+        dF/dT_s [W/(m²·K)], always negative.
+    """
+    t_s = surface_temperature[:, None] if surface_temperature.ndim == 1 else surface_temperature
+
+    # Surface density
+    t_safe = jnp.maximum(t_s, 1.0)
+    rho_sfc = surface_pressure / (gas_constant * t_safe)
+
+    # LW up derivative: -4σT_s³
+    dlw_dt = -4.0 * STEFAN_BOLTZMANN * t_s**3
+
+    # Sensible heat flux derivative: -ρ·cp·C_H·|V|
+    dh_dt = -rho_sfc * specific_heat_cp * drag_coefficient * wind_speed
+
+    # Latent heat flux derivative: -ρ·L·C_H·|V|·dq_sat/dT_s
+    # dq_sat/dT_s = L·q_sat / (R_v·T_s²)  where R_v = R_d/ε
+    r_v = gas_constant / epsilon
+    q_sat = saturation_specific_humidity(t_s, surface_pressure, epsilon)
+    dqsat_dt = latent_heat * q_sat / (r_v * t_s**2)
+    dle_dt = -rho_sfc * latent_heat * drag_coefficient * wind_speed * dqsat_dt
+
+    return dlw_dt + dh_dt + dle_dt
