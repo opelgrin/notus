@@ -272,8 +272,12 @@ def build_pe_semi_implicit_config(
     geo_w = geopotential_weights(levels, gas_constant)
     temp_w = temperature_implicit_weights(levels, kappa, t_ref)
     coupling = pe_coupling_matrix(
-        levels, gas_constant, kappa, t_ref,
-        reference_humidity=reference_humidity, epsilon_v=epsilon_v,
+        levels,
+        gas_constant,
+        kappa,
+        t_ref,
+        reference_humidity=reference_humidity,
+        epsilon_v=epsilon_v,
     )
 
     # Virtual temperature scaling for the implicit solver
