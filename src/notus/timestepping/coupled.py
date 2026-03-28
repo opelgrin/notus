@@ -17,7 +17,6 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
-from notus.physics.forcing import Forcing
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
@@ -25,7 +24,10 @@ from notus.physics.radiation import (
     longwave_optical_depth,
     lw_down_surface,
     shortwave_heating,
+    speedy_lw_down_surface,
+    speedy_shortwave_heating,
 )
+from notus.physics.simple_physics import SimplePhysics
 from notus.physics.solar import daily_mean_insolation
 from notus.physics.surface import (
     BucketLandConfig,
@@ -57,11 +59,9 @@ class _ExplicitOnlyForcing:
     stepper handles it with the ocean update instead.
     """
 
-    def __init__(self, forcing: Forcing) -> None:
+    def __init__(self, forcing: SimplePhysics) -> None:
         self._forcing = forcing
-        # Forward compute_reference_humidity if present
-        if hasattr(forcing, "compute_reference_humidity"):
-            self.compute_reference_humidity = forcing.compute_reference_humidity
+        self.compute_reference_humidity = forcing.compute_reference_humidity
 
     def __call__(
         self,
@@ -78,7 +78,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     reference_temperature: np.ndarray,
     surface_geopotential: jnp.ndarray,
     dt: float,
-    forcing: Forcing,
+    forcing: SimplePhysics,
     ocean_config: SlabOceanConfig,
     q_flux: jnp.ndarray,
     surface_properties: SurfaceProperties | None = None,
@@ -120,9 +120,9 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         Surface geopotential in spectral space.
     dt : float
         Timestep [s].
-    forcing : Forcing
-        Physics forcing (must expose ``apply_implicit`` and
-        ``compute_reference_humidity`` for full functionality).
+    forcing : SimplePhysics
+        Physics forcing (provides radiation config, SST, implicit
+        surface physics, and reference humidity).
     ocean_config : SlabOceanConfig
         Slab ocean parameters.
     q_flux : jnp.ndarray
@@ -168,23 +168,32 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
 
     lowest = levels.n_levels - 1
     dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
-    cfg = forcing.config if hasattr(forcing, "config") else None
-    c_d = cfg.c_d if cfg is not None else 0.0015
-    surface_layer_cfg: SurfaceLayerConfig | None = (
-        cfg.surface_layer if cfg is not None and hasattr(cfg, "surface_layer") else None
-    )
-    sw_tau_0 = cfg.sw_tau_0 if cfg is not None else 0.0
-    sw_exponent = cfg.sw_exponent if cfg is not None else 2.0
-    delta_s = cfg.delta_s if cfg is not None else 1.4
-    radiation_scheme = cfg.radiation_scheme if cfg is not None else "frierson"
-    lw_tau_equator = cfg.tau_equator if cfg is not None else 6.0
-    lw_tau_pole = cfg.tau_pole if cfg is not None else 0.1
-    lw_linear_fraction = cfg.linear_fraction if cfg is not None else 0.1
-    lw_alpha = cfg.alpha if cfg is not None else 4.0
-    lw_byrne_a = cfg.byrne_a if cfg is not None else 0.8678
-    lw_byrne_b = cfg.byrne_b if cfg is not None else 1997.9
-    byrne_sw_a = cfg.byrne_sw_a if cfg is not None else 0.0
-    byrne_sw_b = cfg.byrne_sw_b if cfg is not None else 0.2
+    cfg = forcing.config
+    c_d = cfg.c_d
+    surface_layer_cfg: SurfaceLayerConfig | None = cfg.surface_layer
+    sw_tau_0 = cfg.sw_tau_0
+    sw_exponent = cfg.sw_exponent
+    delta_s = cfg.delta_s
+    radiation_scheme = cfg.radiation_scheme
+    lw_tau_equator = cfg.tau_equator
+    lw_tau_pole = cfg.tau_pole
+    lw_linear_fraction = cfg.linear_fraction
+    lw_alpha = cfg.alpha
+    lw_byrne_a = cfg.byrne_a
+    lw_byrne_b = cfg.byrne_b
+    byrne_sw_a = cfg.byrne_sw_a
+    byrne_sw_b = cfg.byrne_sw_b
+    sp_epslw = cfg.speedy_epslw
+    sp_emisfc = cfg.speedy_surface_emissivity
+    sp_ablwin = cfg.speedy_ablwin
+    sp_ablco2 = cfg.speedy_ablco2
+    sp_ablwv1 = cfg.speedy_ablwv1
+    sp_ablwv2 = cfg.speedy_ablwv2
+    sp_absdry = cfg.speedy_absdry
+    sp_absaer = cfg.speedy_absaer
+    sp_sw_abswv1 = cfg.speedy_sw_abswv1
+    sp_sw_abswv2 = cfg.speedy_sw_abswv2
+    sp_vis_frac = cfg.speedy_visible_fraction
     ocean_heat_capacity = ocean_config.heat_capacity
     sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
 
@@ -202,34 +211,54 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     rh_cond = cfg.rh_condensation if cfg is not None else 1.0
     tau_adj = cfg.tau_adjustment if cfg is not None else 43200.0
 
-    def _compute_sw_down_surface(
-        state: PrimitiveEquationState,
-        ps_grid: jnp.ndarray,
-        effective_albedo: float | jnp.ndarray,
-    ) -> jnp.ndarray:
-        """Compute SW flux reaching the surface [W/m²].
-
-        Uses the same :func:`shortwave_heating` as the atmospheric column
-        so that atmospheric absorption + surface flux = TOA incoming.
-        """
+    def _compute_insolation() -> jnp.ndarray:
+        """Compute TOA insolation (seasonal or fixed Frierson profile)."""
         sin_lat = transform.grid.sin_lat
-        if sw_tau_0 <= 0.0:
-            n_lat, n_lon = ps_grid.shape
-            return jnp.zeros((n_lat, n_lon))
-
-        insolation: jnp.ndarray | None = None  # seasonal or fixed
-        if (
-            hasattr(forcing, "day_of_year")
-            and forcing.day_of_year is not None
-            and cfg is not None
-            and cfg.orbital is not None
-        ):
-            insolation = daily_mean_insolation(
+        if forcing.day_of_year is not None and cfg.orbital is not None:
+            return daily_mean_insolation(
                 sin_lat,
                 forcing.day_of_year,
                 planet.solar_constant,
                 cfg.orbital,
             )
+        return planet.solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+
+    def _compute_sw_down_surface(
+        state: PrimitiveEquationState,
+        ps_grid: jnp.ndarray,
+        effective_albedo: float | jnp.ndarray,
+    ) -> jnp.ndarray:
+        """Compute SW flux reaching the surface [W/m²]."""
+        sin_lat = transform.grid.sin_lat
+
+        if radiation_scheme == "speedy" and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            _, sw_down_sfc = speedy_shortwave_heating(
+                levels.dsigma,
+                levels.sigma_full,
+                q_grid,
+                ps_grid,
+                planet.reference_pressure,
+                _compute_insolation(),
+                planet.gravity,
+                planet.specific_heat_cp,
+                surface_albedo=effective_albedo,
+                absdry=sp_absdry,
+                absaer=sp_absaer,
+                abswv1=sp_sw_abswv1,
+                abswv2=sp_sw_abswv2,
+                visible_fraction=sp_vis_frac,
+            )
+            return sw_down_sfc
+
+        if sw_tau_0 <= 0.0:
+            n_lat, n_lon = ps_grid.shape
+            return jnp.zeros((n_lat, n_lon))
+
+        insolation = _compute_insolation()
 
         # Humidity-dependent SW optical depth for Byrne scheme
         tau_sw: jnp.ndarray | None = None
@@ -331,10 +360,34 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     def _compute_lw_down(
         state: PrimitiveEquationState,
         ps_grid: jnp.ndarray,
+        sst: jnp.ndarray | None = None,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
         """Compute downward LW flux and return grid-space fields."""
         t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
         q_grid: jnp.ndarray | None = None
+
+        if radiation_scheme == "speedy" and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            t_sfc = sst if sst is not None else forcing.sst
+            lw_down = speedy_lw_down_surface(
+                t_grid,
+                t_sfc,
+                q_grid,
+                levels.dsigma,
+                ps_grid,
+                planet.reference_pressure,
+                epslw=sp_epslw,
+                surface_emissivity=sp_emisfc,
+                ablwin=sp_ablwin,
+                ablco2=sp_ablco2,
+                ablwv1=sp_ablwv1,
+                ablwv2=sp_ablwv2,
+            )
+            return lw_down, t_grid, q_grid
+
         if radiation_scheme == "byrne" and state.humidity is not None:
             q_grid = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
@@ -367,12 +420,11 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     ) -> tuple[PrimitiveEquationState, SurfaceState]:
         """Post-step for ocean-only mode (backward compatible)."""
         # Rayleigh friction
-        if hasattr(forcing, "k_v"):
-            damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
-            state = state.replace(
-                vorticity=state.vorticity * damp,
-                divergence=state.divergence * damp,
-            )
+        damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
+        state = state.replace(
+            vorticity=state.vorticity * damp,
+            divergence=state.divergence * damp,
+        )
 
         wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = _surface_state(
             state,
@@ -463,12 +515,11 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         land: LandState = surface.land  # type: ignore[assignment]
 
         # Rayleigh friction
-        if hasattr(forcing, "k_v"):
-            damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
-            state = state.replace(
-                vorticity=state.vorticity * damp,
-                divergence=state.divergence * damp,
-            )
+        damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
+        state = state.replace(
+            vorticity=state.vorticity * damp,
+            divergence=state.divergence * damp,
+        )
 
         wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = _surface_state(
             state,

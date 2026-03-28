@@ -493,3 +493,503 @@ def byrne_shortwave_optical_depth(
     tau_base = sw_tau_0 * sigma_half[:, None, None] ** 2
 
     return tau_humidity + jnp.broadcast_to(tau_base, (n_levels + 1, n_lat, n_lon))
+
+
+# ---------------------------------------------------------------------------
+# SPEEDY-style multi-band radiation (Molteni 2003 / JCM)
+# ---------------------------------------------------------------------------
+
+N_LW_BANDS: int = 4
+
+
+def speedy_lw_band_fractions(
+    temperature: jnp.ndarray,
+    *,
+    epslw: float = 0.05,
+) -> jnp.ndarray:
+    """Compute temperature-dependent LW band fractions (SPEEDY ``radset``).
+
+    Returns the fraction of blackbody emission in each of 4 spectral
+    bands as a function of temperature, following Molteni (2003)::
+
+        f₁ = 0.148 − 3.0×10⁻⁶ (T − 247)²   (H₂O weak)
+        f₂ = 0.356 − 5.2×10⁻⁶ (T − 282)²   (H₂O strong)
+        f₃ = 0.314 + 1.0×10⁻⁵ (T − 315)²   (CO₂)
+        f₀ = 1 − f₁ − f₂ − f₃               (window)
+
+    All fractions are scaled by ``(1 − epslw)``.
+
+    Parameters
+    ----------
+    temperature : jnp.ndarray
+        Temperature [K], any shape.
+    epslw : float
+        Fraction of blackbody spectrum absorbed/emitted by PBL only.
+
+    Returns
+    -------
+    jnp.ndarray
+        Band fractions, shape ``(4, *temperature.shape)``.
+    """
+    t = jnp.clip(temperature, 200.0, 320.0)
+    f1 = 0.148 - 3.0e-6 * (t - 247.0) ** 2
+    f2 = 0.356 - 5.2e-6 * (t - 282.0) ** 2
+    f3 = 0.314 + 1.0e-5 * (t - 315.0) ** 2
+    f0 = 1.0 - f1 - f2 - f3
+    scale = 1.0 - epslw
+    return scale * jnp.stack([f0, f1, f2, f3], axis=0)
+
+
+def _speedy_two_stream_band(
+    bb_band: jnp.ndarray,
+    transmissivity: jnp.ndarray,
+    bb_surface_band: jnp.ndarray,
+    surface_emissivity: float,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Single-band two-stream radiative transfer.
+
+    Computes upward and downward fluxes at half-level interfaces for
+    one spectral band, then returns the net flux divergence per layer,
+    the downward flux at the surface, and the outgoing flux at TOA.
+
+    Designed to be ``jax.vmap``-ed over the band axis.
+
+    Parameters
+    ----------
+    bb_band : jnp.ndarray
+        Band-weighted blackbody emission at full levels [W/m²],
+        shape ``(n_levels, n_lat, n_lon)``.
+    transmissivity : jnp.ndarray
+        Layer transmissivity for this band, shape
+        ``(n_levels, n_lat, n_lon)``.
+    bb_surface_band : jnp.ndarray
+        Band-weighted surface blackbody emission [W/m²],
+        shape ``(n_lat, n_lon)``.
+    surface_emissivity : float
+        Surface LW emissivity (0-1).
+
+    Returns
+    -------
+    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]
+        ``(f_net_half, lw_down_sfc, olr)`` where ``f_net_half`` is the
+        net upward flux at half-level interfaces ``(n_levels+1, n_lat, n_lon)``,
+        ``lw_down_sfc`` is the downward flux at the surface ``(n_lat, n_lon)``,
+        and ``olr`` is the outgoing LW at TOA ``(n_lat, n_lon)``.
+    """
+    emissivity = 1.0 - transmissivity  # (n_levels, n_lat, n_lon)
+
+    # --- Upward flux: scan from surface to TOA ---
+    f_up_sfc = surface_emissivity * bb_surface_band  # (n_lat, n_lon)
+
+    def _upward_step(
+        f_up: jnp.ndarray,
+        layer: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        trans_k, emis_k, bb_k = layer
+        f_up_new = f_up * trans_k + emis_k * bb_k
+        return f_up_new, f_up_new
+
+    _, f_up_inner_rev = jax.lax.scan(
+        _upward_step,
+        f_up_sfc,
+        (transmissivity[::-1], emissivity[::-1], bb_band[::-1]),
+    )
+    f_up_inner = f_up_inner_rev[::-1]  # (n_levels, n_lat, n_lon)
+    f_up = jnp.concatenate([f_up_inner, f_up_sfc[None]], axis=0)
+
+    olr = f_up[0]  # (n_lat, n_lon)
+
+    # --- Downward flux: scan from TOA to surface ---
+    n_lat, n_lon = bb_surface_band.shape
+    f_down_toa = jnp.zeros((n_lat, n_lon))
+
+    def _downward_step(
+        f_down: jnp.ndarray,
+        layer: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        trans_k, emis_k, bb_k = layer
+        f_down_new = f_down * trans_k + emis_k * bb_k
+        return f_down_new, f_down_new
+
+    _, f_down_interfaces = jax.lax.scan(
+        _downward_step,
+        f_down_toa,
+        (transmissivity, emissivity, bb_band),
+    )
+    f_down = jnp.concatenate([f_down_toa[None], f_down_interfaces], axis=0)
+
+    lw_down_sfc = f_down[-1]  # (n_lat, n_lon)
+
+    # Net upward flux at half-level interfaces
+    f_net = f_up - f_down  # (n_levels+1, n_lat, n_lon)
+
+    return f_net, lw_down_sfc, olr
+
+
+def speedy_longwave_heating(
+    temperature: jnp.ndarray,
+    surface_temperature: jnp.ndarray,
+    humidity: jnp.ndarray,
+    dsigma: jnp.ndarray,
+    surface_pressure: jnp.ndarray,
+    reference_pressure: float,
+    gravity: float,
+    specific_heat_cp: float,
+    *,
+    epslw: float = 0.05,
+    surface_emissivity: float = 0.98,
+    ablwin: float = 0.3,
+    ablco2: float = 6.0,
+    ablwv1: float = 0.7,
+    ablwv2: float = 50.0,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Compute longwave heating with 4-band SPEEDY scheme.
+
+    Four spectral bands with temperature-dependent fractions and
+    humidity/CO₂-dependent absorptivities::
+
+        Band 0 (window):    α = ablwin            (dry air only)
+        Band 1 (CO₂):       α = ablco2            (well-mixed)
+        Band 2 (H₂O weak):  α = ablwv1 · q        (humidity-dependent)
+        Band 3 (H₂O strong): α = ablwv2 · q        (humidity-dependent)
+
+    Layer transmissivity: ``τ = exp(-(ps/p₀) · Δσ · α)``
+
+    Parameters
+    ----------
+    temperature : jnp.ndarray
+        Temperature at full levels [K], shape ``(n_levels, n_lat, n_lon)``.
+    surface_temperature : jnp.ndarray
+        Surface temperature [K], shape ``(n_lat,)`` or ``(n_lat, n_lon)``.
+    humidity : jnp.ndarray
+        Specific humidity [kg/kg], shape ``(n_levels, n_lat, n_lon)``.
+    dsigma : jnp.ndarray
+        Layer thickness Δσ, shape ``(n_levels,)``.
+    surface_pressure : jnp.ndarray
+        Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+    reference_pressure : float
+        Reference pressure p₀ [Pa].
+    gravity : float
+        Gravitational acceleration [m/s²].
+    specific_heat_cp : float
+        Specific heat at constant pressure [J/(kg·K)].
+    epslw : float
+        Fraction of blackbody emitted by PBL only.
+    surface_emissivity : float
+        Surface LW emissivity.
+    ablwin : float
+        Window-band absorptivity (per Δp = p₀).
+    ablco2 : float
+        CO₂-band absorptivity (per Δp = p₀).
+    ablwv1 : float
+        H₂O weak-band absorptivity coefficient.
+    ablwv2 : float
+        H₂O strong-band absorptivity coefficient.
+
+    Returns
+    -------
+    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]
+        ``(heating_rate, lw_down_sfc, olr)`` — LW heating rate [K/s]
+        shape ``(n_levels, n_lat, n_lon)``, downward LW flux at the
+        surface [W/m²] ``(n_lat, n_lon)``, and outgoing LW radiation
+        at TOA [W/m²] ``(n_lat, n_lon)``.
+    """
+    _n_levels, n_lat, n_lon = temperature.shape
+
+    # Broadcast surface temperature
+    if surface_temperature.ndim == 1:
+        surface_temperature = surface_temperature[:, None]
+    t_s = jnp.broadcast_to(surface_temperature, (n_lat, n_lon))
+
+    # Pressure ratio per layer: (n_levels, n_lat, n_lon)
+    ps_ratio = surface_pressure[None, :, :] / reference_pressure
+    dp_factor = dsigma[:, None, None] * ps_ratio
+
+    # Per-band absorptivity: (4, n_levels, n_lat, n_lon)
+    q = jnp.maximum(humidity, 0.0)
+    alpha_bands = jnp.stack(
+        [
+            jnp.broadcast_to(jnp.full_like(dp_factor, ablwin), dp_factor.shape),
+            jnp.broadcast_to(jnp.full_like(dp_factor, ablco2), dp_factor.shape),
+            ablwv1 * q,
+            ablwv2 * q,
+        ],
+        axis=0,
+    )  # (4, n_levels, n_lat, n_lon)
+
+    # Transmissivity per band per layer
+    tau_bands = dp_factor[None, :, :, :] * alpha_bands
+    trans_bands = jnp.exp(-tau_bands)  # (4, n_levels, n_lat, n_lon)
+
+    # Band-weighted blackbody at full levels: (4, n_levels, n_lat, n_lon)
+    fband = speedy_lw_band_fractions(temperature, epslw=epslw)
+    bb_total = STEFAN_BOLTZMANN * temperature**4  # (n_levels, n_lat, n_lon)
+    bb_bands = fband * bb_total[None, :, :, :]
+
+    # Band-weighted surface blackbody: (4, n_lat, n_lon)
+    fband_sfc = speedy_lw_band_fractions(t_s, epslw=epslw)
+    bb_sfc_total = STEFAN_BOLTZMANN * t_s**4
+    bb_sfc_bands = fband_sfc * bb_sfc_total[None, :, :]
+
+    # vmap the two-stream over the band axis (axis 0)
+    f_net_all, lw_down_all, olr_all = jax.vmap(
+        lambda bb, tr, bb_s: _speedy_two_stream_band(
+            bb,
+            tr,
+            bb_s,
+            surface_emissivity,
+        ),
+    )(bb_bands, trans_bands, bb_sfc_bands)
+
+    # Sum over bands
+    f_net = jnp.sum(f_net_all, axis=0)  # (n_levels+1, n_lat, n_lon)
+    lw_down_sfc = jnp.sum(lw_down_all, axis=0)  # (n_lat, n_lon)
+    olr = jnp.sum(olr_all, axis=0)  # (n_lat, n_lon)
+
+    # Heating rate from net flux divergence
+    df_net = f_net[:-1] - f_net[1:]  # (n_levels, n_lat, n_lon)
+    dp = dsigma[:, None, None] * surface_pressure[None, :, :]
+    heating_rate = -gravity / specific_heat_cp * df_net / dp
+
+    return heating_rate, lw_down_sfc, olr
+
+
+def speedy_lw_down_surface(
+    temperature: jnp.ndarray,
+    surface_temperature: jnp.ndarray,
+    humidity: jnp.ndarray,
+    dsigma: jnp.ndarray,
+    surface_pressure: jnp.ndarray,
+    reference_pressure: float,
+    *,
+    epslw: float = 0.05,
+    surface_emissivity: float = 0.98,
+    ablwin: float = 0.3,
+    ablco2: float = 6.0,
+    ablwv1: float = 0.7,
+    ablwv2: float = 50.0,
+) -> jnp.ndarray:
+    """Compute downward LW flux at surface using 4-band SPEEDY scheme.
+
+    Downward-only scan (cheaper than full ``speedy_longwave_heating``).
+
+    Parameters
+    ----------
+    temperature : jnp.ndarray
+        Temperature at full levels [K], shape ``(n_levels, n_lat, n_lon)``.
+    surface_temperature : jnp.ndarray
+        Surface temperature [K], shape ``(n_lat,)`` or ``(n_lat, n_lon)``.
+    humidity : jnp.ndarray
+        Specific humidity [kg/kg], shape ``(n_levels, n_lat, n_lon)``.
+    dsigma : jnp.ndarray
+        Layer thickness Δσ, shape ``(n_levels,)``.
+    surface_pressure : jnp.ndarray
+        Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+    reference_pressure : float
+        Reference pressure p₀ [Pa].
+    epslw, surface_emissivity, ablwin, ablco2, ablwv1, ablwv2 : float
+        SPEEDY LW parameters (see ``speedy_longwave_heating``).
+
+    Returns
+    -------
+    jnp.ndarray
+        Downward LW flux at the surface [W/m²], shape ``(n_lat, n_lon)``.
+    """
+    _, n_lat, n_lon = temperature.shape
+
+    # Pressure ratio per layer
+    ps_ratio = surface_pressure[None, :, :] / reference_pressure
+    dp_factor = dsigma[:, None, None] * ps_ratio
+
+    # Per-band absorptivity and transmissivity
+    q = jnp.maximum(humidity, 0.0)
+    alpha_bands = jnp.stack(
+        [
+            jnp.broadcast_to(jnp.full_like(dp_factor, ablwin), dp_factor.shape),
+            jnp.broadcast_to(jnp.full_like(dp_factor, ablco2), dp_factor.shape),
+            ablwv1 * q,
+            ablwv2 * q,
+        ],
+        axis=0,
+    )
+    trans_bands = jnp.exp(-dp_factor[None] * alpha_bands)
+
+    # Band-weighted blackbody at full levels
+    fband = speedy_lw_band_fractions(temperature, epslw=epslw)
+    bb_bands = fband * (STEFAN_BOLTZMANN * temperature**4)[None]
+
+    # Downward scan per band (vmapped)
+    def _downward_band(
+        bb_band: jnp.ndarray,
+        trans: jnp.ndarray,
+    ) -> jnp.ndarray:
+        emis = 1.0 - trans
+
+        def _step(
+            f_down: jnp.ndarray,
+            layer: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray],
+        ) -> tuple[jnp.ndarray, None]:
+            tr_k, em_k, bb_k = layer
+            return f_down * tr_k + em_k * bb_k, None
+
+        f_down_sfc, _ = jax.lax.scan(
+            _step,
+            jnp.zeros((n_lat, n_lon)),
+            (trans, emis, bb_band),
+        )
+        return f_down_sfc
+
+    lw_down_bands = jax.vmap(_downward_band)(bb_bands, trans_bands)
+    return jnp.sum(lw_down_bands, axis=0)
+
+
+def speedy_shortwave_heating(
+    dsigma: jnp.ndarray,
+    sigma_full: jnp.ndarray,
+    humidity: jnp.ndarray,
+    surface_pressure: jnp.ndarray,
+    reference_pressure: float,
+    insolation: jnp.ndarray,
+    gravity: float,
+    specific_heat_cp: float,
+    *,
+    surface_albedo: float | jnp.ndarray = 0.0,
+    absdry: float = 0.033,
+    absaer: float = 0.033,
+    abswv1: float = 0.022,
+    abswv2: float = 15.0,
+    visible_fraction: float = 0.95,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Compute shortwave heating with 2-band SPEEDY scheme.
+
+    Two spectral bands:
+
+    - **Band 1** (visible, ``visible_fraction`` of total): absorbed by
+      dry air, aerosols (σ²-weighted), and weak H₂O.
+    - **Band 2** (near-IR, remainder): absorbed by strong H₂O only.
+
+    Downward Beer-Lambert per band, surface albedo reflection, upward
+    absorption, then sum across bands.
+
+    Parameters
+    ----------
+    dsigma : jnp.ndarray
+        Layer thickness Δσ, shape ``(n_levels,)``.
+    sigma_full : jnp.ndarray
+        Full-level σ values, shape ``(n_levels,)``.
+    humidity : jnp.ndarray
+        Specific humidity [kg/kg], shape ``(n_levels, n_lat, n_lon)``.
+    surface_pressure : jnp.ndarray
+        Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+    reference_pressure : float
+        Reference pressure p₀ [Pa].
+    insolation : jnp.ndarray
+        TOA insolation [W/m²], shape ``(n_lat,)``.
+    gravity : float
+        Gravitational acceleration [m/s²].
+    specific_heat_cp : float
+        Specific heat at constant pressure [J/(kg·K)].
+    surface_albedo : float or jnp.ndarray
+        Surface albedo (0-1).
+    absdry : float
+        Dry-air absorptivity (band 1).
+    absaer : float
+        Aerosol absorptivity coefficient (band 1, σ²-weighted).
+    abswv1 : float
+        Water vapor absorptivity (band 1, weak).
+    abswv2 : float
+        Water vapor absorptivity (band 2, strong near-IR).
+    visible_fraction : float
+        Fraction of solar irradiance in band 1.
+
+    Returns
+    -------
+    tuple[jnp.ndarray, jnp.ndarray]
+        ``(heating_rate, sw_down_sfc)`` — SW heating rate [K/s]
+        shape ``(n_levels, n_lat, n_lon)`` and total downward SW flux
+        at the surface [W/m²] shape ``(n_lat, n_lon)``.
+    """
+    _n_levels, n_lat, n_lon = humidity.shape
+    q = jnp.maximum(humidity, 0.0)
+
+    # Pressure factor per layer: (n_levels, n_lat, n_lon)
+    ps_ratio = surface_pressure[None, :, :] / reference_pressure
+    dp_factor = dsigma[:, None, None] * ps_ratio
+
+    # Band 1 (visible): dry air + aerosol(σ²) + weak H₂O
+    alpha_vis = absdry + absaer * sigma_full[:, None, None] ** 2 + abswv1 * q
+    trans_vis = jnp.exp(-dp_factor * alpha_vis)  # (n_levels, n_lat, n_lon)
+
+    # Band 2 (near-IR): strong H₂O only
+    alpha_nir = abswv2 * q
+    trans_nir = jnp.exp(-dp_factor * alpha_nir)  # (n_levels, n_lat, n_lon)
+
+    # TOA flux per band
+    s_vis = insolation[None, :, None] * visible_fraction  # (1, n_lat, 1)
+    s_nir = insolation[None, :, None] * (1.0 - visible_fraction)
+
+    # Downward Beer-Lambert per band (cumulative product of transmissivities)
+    def _downward_scan(
+        carry: jnp.ndarray,
+        trans_k: jnp.ndarray,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        f_new = carry * trans_k
+        return f_new, f_new
+
+    s_vis_2d = jnp.broadcast_to(s_vis, (1, n_lat, n_lon))[0]  # (n_lat, n_lon)
+    _carry_vis, f_vis_levels = jax.lax.scan(_downward_scan, s_vis_2d, trans_vis)
+    # f_vis_levels: (n_levels, n_lat, n_lon) — flux BELOW each layer
+    f_vis_down = jnp.concatenate([s_vis_2d[None], f_vis_levels], axis=0)
+    # (n_levels+1, n_lat, n_lon) — flux at half-levels (TOA to surface)
+
+    s_nir_2d = jnp.broadcast_to(s_nir, (1, n_lat, n_lon))[0]
+    _carry_nir, f_nir_levels = jax.lax.scan(_downward_scan, s_nir_2d, trans_nir)
+    f_nir_down = jnp.concatenate([s_nir_2d[None], f_nir_levels], axis=0)
+
+    # SW reaching surface (sum of both bands)
+    sw_down_sfc = f_vis_down[-1] + f_nir_down[-1]  # (n_lat, n_lon)
+
+    # Absorbed per layer (downward pass)
+    f_abs_vis_down = f_vis_down[:-1] - f_vis_down[1:]
+    f_abs_nir_down = f_nir_down[:-1] - f_nir_down[1:]
+
+    # --- Upward reflected beam ---
+    # Reflected at surface, then Beer-Lambert back up
+    # Upward flux at surface = sw_down_sfc * albedo
+    # tau_up from surface to level k = sum of tau from surface upward
+    # We reverse the transmissivity and scan upward
+    f_up_sfc_vis = f_vis_down[-1] * surface_albedo
+    f_up_sfc_nir = f_nir_down[-1] * surface_albedo
+
+    _carry_vis_up, f_vis_up_levels = jax.lax.scan(
+        _downward_scan,
+        f_up_sfc_vis,
+        trans_vis[::-1],
+    )
+    f_vis_up = jnp.concatenate(
+        [f_vis_up_levels[::-1], f_up_sfc_vis[None]],
+        axis=0,
+    )  # (n_levels+1, n_lat, n_lon)
+
+    _carry_nir_up, f_nir_up_levels = jax.lax.scan(
+        _downward_scan,
+        f_up_sfc_nir,
+        trans_nir[::-1],
+    )
+    f_nir_up = jnp.concatenate(
+        [f_nir_up_levels[::-1], f_up_sfc_nir[None]],
+        axis=0,
+    )
+
+    # Absorbed per layer (upward pass)
+    f_abs_vis_up = f_vis_up[1:] - f_vis_up[:-1]
+    f_abs_nir_up = f_nir_up[1:] - f_nir_up[:-1]
+
+    # Total absorbed per layer
+    f_absorbed = f_abs_vis_down + f_abs_nir_down + f_abs_vis_up + f_abs_nir_up
+
+    # Heating rate
+    dp = dsigma[:, None, None] * surface_pressure[None, :, :]
+    heating_rate = gravity / specific_heat_cp * f_absorbed / dp
+
+    return heating_rate, sw_down_sfc

@@ -34,14 +34,16 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
-from notus.physics.forcing import Forcing
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
     byrne_shortwave_optical_depth,
     longwave_optical_depth,
     lw_down_surface,
     shortwave_heating,
+    speedy_lw_down_surface,
+    speedy_shortwave_heating,
 )
+from notus.physics.simple_physics import SimplePhysics
 from notus.physics.surface import compute_net_surface_flux
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
@@ -78,7 +80,7 @@ class SpinupResult:
 def _diagnose_surface_flux(
     state: PrimitiveEquationState,
     transform: SpectralTransform,
-    forcing: Forcing,
+    forcing: SimplePhysics,
     surface_pressure: jnp.ndarray,
     surface_albedo: float | None = None,
 ) -> jnp.ndarray:
@@ -87,10 +89,9 @@ def _diagnose_surface_flux(
     Uses ``compute_net_surface_flux`` — the same function as the coupled
     slab ocean stepper — for self-consistent Q-flux diagnosis.
     """
-    forcing_: Any = forcing
-    planet = forcing_.planet
-    levels = forcing_.levels
-    cfg = forcing_.config
+    planet = forcing.planet
+    levels = forcing.levels
+    cfg = forcing.config
     lowest = levels.n_levels - 1
     sin_lat = transform.grid.sin_lat
 
@@ -112,8 +113,30 @@ def _diagnose_surface_flux(
     # SW surface flux: consistent with atmospheric absorption
     effective_albedo = surface_albedo if surface_albedo is not None else planet.surface_albedo
     n_lat, n_lon = surface_pressure.shape
-    if cfg.sw_tau_0 > 0.0:
-        # Humidity-dependent SW optical depth for Byrne scheme
+
+    if cfg.radiation_scheme == "speedy" and state.humidity is not None:
+        q_grid_sp = jnp.maximum(
+            jax.vmap(transform.spectral_to_grid)(state.humidity),
+            0.0,
+        )
+        insol = planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+        _, sw_down_sfc = speedy_shortwave_heating(
+            levels.dsigma,
+            levels.sigma_full,
+            q_grid_sp,
+            surface_pressure,
+            planet.reference_pressure,
+            insol,
+            planet.gravity,
+            planet.specific_heat_cp,
+            surface_albedo=effective_albedo,
+            absdry=cfg.speedy_absdry,
+            absaer=cfg.speedy_absaer,
+            abswv1=cfg.speedy_sw_abswv1,
+            abswv2=cfg.speedy_sw_abswv2,
+            visible_fraction=cfg.speedy_visible_fraction,
+        )
+    elif cfg.sw_tau_0 > 0.0:
         tau_sw: jnp.ndarray | None = None
         if cfg.radiation_scheme == "byrne" and state.humidity is not None:
             q_grid_sw = jnp.maximum(
@@ -146,8 +169,27 @@ def _diagnose_surface_flux(
     else:
         sw_down_sfc = jnp.zeros((n_lat, n_lon))
 
-    # Downward LW from two-stream solver
-    if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+    # Downward LW
+    if cfg.radiation_scheme == "speedy" and state.humidity is not None:
+        q_grid_lw = jnp.maximum(
+            jax.vmap(transform.spectral_to_grid)(state.humidity),
+            0.0,
+        )
+        lw_down = speedy_lw_down_surface(
+            t_grid,
+            forcing.sst,
+            q_grid_lw,
+            levels.dsigma,
+            surface_pressure,
+            planet.reference_pressure,
+            epslw=cfg.speedy_epslw,
+            surface_emissivity=cfg.speedy_surface_emissivity,
+            ablwin=cfg.speedy_ablwin,
+            ablco2=cfg.speedy_ablco2,
+            ablwv1=cfg.speedy_ablwv1,
+            ablwv2=cfg.speedy_ablwv2,
+        )
+    elif cfg.radiation_scheme == "byrne" and state.humidity is not None:
         q_grid = jnp.maximum(
             jax.vmap(transform.spectral_to_grid)(state.humidity),
             0.0,
@@ -160,6 +202,7 @@ def _diagnose_surface_flux(
             byrne_a=cfg.byrne_a,
             byrne_b=cfg.byrne_b,
         )
+        lw_down = lw_down_surface(t_grid, tau_half)
     else:
         tau_half = longwave_optical_depth(
             levels.sigma_half,
@@ -169,7 +212,7 @@ def _diagnose_surface_flux(
             linear_fraction=cfg.linear_fraction,
             alpha=cfg.alpha,
         )
-    lw_down = lw_down_surface(t_grid, tau_half)
+        lw_down = lw_down_surface(t_grid, tau_half)
 
     # Humidity at lowest level
     q_lowest = jnp.zeros_like(t_lowest)
@@ -180,9 +223,8 @@ def _diagnose_surface_flux(
         )
 
     # Net flux (same function as coupled stepper)
-    forcing_any: Any = forcing
     net_flux = compute_net_surface_flux(
-        forcing_any.sst,
+        forcing.sst,
         t_lowest,
         q_lowest,
         wind_speed,
@@ -203,7 +245,7 @@ def _diagnose_surface_flux(
 
 def spinup_prescribed_sst(
     state: PrimitiveEquationState,
-    forcing: Forcing,
+    forcing: SimplePhysics,
     transform: SpectralTransform,
     planet: PlanetaryConstants,
     levels: SigmaLevels,
@@ -230,7 +272,7 @@ def spinup_prescribed_sst(
     ----------
     state : PrimitiveEquationState
         Initial atmospheric state (can be cold isothermal).
-    forcing : Forcing
+    forcing : SimplePhysics
         Physics forcing (must have ``config``, ``sst``, ``planet``, ``levels``).
     transform : SpectralTransform
         Spectral transform.
