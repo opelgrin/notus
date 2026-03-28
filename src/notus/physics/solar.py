@@ -93,7 +93,7 @@ def earth_sun_distance_factor(
         Distance factor (a/r)^2, same shape as ``day_of_year``.
     """
     e = orbital.eccentricity
-    if e == 0.0:
+    if e == 0.0:  # noqa: RUF069
         return jnp.ones_like(day_of_year)
 
     # For small eccentricity, first-order approximation:

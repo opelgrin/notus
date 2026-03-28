@@ -222,7 +222,9 @@ class TestLongwaveHeating:
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
         sin_lat = jnp.zeros(n_lat)
         tau_half = longwave_optical_depth(
-            levels.sigma_half, sin_lat, **LW_DEFAULTS,
+            levels.sigma_half,
+            sin_lat,
+            **LW_DEFAULTS,
         )
 
         q_lw = longwave_heating(
@@ -249,7 +251,9 @@ class TestLongwaveHeating:
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
         sin_lat = jnp.zeros(n_lat)
         tau_half = longwave_optical_depth(
-            levels.sigma_half, sin_lat, **LW_DEFAULTS,
+            levels.sigma_half,
+            sin_lat,
+            **LW_DEFAULTS,
         )
 
         q_lw = longwave_heating(
@@ -273,7 +277,9 @@ class TestLongwaveHeating:
         surface_pressure = jnp.ones((n_lat, n_lon)) * 1.0e5
         sin_lat = jnp.zeros(n_lat)
         tau_half = longwave_optical_depth(
-            levels.sigma_half, sin_lat, **LW_DEFAULTS,
+            levels.sigma_half,
+            sin_lat,
+            **LW_DEFAULTS,
         )
 
         q_lw = longwave_heating(
@@ -354,7 +360,10 @@ class TestByrneOpticalDepth:
         humidity = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.005
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
         tau = byrne_longwave_optical_depth(
-            levels.dsigma, humidity, surface_pressure, 1.0e5,
+            levels.dsigma,
+            humidity,
+            surface_pressure,
+            1.0e5,
         )
         np.testing.assert_allclose(tau[0], 0.0)
 
@@ -366,10 +375,16 @@ class TestByrneOpticalDepth:
         q_dry = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.001
         q_wet = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.01
         tau_dry = byrne_longwave_optical_depth(
-            levels.dsigma, q_dry, surface_pressure, 1.0e5,
+            levels.dsigma,
+            q_dry,
+            surface_pressure,
+            1.0e5,
         )
         tau_wet = byrne_longwave_optical_depth(
-            levels.dsigma, q_wet, surface_pressure, 1.0e5,
+            levels.dsigma,
+            q_wet,
+            surface_pressure,
+            1.0e5,
         )
         # Surface optical depth should be larger for wetter atmosphere
         assert float(jnp.mean(tau_wet[-1])) > float(jnp.mean(tau_dry[-1]))
@@ -380,7 +395,10 @@ class TestByrneOpticalDepth:
         humidity = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.005
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
         tau = byrne_longwave_optical_depth(
-            levels.dsigma, humidity, surface_pressure, 1.0e5,
+            levels.dsigma,
+            humidity,
+            surface_pressure,
+            1.0e5,
         )
         assert tau.shape == (levels.n_levels + 1, n_lat, n_lon)
 
@@ -391,7 +409,11 @@ class TestByrneOpticalDepth:
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
         a = 0.8678
         tau = byrne_longwave_optical_depth(
-            levels.dsigma, humidity, surface_pressure, 1.0e5, byrne_a=a,
+            levels.dsigma,
+            humidity,
+            surface_pressure,
+            1.0e5,
+            byrne_a=a,
         )
         # Total tau at surface = a * sum(dsigma) * (ps/p0) = a * 1.0 * 1.0
         np.testing.assert_allclose(float(jnp.mean(tau[-1])), a, rtol=1e-10)
@@ -404,12 +426,19 @@ class TestByrneOpticalDepth:
         surface_pressure = jnp.full((n_lat, n_lon), 1.0e5)
         humidity = jnp.ones((levels.n_levels, n_lat, n_lon)) * 0.005
         tau_half = byrne_longwave_optical_depth(
-            levels.dsigma, humidity, surface_pressure, 1.0e5,
+            levels.dsigma,
+            humidity,
+            surface_pressure,
+            1.0e5,
         )
         q_lw = longwave_heating(
-            temperature, surface_temperature, tau_half,
-            levels.dsigma, surface_pressure,
-            EARTH.gravity, EARTH.specific_heat_cp,
+            temperature,
+            surface_temperature,
+            tau_half,
+            levels.dsigma,
+            surface_pressure,
+            EARTH.gravity,
+            EARTH.specific_heat_cp,
         )
         assert q_lw.shape == (levels.n_levels, n_lat, n_lon)
         assert bool(jnp.all(jnp.isfinite(q_lw)))

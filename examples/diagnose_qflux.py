@@ -36,7 +36,6 @@ from notus.operators.vector import uv_from_vordiv
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import STEFAN_BOLTZMANN
 from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
-from notus.physics.surface import PrescribedSST, compute_sst
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import standard_sigma_levels
@@ -57,7 +56,6 @@ def diagnose_surface_flux(
     levels = forcing.levels
     cfg = forcing.config
     lowest = levels.n_levels - 1
-    dsigma_lowest = forcing.dsigma_lowest
     sin_lat = transform.grid.sin_lat
 
     # Atmospheric temperature at lowest level
@@ -87,8 +85,8 @@ def diagnose_surface_flux(
 
     # --- SW absorbed at surface ---
     if cfg.sw_tau_0 > 0.0:
-        insolation = planet.solar_constant / 4.0 * (
-            1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0
+        insolation = (
+            planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
         )
         sw_surface = insolation[:, None] * jnp.exp(-cfg.sw_tau_0) * (1.0 - planet.surface_albedo)
     else:
@@ -110,10 +108,13 @@ def diagnose_surface_flux(
     q_lowest = jnp.zeros_like(t_lowest)
     if state.humidity is not None:
         q_lowest = jnp.maximum(
-            transform.spectral_to_grid(state.humidity[lowest]), 0.0,
+            transform.spectral_to_grid(state.humidity[lowest]),
+            0.0,
         )
     q_sat_sfc = saturation_specific_humidity(sst_bc, surface_pressure, planet.epsilon_moisture)
-    e_flux = rho_sfc * planet.latent_heat_vaporization * cfg.c_d * wind_speed * (q_sat_sfc - q_lowest)
+    e_flux = (
+        rho_sfc * planet.latent_heat_vaporization * cfg.c_d * wind_speed * (q_sat_sfc - q_lowest)
+    )
 
     # --- Net surface flux (positive = into ocean) ---
     net_flux = sw_surface + lw_down - lw_up - h_flux - e_flux
@@ -144,7 +145,11 @@ def run_diagnose_qflux(
     levels = standard_sigma_levels(n_levels)
 
     state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
-        transform, EARTH, levels, initial_rh=0.7, seed=42,
+        transform,
+        EARTH,
+        levels,
+        initial_rh=0.7,
+        seed=42,
     )
 
     config = SimplePhysicsConfig(
@@ -154,19 +159,26 @@ def run_diagnose_qflux(
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
-        transform=transform, planet=EARTH, levels=levels,
-        reference_temperature=ref_temps, surface_geopotential=surface_phi,
-        dt=dt, spectral_filter=filt, forcing=forcing,
+        transform=transform,
+        planet=EARTH,
+        levels=levels,
+        reference_temperature=ref_temps,
+        surface_geopotential=surface_phi,
+        dt=dt,
+        spectral_filter=filt,
+        forcing=forcing,
     )
 
     steps_per_day = int(86400 / dt)
 
     def one_day(carry, _):
         prev, curr = carry
+
         def step(carry, _):
             p, c = carry
             p, c = step_fn(p, c)
             return (p, c), None
+
         (prev, curr), _ = jax.lax.scan(step, (prev, curr), None, length=steps_per_day)
         return (prev, curr), None
 
@@ -205,11 +217,7 @@ def run_diagnose_qflux(
             dps = (day - 1) / elapsed if elapsed > 0 else 0
             t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
             phase = "spinup" if day <= spinup_days else "averaging"
-            print(
-                f"  Day {day:5d} [{phase:>9s}]: "
-                f"T_mean={np.mean(t_grid):.1f} K  "
-                f"[{dps:.1f} d/s]"
-            )
+            print(f"  Day {day:5d} [{phase:>9s}]: T_mean={np.mean(t_grid):.1f} K  [{dps:.1f} d/s]")
 
     total_time = time.perf_counter() - t0
     print(f"\nDone. Wall time: {total_time:.0f}s")

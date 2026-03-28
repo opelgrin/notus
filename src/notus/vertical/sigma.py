@@ -146,9 +146,9 @@ def standard_sigma_levels(n_levels: int = 20) -> SigmaLevels:
     # Larger weight -> smaller Δσ in that region.
     weight = (
         1.0
-        + 3.0 * np.exp(-((eta_mid - 0.03) / 0.08) ** 2)   # upper atmosphere
-        + 2.2 * np.exp(-((eta_mid - 0.20) / 0.10) ** 2)   # tropopause
-        + 3.5 * np.exp(-((eta_mid - 0.92) / 0.08) ** 2)   # surface layer
+        + 3.0 * np.exp(-(((eta_mid - 0.03) / 0.08) ** 2))  # upper atmosphere
+        + 2.2 * np.exp(-(((eta_mid - 0.20) / 0.10) ** 2))  # tropopause
+        + 3.5 * np.exp(-(((eta_mid - 0.92) / 0.08) ** 2))  # surface layer
     )
     dsigma = 1.0 / weight
     dsigma /= np.sum(dsigma)

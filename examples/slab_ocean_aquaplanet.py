@@ -37,7 +37,7 @@ from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.solar import EARTH_ORBIT
-from notus.physics.surface import OceanState, SlabOceanConfig, compute_sst, PrescribedSST
+from notus.physics.surface import OceanState, PrescribedSST, SlabOceanConfig, compute_sst
 from notus.timestepping.coupled import build_coupled_pe_stepper
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import standard_sigma_levels
@@ -98,7 +98,9 @@ def run_slab_ocean_aquaplanet(
     if q_flux_file is not None:
         data = np.load(q_flux_file)
         q_flux = jnp.array(data["q_flux"])
-        print(f"  Loaded Q-flux: [{float(jnp.min(q_flux)):.1f}, {float(jnp.max(q_flux)):.1f}] W/m^2")
+        print(
+            f"  Loaded Q-flux: [{float(jnp.min(q_flux)):.1f}, {float(jnp.max(q_flux)):.1f}] W/m^2"
+        )
     else:
         # Simple analytic: poleward heat transport
         q_flux = q_flux_amplitude * (1.0 - 2.0 * sin_lat**2)
@@ -186,8 +188,6 @@ def run_slab_ocean_aquaplanet(
         elapsed: float,
     ) -> bool:
         """Print diagnostics and return False if blowup detected."""
-        lnps_grid = np.asarray(transform.spectral_to_grid(curr_state.log_surface_pressure))
-        ps_grid = EARTH.reference_pressure * np.exp(lnps_grid)
         t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr_state.temperature))
         sst = np.asarray(ocean_state.surface_temperature)
 
@@ -210,10 +210,6 @@ def run_slab_ocean_aquaplanet(
             q_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr_state.humidity))
             q_mean_gkg = float(np.mean(q_grid)) * 1000
             q_str = f"  q={q_mean_gkg:.2f}g/kg"
-
-        lat_deg = np.degrees(np.asarray(grid.latitudes))
-        eq_idx = np.argmin(np.abs(lat_deg))
-        pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
 
         print(
             f"  Day {day:5d} [{phase:>9s}]: "
@@ -292,7 +288,9 @@ def main() -> None:
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--q-flux", type=float, default=30.0, help="Q-flux amplitude [W/m^2]")
-    parser.add_argument("--q-flux-file", type=str, default=None, help="Q-flux .npz file from diagnose_qflux.py")
+    parser.add_argument(
+        "--q-flux-file", type=str, default=None, help="Q-flux .npz file from diagnose_qflux.py"
+    )
     args = parser.parse_args()
 
     passed = run_slab_ocean_aquaplanet(
