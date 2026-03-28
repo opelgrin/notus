@@ -551,7 +551,7 @@ def save_restart(
         data["humidity"] = np.asarray(state.humidity)
     if ocean_sst is not None:
         data["ocean_sst"] = np.asarray(ocean_sst)
-    np.savez(path, **data)
+    np.savez(path, **data)  # type: ignore[arg-type]
 
 
 def load_restart(

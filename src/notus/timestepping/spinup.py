@@ -24,6 +24,8 @@ Typical usage
 from __future__ import annotations
 
 import dataclasses
+import logging
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -43,6 +45,9 @@ from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import SigmaLevels
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -79,9 +84,10 @@ def _diagnose_surface_flux(
     Uses ``compute_net_surface_flux`` — the same function as the coupled
     slab ocean stepper — for self-consistent Q-flux diagnosis.
     """
-    planet = forcing.planet
-    levels = forcing.levels
-    cfg = forcing.config
+    forcing_: Any = forcing
+    planet = forcing_.planet
+    levels = forcing_.levels
+    cfg = forcing_.config
     lowest = levels.n_levels - 1
     sin_lat = transform.grid.sin_lat
 
@@ -103,8 +109,7 @@ def _diagnose_surface_flux(
     # Insolation
     if cfg.sw_tau_0 > 0.0:
         insolation = (
-            planet.solar_constant / 4.0
-            * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+            planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
         )
     else:
         insolation = jnp.zeros_like(sin_lat)
@@ -112,18 +117,25 @@ def _diagnose_surface_flux(
     # Downward LW from two-stream solver
     if cfg.radiation_scheme == "byrne" and state.humidity is not None:
         q_grid = jnp.maximum(
-            jax.vmap(transform.spectral_to_grid)(state.humidity), 0.0,
+            jax.vmap(transform.spectral_to_grid)(state.humidity),
+            0.0,
         )
         tau_half = byrne_longwave_optical_depth(
-            levels.dsigma, q_grid, surface_pressure,
+            levels.dsigma,
+            q_grid,
+            surface_pressure,
             planet.reference_pressure,
-            byrne_a=cfg.byrne_a, byrne_b=cfg.byrne_b,
+            byrne_a=cfg.byrne_a,
+            byrne_b=cfg.byrne_b,
         )
     else:
         tau_half = longwave_optical_depth(
-            levels.sigma_half, sin_lat,
-            tau_equator=cfg.tau_equator, tau_pole=cfg.tau_pole,
-            linear_fraction=cfg.linear_fraction, alpha=cfg.alpha,
+            levels.sigma_half,
+            sin_lat,
+            tau_equator=cfg.tau_equator,
+            tau_pole=cfg.tau_pole,
+            linear_fraction=cfg.linear_fraction,
+            alpha=cfg.alpha,
         )
     lw_down = lw_down_surface(t_grid, tau_half)
 
@@ -131,18 +143,27 @@ def _diagnose_surface_flux(
     q_lowest = jnp.zeros_like(t_lowest)
     if state.humidity is not None:
         q_lowest = jnp.maximum(
-            transform.spectral_to_grid(state.humidity[lowest]), 0.0,
+            transform.spectral_to_grid(state.humidity[lowest]),
+            0.0,
         )
 
     # Net flux (same function as coupled stepper)
+    forcing_any: Any = forcing
     net_flux = compute_net_surface_flux(
-        forcing.sst, t_lowest, q_lowest, wind_speed, surface_pressure,
-        insolation, lw_down,
-        gravity=planet.gravity, gas_constant=planet.gas_constant,
+        forcing_any.sst,
+        t_lowest,
+        q_lowest,
+        wind_speed,
+        surface_pressure,
+        insolation,
+        lw_down,
+        gravity=planet.gravity,
+        gas_constant=planet.gas_constant,
         specific_heat_cp=planet.specific_heat_cp,
         epsilon=planet.epsilon_moisture,
         latent_heat=planet.latent_heat_vaporization,
-        drag_coefficient=cfg.c_d, surface_albedo=planet.surface_albedo,
+        drag_coefficient=cfg.c_d,
+        surface_albedo=planet.surface_albedo,
         sw_tau_0=cfg.sw_tau_0,
     )
 
@@ -227,12 +248,14 @@ def spinup_prescribed_sst(
     n_days = spinup_days + averaging_days
     n_lat = transform.grid.n_lat
 
-    def one_day(carry, _):
+    def one_day(carry: tuple[Any, ...], _: None) -> tuple[tuple[Any, ...], None]:
         prev, curr = carry
-        def step(carry, _):
+
+        def step(carry: tuple[Any, ...], _: None) -> tuple[tuple[Any, ...], None]:
             p, c = carry
             p, c = step_fn(p, c)
             return (p, c), None
+
         (prev, curr), _ = jax.lax.scan(step, (prev, curr), None, length=steps_per_day)
         return (prev, curr), None
 
@@ -262,14 +285,17 @@ def spinup_prescribed_sst(
             flux_accum += np.asarray(diagnose_jit(curr, ps_grid))
             n_samples += 1
 
-        if verbose and (day <= 10 or day % 50 == 0 or day == n_days):
+        log_interval = 50
+        if verbose and (day <= log_interval // 5 or day % log_interval == 0 or day == n_days):
             t_grid = np.asarray(
                 jax.vmap(transform.spectral_to_grid)(curr.temperature),
             )
             phase = "spinup" if day <= spinup_days else "averaging"
-            print(
-                f"  Day {day:5d} [{phase:>9s}]: "
-                f"T_mean={np.mean(t_grid):.1f} K",
+            logger.info(
+                "  Day %5d [%9s]: T_mean=%.1f K",
+                day,
+                phase,
+                np.mean(t_grid),
             )
 
     mean_flux = flux_accum / n_samples
@@ -278,8 +304,12 @@ def spinup_prescribed_sst(
     if verbose:
         lat_deg = np.degrees(np.asarray(transform.grid.latitudes))
         eq_idx = np.argmin(np.abs(lat_deg))
-        print(f"\n  Q-flux(equator) = {float(q_flux[eq_idx]):+.1f} W/m^2")
-        print(f"  Q-flux range = [{float(jnp.min(q_flux)):.1f}, {float(jnp.max(q_flux)):.1f}] W/m^2")
+        logger.info("  Q-flux(equator) = %+.1f W/m^2", float(q_flux[eq_idx]))
+        logger.info(
+            "  Q-flux range = [%.1f, %.1f] W/m^2",
+            float(jnp.min(q_flux)),
+            float(jnp.max(q_flux)),
+        )
 
     return SpinupResult(
         state=spinup_state,

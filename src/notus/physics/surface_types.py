@@ -96,7 +96,9 @@ def _surface_props_unflatten(
 
 
 jax.tree_util.register_pytree_node(
-    SurfaceProperties, _surface_props_flatten, _surface_props_unflatten,
+    SurfaceProperties,
+    _surface_props_flatten,
+    _surface_props_unflatten,
 )
 
 
@@ -201,3 +203,46 @@ def flat_continent_surface(
         z0_momentum=z0_m,
         z0_heat=z0_h,
     )
+
+
+def moisture_dependent_albedo(
+    bucket_depth: jnp.ndarray,
+    bucket_capacity: float,
+    albedo_dry: float,
+    albedo_wet: float,
+    land_fraction: jnp.ndarray,
+    ocean_albedo: float | jnp.ndarray,
+) -> jnp.ndarray:
+    """Frierson (2006) moisture-dependent land albedo.
+
+    Land albedo varies linearly with bucket fill fraction::
+
+        α_land = α_wet + (α_dry − α_wet) · (1 − W / W_max)
+
+    Blended with ocean albedo using land fraction::
+
+        α = (1 − f) · α_ocean + f · α_land
+
+    Parameters
+    ----------
+    bucket_depth : jnp.ndarray
+        Current bucket water depth [m], shape ``(n_lat, n_lon)``.
+    bucket_capacity : float
+        Maximum bucket depth W_max [m].
+    albedo_dry : float
+        Land albedo when bucket is empty.
+    albedo_wet : float
+        Land albedo when bucket is full.
+    land_fraction : jnp.ndarray
+        Land fraction [0, 1], shape ``(n_lat, n_lon)``.
+    ocean_albedo : float or jnp.ndarray
+        Ocean albedo.
+
+    Returns
+    -------
+    jnp.ndarray
+        Blended surface albedo, shape ``(n_lat, n_lon)``.
+    """
+    fill = jnp.clip(bucket_depth / jnp.maximum(bucket_capacity, 1.0e-10), 0.0, 1.0)
+    alpha_land = albedo_wet + (albedo_dry - albedo_wet) * (1.0 - fill)
+    return (1.0 - land_fraction) * ocean_albedo + land_fraction * alpha_land

@@ -14,7 +14,6 @@ the atmosphere." Boundary-Layer Meteorology, 17, 187-202.
 from __future__ import annotations
 
 import dataclasses
-import math
 
 import jax.numpy as jnp
 
@@ -64,7 +63,7 @@ class SurfaceLayerConfig:
 
 def neutral_drag_coefficient(
     z_ref: float | jnp.ndarray,
-    z0: float,
+    z0: float | jnp.ndarray,
 ) -> float | jnp.ndarray:
     r"""Neutral drag coefficient from log-wind profile.
 
@@ -89,8 +88,8 @@ def neutral_drag_coefficient(
 
 def neutral_heat_coefficient(
     z_ref: float | jnp.ndarray,
-    z0_m: float,
-    z0_h: float,
+    z0_m: float | jnp.ndarray,
+    z0_h: float | jnp.ndarray,
 ) -> float | jnp.ndarray:
     r"""Neutral heat transfer coefficient.
 
@@ -153,8 +152,8 @@ def bulk_richardson_number(
 def louis_stability_functions(
     ri_b: jnp.ndarray,
     z_ref: float | jnp.ndarray,
-    z0_m: float,
-    z0_h: float,
+    z0_m: float | jnp.ndarray,
+    z0_h: float | jnp.ndarray,
     c_dn: float | jnp.ndarray,
     c_hn: float | jnp.ndarray,
     *,
@@ -189,7 +188,7 @@ def louis_stability_functions(
         Bulk Richardson number.
     z_ref : float or jnp.ndarray
         Reference height [m].
-    z0_m, z0_h : float
+    z0_m, z0_h : float or jnp.ndarray
         Roughness lengths for momentum and heat [m].
     c_dn, c_hn : float or jnp.ndarray
         Neutral drag / heat transfer coefficients.
@@ -263,6 +262,9 @@ def compute_transfer_coefficients(
     gravity: float,
     gas_constant: float,
     config: SurfaceLayerConfig,
+    *,
+    z0_momentum_override: jnp.ndarray | None = None,
+    z0_heat_override: jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     r"""Compute stability-dependent transfer coefficients.
 
@@ -286,6 +288,12 @@ def compute_transfer_coefficients(
         Specific gas constant for dry air [J/(kg·K)].
     config : SurfaceLayerConfig
         Surface layer configuration.
+    z0_momentum_override : jnp.ndarray or None
+        If provided, spatially varying momentum roughness length [m]
+        that overrides ``config.z0_momentum``.
+    z0_heat_override : jnp.ndarray or None
+        If provided, spatially varying heat roughness length [m]
+        that overrides ``config.z0_heat_effective``.
 
     Returns
     -------
@@ -293,8 +301,8 @@ def compute_transfer_coefficients(
         ``(c_d_momentum, c_h_heat)`` — transfer coefficients for
         momentum and heat/moisture, shaped like ``t_air``.
     """
-    z0_m = config.z0_momentum
-    z0_h = config.z0_heat_effective
+    z0_m = z0_momentum_override if z0_momentum_override is not None else config.z0_momentum
+    z0_h = z0_heat_override if z0_heat_override is not None else config.z0_heat_effective
 
     # Estimate reference height from lowest-level temperature
     z_ref = reference_height_from_sigma(dsigma_lowest, t_air, gravity, gas_constant)
@@ -309,9 +317,16 @@ def compute_transfer_coefficients(
 
     # Stability correction
     f_m, f_h = louis_stability_functions(
-        ri_b, z_ref, z0_m, z0_h, c_dn, c_hn,
-        b=config.louis_b, c_m=config.louis_c_m,
-        c_h=config.louis_c_h, d=config.louis_d,
+        ri_b,
+        z_ref,
+        z0_m,
+        z0_h,
+        c_dn,
+        c_hn,
+        b=config.louis_b,
+        c_m=config.louis_c_m,
+        c_h=config.louis_c_h,
+        d=config.louis_d,
     )
 
     return c_dn * f_m, c_hn * f_h

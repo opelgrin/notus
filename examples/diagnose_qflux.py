@@ -96,18 +96,25 @@ def diagnose_surface_flux(
     # --- LW down at surface from the two-stream radiation solver ---
     if cfg.radiation_scheme == "byrne" and state.humidity is not None:
         q_grid = jnp.maximum(
-            jax.vmap(transform.spectral_to_grid)(state.humidity), 0.0,
+            jax.vmap(transform.spectral_to_grid)(state.humidity),
+            0.0,
         )
         tau_half = byrne_longwave_optical_depth(
-            levels.dsigma, q_grid, surface_pressure,
+            levels.dsigma,
+            q_grid,
+            surface_pressure,
             planet.reference_pressure,
-            byrne_a=cfg.byrne_a, byrne_b=cfg.byrne_b,
+            byrne_a=cfg.byrne_a,
+            byrne_b=cfg.byrne_b,
         )
     else:
         tau_half = longwave_optical_depth(
-            levels.sigma_half, sin_lat,
-            tau_equator=cfg.tau_equator, tau_pole=cfg.tau_pole,
-            linear_fraction=cfg.linear_fraction, alpha=cfg.alpha,
+            levels.sigma_half,
+            sin_lat,
+            tau_equator=cfg.tau_equator,
+            tau_pole=cfg.tau_pole,
+            linear_fraction=cfg.linear_fraction,
+            alpha=cfg.alpha,
         )
     lw_down = lw_down_surface(t_grid, tau_half)
 
@@ -121,13 +128,20 @@ def diagnose_surface_flux(
 
     # --- Net flux via the same function used by the coupled stepper ---
     net_flux = compute_net_surface_flux(
-        sst, t_lowest, q_lowest, wind_speed, surface_pressure,
-        insolation, lw_down,
-        gravity=planet.gravity, gas_constant=planet.gas_constant,
+        sst,
+        t_lowest,
+        q_lowest,
+        wind_speed,
+        surface_pressure,
+        insolation,
+        lw_down,
+        gravity=planet.gravity,
+        gas_constant=planet.gas_constant,
         specific_heat_cp=planet.specific_heat_cp,
         epsilon=planet.epsilon_moisture,
         latent_heat=planet.latent_heat_vaporization,
-        drag_coefficient=cfg.c_d, surface_albedo=planet.surface_albedo,
+        drag_coefficient=cfg.c_d,
+        surface_albedo=planet.surface_albedo,
         sw_tau_0=cfg.sw_tau_0,
     )
 
@@ -289,7 +303,9 @@ def main() -> None:
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--output", type=str, default="qflux.npz", help="Output .npz path")
     parser.add_argument(
-        "--save-restart", type=str, default=None,
+        "--save-restart",
+        type=str,
+        default=None,
         help="Save atmospheric restart file at end of spinup (for warm-starting coupled runs)",
     )
     args = parser.parse_args()

@@ -10,7 +10,6 @@ import math
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import pytest
 
 from notus.physics.boundary_layer import (
@@ -253,7 +252,7 @@ class TestReferenceHeight:
 class TestComputeTransferCoefficients:
     """Tests for the full transfer coefficient computation."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def config(self) -> SurfaceLayerConfig:
         return SurfaceLayerConfig(z0_momentum=1e-4)
 
@@ -263,7 +262,13 @@ class TestComputeTransferCoefficients:
         t_air = jnp.full((4, 8), 290.0)
         wind = jnp.full((4, 8), 5.0)
         c_d, c_h = compute_transfer_coefficients(
-            t_sfc, t_air, wind, 0.05, 9.81, 287.04, config,
+            t_sfc,
+            t_air,
+            wind,
+            0.05,
+            9.81,
+            287.04,
+            config,
         )
         assert c_d.shape == (4, 8)
         assert c_h.shape == (4, 8)
@@ -274,7 +279,13 @@ class TestComputeTransferCoefficients:
         t_air = jnp.full((4, 8), 290.0)
         wind = jnp.full((4, 8), 5.0)
         c_d, c_h = compute_transfer_coefficients(
-            t_sfc, t_air, wind, 0.05, 9.81, 287.04, config,
+            t_sfc,
+            t_air,
+            wind,
+            0.05,
+            9.81,
+            287.04,
+            config,
         )
         assert jnp.all(c_d > 0)
         assert jnp.all(c_h > 0)
@@ -287,13 +298,25 @@ class TestComputeTransferCoefficients:
         # Neutral
         t_sfc_neutral = jnp.full((4, 8), 280.0)
         c_d_n, c_h_n = compute_transfer_coefficients(
-            t_sfc_neutral, t_air, wind, 0.05, 9.81, 287.04, config,
+            t_sfc_neutral,
+            t_air,
+            wind,
+            0.05,
+            9.81,
+            287.04,
+            config,
         )
 
         # Unstable
         t_sfc_warm = jnp.full((4, 8), 310.0)
         c_d_u, c_h_u = compute_transfer_coefficients(
-            t_sfc_warm, t_air, wind, 0.05, 9.81, 287.04, config,
+            t_sfc_warm,
+            t_air,
+            wind,
+            0.05,
+            9.81,
+            287.04,
+            config,
         )
 
         assert jnp.all(c_d_u > c_d_n)
@@ -307,13 +330,25 @@ class TestComputeTransferCoefficients:
         # Neutral
         t_sfc_neutral = jnp.full((4, 8), 280.0)
         c_d_n, c_h_n = compute_transfer_coefficients(
-            t_sfc_neutral, t_air, wind, 0.05, 9.81, 287.04, config,
+            t_sfc_neutral,
+            t_air,
+            wind,
+            0.05,
+            9.81,
+            287.04,
+            config,
         )
 
         # Stable
         t_sfc_cool = jnp.full((4, 8), 260.0)
         c_d_s, c_h_s = compute_transfer_coefficients(
-            t_sfc_cool, t_air, wind, 0.05, 9.81, 287.04, config,
+            t_sfc_cool,
+            t_air,
+            wind,
+            0.05,
+            9.81,
+            287.04,
+            config,
         )
 
         assert jnp.all(c_d_s < c_d_n)
@@ -329,10 +364,22 @@ class TestComputeTransferCoefficients:
         rough = SurfaceLayerConfig(z0_momentum=0.1)
 
         c_d_smooth, _ = compute_transfer_coefficients(
-            t_sfc, t_air, wind, 0.05, 9.81, 287.04, smooth,
+            t_sfc,
+            t_air,
+            wind,
+            0.05,
+            9.81,
+            287.04,
+            smooth,
         )
         c_d_rough, _ = compute_transfer_coefficients(
-            t_sfc, t_air, wind, 0.05, 9.81, 287.04, rough,
+            t_sfc,
+            t_air,
+            wind,
+            0.05,
+            9.81,
+            287.04,
+            rough,
         )
 
         assert jnp.all(c_d_rough > c_d_smooth)

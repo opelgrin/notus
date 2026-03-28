@@ -39,7 +39,13 @@ from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig
 from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.solar import EARTH_ORBIT
-from notus.physics.surface import OceanState, PrescribedSST, SlabOceanConfig, compute_sst
+from notus.physics.surface import (
+    OceanState,
+    PrescribedSST,
+    SlabOceanConfig,
+    SurfaceState,
+    compute_sst,
+)
 from notus.timestepping.coupled import build_coupled_pe_stepper
 from notus.timestepping.spinup import spinup_prescribed_sst
 from notus.transforms import SpectralTransform
@@ -71,12 +77,19 @@ def run_one(
         grid.latitudes,
     )
     ocean = OceanState(surface_temperature=sst_init)
+    surface = SurfaceState(ocean=ocean)
 
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_coupled_pe_stepper(
-        transform=transform, planet=EARTH, levels=levels,
-        reference_temperature=ref_temps, surface_geopotential=surface_phi,
-        dt=dt, forcing=forcing, ocean_config=ocean_config, q_flux=q_flux,
+        transform=transform,
+        planet=EARTH,
+        levels=levels,
+        reference_temperature=ref_temps,
+        surface_geopotential=surface_phi,
+        dt=dt,
+        forcing=forcing,
+        ocean_config=ocean_config,
+        q_flux=q_flux,
         spectral_filter=filt,
     )
 
@@ -84,24 +97,29 @@ def run_one(
     days_per_year = EARTH_ORBIT.days_per_year
 
     def scan_body(carry, _):
-        p, c, o = carry
-        p, c, o = step_fn(p, c, o)
-        return (p, c, o), None
+        p, c, sfc = carry
+        p, c, sfc = step_fn(p, c, sfc)
+        return (p, c, sfc), None
 
     # Initialize from warm state
     forcing.day_of_year = jnp.float64(0.0)
-    forcing.sst = ocean.surface_temperature
-    prev, curr, ocean = init_fn(warm_state, ocean)
+    forcing.sst = surface.ocean.surface_temperature
+    prev, curr, surface = init_fn(warm_state, surface)
 
     t_start = time.perf_counter()
     for day in range(1, n_days + 1):
         forcing.day_of_year = jnp.float64(day % days_per_year)
-        forcing.sst = ocean.surface_temperature
-        (prev, curr, ocean), _ = jax.lax.scan(scan_body, (prev, curr, ocean), None, length=steps_per_day)
+        forcing.sst = surface.ocean.surface_temperature
+        (prev, curr, surface), _ = jax.lax.scan(
+            scan_body,
+            (prev, curr, surface),
+            None,
+            length=steps_per_day,
+        )
 
         if day % 25 == 0 or day == n_days:
             t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
-            sst = np.asarray(ocean.surface_temperature)
+            sst = np.asarray(surface.ocean.surface_temperature)
             t_mean = float(np.mean(t_grid))
 
             q_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.humidity))
@@ -126,14 +144,16 @@ def run_one(
 
     # Final diagnostics
     t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
-    sst = np.asarray(ocean.surface_temperature)
+    sst = np.asarray(surface.ocean.surface_temperature)
     q_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.humidity))
     lat_deg = np.degrees(np.asarray(grid.latitudes))
     eq_idx = np.argmin(np.abs(lat_deg))
 
     jet_level = max(0, n_levels // 4)
     u_spec, _ = uv_from_vordiv(
-        curr.vorticity[jet_level], curr.divergence[jet_level], transform.arrays,
+        curr.vorticity[jet_level],
+        curr.divergence[jet_level],
+        transform.arrays,
     )
     u_grid = np.asarray(transform.spectral_to_grid(u_spec))
     u_grid = u_grid / np.asarray(grid.cos_lat)[:, None]
@@ -164,11 +184,15 @@ def main() -> None:
     parser.add_argument("--spinup-days", type=int, default=100, help="Prescribed-SST spinup days")
     parser.add_argument("--averaging-days", type=int, default=200, help="Q-flux averaging days")
     parser.add_argument(
-        "--q-flux-file", type=str, default=None,
+        "--q-flux-file",
+        type=str,
+        default=None,
         help="Pre-computed Q-flux .npz (skip in-memory diagnosis)",
     )
     parser.add_argument(
-        "--restart-file", type=str, default=None,
+        "--restart-file",
+        type=str,
+        default=None,
         help="Pre-computed restart .npz (skip in-memory spinup)",
     )
     args = parser.parse_args()
@@ -181,7 +205,11 @@ def main() -> None:
     levels = standard_sigma_levels(20)
 
     state, ref_temps, surface_phi = moist_aquaplanet_initial_state(
-        transform, EARTH, levels, initial_rh=0.7, seed=42,
+        transform,
+        EARTH,
+        levels,
+        initial_rh=0.7,
+        seed=42,
     )
 
     # --- Spinup + Q-flux: in-memory or from disk ---
@@ -195,14 +223,23 @@ def main() -> None:
         print(f"  Q range: [{float(jnp.min(q_flux)):.1f}, {float(jnp.max(q_flux)):.1f}] W/m^2")
     else:
         # In-memory spinup + Q-flux diagnosis
-        print(f"Running prescribed-SST spinup ({args.spinup_days}d spinup + {args.averaging_days}d averaging)...")
+        sd, ad = args.spinup_days, args.averaging_days
+        print(f"Running prescribed-SST spinup ({sd}d spinup + {ad}d averaging)...")
         base_config = SimplePhysicsConfig(
-            radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT,
+            radiation_scheme="byrne",
+            sw_tau_0=0.22,
+            orbital=EARTH_ORBIT,
         )
         spinup_forcing = SimplePhysics(transform, EARTH, levels, config=base_config)
         result = spinup_prescribed_sst(
-            state, spinup_forcing, transform, EARTH, levels,
-            ref_temps, surface_phi, dt=900.0,
+            state,
+            spinup_forcing,
+            transform,
+            EARTH,
+            levels,
+            ref_temps,
+            surface_phi,
+            dt=900.0,
             spinup_days=args.spinup_days,
             averaging_days=args.averaging_days,
         )
@@ -215,7 +252,9 @@ def main() -> None:
     # Baseline: constant C_D
     print("--- Baseline (constant C_D=0.0015) ---")
     baseline_cfg = SimplePhysicsConfig(
-        radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT,
+        radiation_scheme="byrne",
+        sw_tau_0=0.22,
+        orbital=EARTH_ORBIT,
     )
     r_base = run_one("BASE", baseline_cfg, n_days, warm_state, q_flux, ref_temps, surface_phi)
 
@@ -224,7 +263,9 @@ def main() -> None:
     # MO-enabled
     print("--- Monin-Obukhov (Louis 1979, z0=1e-4) ---")
     mo_cfg = SimplePhysicsConfig(
-        radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT,
+        radiation_scheme="byrne",
+        sw_tau_0=0.22,
+        orbital=EARTH_ORBIT,
         surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
     )
     r_mo = run_one("MO", mo_cfg, n_days, warm_state, q_flux, ref_temps, surface_phi)
@@ -233,13 +274,24 @@ def main() -> None:
     print("\n" + "=" * 60)
     print(f"{'':>20s}  {'Baseline':>12s}  {'MO':>12s}")
     print("-" * 60)
-    for key in ["stable", "sst_eq", "sst_min", "sst_max", "t_mean", "t_min", "t_max",
-                "q_mean_gkg", "jet_max", "ps_min", "ps_max"]:
+    for key in [
+        "stable",
+        "sst_eq",
+        "sst_min",
+        "sst_max",
+        "t_mean",
+        "t_min",
+        "t_max",
+        "q_mean_gkg",
+        "jet_max",
+        "ps_min",
+        "ps_max",
+    ]:
         if key in r_base and key in r_mo:
             v1 = r_base[key]
             v2 = r_mo[key]
             if isinstance(v1, bool):
-                print(f"  {key:>18s}  {str(v1):>12s}  {str(v2):>12s}")
+                print(f"  {key:>18s}  {v1!s:>12s}  {v2!s:>12s}")
             else:
                 print(f"  {key:>18s}  {v1:>12.2f}  {v2:>12.2f}")
     print("=" * 60)
