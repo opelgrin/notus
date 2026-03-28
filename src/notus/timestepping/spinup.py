@@ -78,6 +78,7 @@ def _diagnose_surface_flux(
     transform: SpectralTransform,
     forcing: Forcing,
     surface_pressure: jnp.ndarray,
+    surface_albedo: float | None = None,
 ) -> jnp.ndarray:
     """Compute zonal-mean net downward surface energy flux [W/m²].
 
@@ -163,7 +164,7 @@ def _diagnose_surface_flux(
         epsilon=planet.epsilon_moisture,
         latent_heat=planet.latent_heat_vaporization,
         drag_coefficient=cfg.c_d,
-        surface_albedo=planet.surface_albedo,
+        surface_albedo=surface_albedo if surface_albedo is not None else planet.surface_albedo,
         sw_tau_0=cfg.sw_tau_0,
     )
 
@@ -187,6 +188,7 @@ def spinup_prescribed_sst(
     diffusion_timescale: float = 2.0 * 3600.0,
     robert_coeff: float = 0.05,
     alpha: float = 0.5,
+    surface_albedo: float | None = None,
     verbose: bool = True,
 ) -> SpinupResult:
     """Spin up the atmosphere under prescribed SST and diagnose Q-flux.
@@ -218,6 +220,11 @@ def spinup_prescribed_sst(
         Days to average for Q-flux diagnosis.
     spectral_filter : jnp.ndarray or None
         Spectral filter array.
+    surface_albedo : float or None
+        Surface albedo for the Q-flux diagnosis.  When ``None``
+        (default), uses ``planet.surface_albedo``.  Set this explicitly
+        to match the albedo used by the coupled stepper (e.g. 0.06 for
+        an aquaplanet ocean) so the diagnosed Q-flux is self-consistent.
     verbose : bool
         Print progress.
 
@@ -261,7 +268,7 @@ def spinup_prescribed_sst(
 
     one_day_jit = jax.jit(one_day)
     diagnose_jit = jax.jit(
-        lambda s, ps: _diagnose_surface_flux(s, transform, forcing, ps),
+        lambda s, ps: _diagnose_surface_flux(s, transform, forcing, ps, surface_albedo),
     )
 
     # Initialize

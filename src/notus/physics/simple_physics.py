@@ -114,7 +114,7 @@ class SimplePhysicsConfig:
 
     radiation_scheme: str = "frierson"
     tau_equator: float = 6.0
-    tau_pole: float = 0.1
+    tau_pole: float = 1.5
     linear_fraction: float = 0.1
     alpha: float = 4.0
     byrne_a: float = 0.8678
