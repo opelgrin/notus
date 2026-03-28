@@ -388,6 +388,7 @@ def _run_held_suarez(
     return global_mean_t, t_range
 
 
+@pytest.mark.slow
 class TestHeldSuarezIntegration:
     """Short integration tests for the Held-Suarez forcing."""
 
@@ -517,6 +518,7 @@ def _run_held_suarez_climatology(
     return u_zm_mean, t_zm_mean, eke_mean, u_surface, grid, levels
 
 
+@pytest.mark.slow
 class TestHeldSuarezRegression:
     """Reduced-resolution regression checks for Held-Suarez climate features.
 

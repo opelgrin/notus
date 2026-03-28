@@ -106,6 +106,7 @@ def _run_jw_integration(
     return ps_min_daily, ps_max_daily, conservation
 
 
+@pytest.mark.slow
 class TestBaroclinicWaveValidation:
     """Quantitative validation of the J-W baroclinic wave test case."""
 

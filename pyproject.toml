@@ -39,6 +39,11 @@ exclude = [
     "tests/",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: multi-day integration tests (skip with -m 'not slow')",
+]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100

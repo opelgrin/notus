@@ -796,6 +796,7 @@ class TestSimplePhysicsForcing:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestSimplePhysicsIntegration:
     """Short integration to verify stability and physical plausibility."""
 
