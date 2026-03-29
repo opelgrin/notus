@@ -46,10 +46,7 @@ $$
 Subsequent time steps use the IMEX leapfrog with implicit weighting parameter $\alpha$:
 
 $$
-\mathbf{x}^* = \mathbf{x}^{n-1} + 2\Delta t \left[
-\mathbf{F}_\text{E}(\mathbf{x}^n)
-+ (1 - \alpha)\,\mathbf{L}(\mathbf{x}^{n-1})
-\right]
+\mathbf{x}^* = \mathbf{x}^{n-1} + 2\Delta t \left[\mathbf{F}_\text{E}(\mathbf{x}^n) + (1 - \alpha)\,\mathbf{L}(\mathbf{x}^{n-1})\right]
 $$
 
 $$
@@ -75,8 +72,7 @@ $$
 $$
 
 $$
-\mathbf{x}^{n+1}_\text{filtered} = \mathbf{x}^{n+1}
-- \frac{\nu(1 - \alpha_\text{RAW})}{2} D
+\mathbf{x}^{n+1}_\text{filtered} = \mathbf{x}^{n+1} - \frac{\nu(1 - \alpha_\text{RAW})}{2} D
 $$
 
 where $\nu$ is the Robert coefficient (default 0.05) controlling the filter strength and
@@ -92,23 +88,20 @@ The implicit system couples divergence, temperature, and log surface pressure. A
 mode $n$:
 
 $$
-\left(\mathbf{I} - s^2 \lambda_n \mathbf{M}\right) \hat{\boldsymbol{\delta}}^{n+1}
-= \hat{\boldsymbol{\delta}}^* - s \lambda_n \hat{\boldsymbol{\Phi}}^*
+\left(\mathbf{I} - s^2 \lambda_n \mathbf{M}\right) \hat{\mathbf{\delta}}^{n+1} = \hat{\mathbf{\delta}}^* - s \lambda_n \hat{\mathbf{\Phi}}^*
 $$
 
 where $s = 2\Delta t \, \alpha$ is the implicit step size, $\lambda_n = -n(n+1)/a^2$, and
 the superscript $*$ denotes the intermediate state after the explicit step. Once
-$\hat{\boldsymbol{\delta}}^{n+1}$ is known, the other variables follow by
+$\hat{\mathbf{\delta}}^{n+1}$ is known, the other variables follow by
 back-substitution:
 
 $$
-\hat{\mathbf{T}}^{n+1} = \hat{\mathbf{T}}^*
-- s \, \mathbf{H} \, \hat{\boldsymbol{\delta}}^{n+1}
+\hat{\mathbf{T}}^{n+1} = \hat{\mathbf{T}}^* - s \, \mathbf{H} \, \hat{\mathbf{\delta}}^{n+1}
 $$
 
 $$
-\widehat{\ln p_s}^{n+1} = \widehat{\ln p_s}^*
-- s \, \boldsymbol{\Delta\sigma}^T \hat{\boldsymbol{\delta}}^{n+1}
+\widehat{\ln p_s}^{n+1} = \widehat{\ln p_s}^* - s \, \mathbf{\Delta\sigma}^T \hat{\mathbf{\delta}}^{n+1}
 $$
 
 The $L \times L$ system is solved efficiently via eigendecomposition of $\mathbf{M}$,
@@ -120,13 +113,11 @@ The shallow water equations use a simpler semi-implicit system coupling divergen
 geopotential. For each spectral mode, the Schur complement gives:
 
 $$
-\hat{\delta}^{n+1} = \frac{\hat{\delta}^*
-- s \lambda_n \hat{\Phi}^*}{1 - s^2 \Phi_0 \lambda_n}
+\hat{\delta}^{n+1} = \frac{\hat{\delta}^* - s \lambda_n \hat{\Phi}^*}{1 - s^2 \Phi_0 \lambda_n}
 $$
 
 $$
-\hat{\Phi}^{n+1} = \frac{-s \Phi_0 \hat{\delta}^*
-+ \hat{\Phi}^*}{1 - s^2 \Phi_0 \lambda_n}
+\hat{\Phi}^{n+1} = \frac{-s \Phi_0 \hat{\delta}^* + \hat{\Phi}^*}{1 - s^2 \Phi_0 \lambda_n}
 $$
 
 where $\Phi_0 = gH_0$ is the mean geopotential. This is a scalar (diagonal) solve for each

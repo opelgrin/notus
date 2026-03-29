@@ -28,22 +28,14 @@ coordinate $\sigma$ ranges from 0 at the top of the atmosphere to 1 at the surfa
 ### Vorticity equation
 
 $$
-\frac{\partial \zeta}{\partial t} =
--\frac{1}{a\cos\varphi}\frac{\partial}{\partial\lambda}
-\left[\frac{(\zeta + f)\,v\cos\varphi + \dot{\sigma}\,\partial u/\partial\sigma}
-{\cos\varphi}\right]
-+ \frac{1}{a\cos\varphi}\frac{\partial}{\partial\varphi}
-\left[\frac{(\zeta + f)\,u\cos\varphi + \dot{\sigma}\,\partial v/\partial\sigma}
-{\cos\varphi}\right]
-+ F_\zeta
+\frac{\partial \zeta}{\partial t} = -\frac{1}{a\cos\varphi}\frac{\partial}{\partial\lambda}\left[\frac{(\zeta + f)\,v\cos\varphi + \dot{\sigma}\,\partial u/\partial\sigma}{\cos\varphi}\right] + \frac{1}{a\cos\varphi}\frac{\partial}{\partial\varphi}\left[\frac{(\zeta + f)\,u\cos\varphi + \dot{\sigma}\,\partial v/\partial\sigma}{\cos\varphi}\right] + F_\zeta
 $$
 
 or, more compactly, using the spectral curl operator on the momentum flux vector
 $\mathbf{F}$:
 
 $$
-\frac{\partial \zeta}{\partial t}
-= \text{curl}_z(\mathbf{F}) + F_\zeta
+\frac{\partial \zeta}{\partial t} = \text{curl}_z(\mathbf{F}) + F_\zeta
 $$
 
 where $f = 2\Omega\sin\varphi$ is the Coriolis parameter, $\Omega$ is the planetary
@@ -53,10 +45,7 @@ represents any forcing (friction, diffusion).
 ### Divergence equation
 
 $$
-\frac{\partial \delta}{\partial t}
-= -\text{div}(\mathbf{F}) - \nabla^2 E
-- \nabla^2(\Phi + R T_v \ln p_s)
-+ F_\delta
+\frac{\partial \delta}{\partial t} = -\text{div}(\mathbf{F}) - \nabla^2 E - \nabla^2(\Phi + R T_v \ln p_s) + F_\delta
 $$
 
 where
@@ -77,12 +66,7 @@ semi-implicitly (see [Time Integration](time-integration.md)).
 ### Thermodynamic equation
 
 $$
-\frac{\partial T}{\partial t}
-= -\frac{1}{a\cos\varphi}\left(u\frac{\partial T}{\partial\lambda}
-+ v\cos\varphi\frac{\partial T}{\partial\varphi}\right)
-- \dot{\sigma}\frac{\partial T}{\partial\sigma}
-+ \kappa T \frac{\omega}{p}
-+ Q
+\frac{\partial T}{\partial t} = -\frac{1}{a\cos\varphi}\left(u\frac{\partial T}{\partial\lambda} + v\cos\varphi\frac{\partial T}{\partial\varphi}\right) - \dot{\sigma}\frac{\partial T}{\partial\sigma} + \kappa T \frac{\omega}{p} + Q
 $$
 
 where $\kappa = R/c_p$ is the Poisson constant and $\omega/p$ is the pressure velocity
@@ -93,8 +77,7 @@ diabatic heating (radiation, latent heat release, etc.).
 ### Continuity equation (surface pressure tendency)
 
 $$
-\frac{\partial \ln p_s}{\partial t}
-= -\sum_{k=1}^{L} D_k^* \, \Delta\sigma_k
+\frac{\partial \ln p_s}{\partial t} = -\sum_{k=1}^{L} D_k^* \, \Delta\sigma_k
 $$
 
 where the sum is over all $L$ vertical levels and
@@ -109,11 +92,7 @@ integrated over the full atmospheric column.
 ### Moisture equation
 
 $$
-\frac{\partial q}{\partial t}
-= -\frac{1}{a\cos\varphi}\left(u\frac{\partial q}{\partial\lambda}
-+ v\cos\varphi\frac{\partial q}{\partial\varphi}\right)
-- \dot{\sigma}\frac{\partial q}{\partial\sigma}
-+ E - C
+\frac{\partial q}{\partial t} = -\frac{1}{a\cos\varphi}\left(u\frac{\partial q}{\partial\lambda} + v\cos\varphi\frac{\partial q}{\partial\varphi}\right) - \dot{\sigma}\frac{\partial q}{\partial\sigma} + E - C
 $$
 
 where $E$ is the evaporation source and $C$ is the condensation sink. Moisture is advected
@@ -137,9 +116,7 @@ and geopotential calculations. The hydrostatic equation becomes $\partial\Phi/\p
 The combined momentum flux that appears in the vorticity and divergence tendencies is
 
 $$
-\mathbf{F} = (\zeta + f)(\hat{k} \times \mathbf{v})
-+ \dot{\sigma}\frac{\partial\mathbf{v}}{\partial\sigma}
-+ R T_v' \nabla\ln p_s
+\mathbf{F} = (\zeta + f)(\hat{k} \times \mathbf{v}) + \dot{\sigma}\frac{\partial\mathbf{v}}{\partial\sigma} + R T_v' \nabla\ln p_s
 $$
 
 where $T_v'$ is the virtual temperature anomaly relative to a reference profile (see

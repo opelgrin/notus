@@ -122,13 +122,11 @@ indicate stable conditions.
 **Unstable conditions** ($Ri_b < 0$):
 
 $$
-f_m = 1 - \frac{2b \, Ri_b}
-{1 + 3b \, c_m \sqrt{C_{DN}} \sqrt{z_\text{ref}/z_{0m}} \sqrt{|Ri_b|}}
+f_m = 1 - \frac{2b \, Ri_b}{1 + 3b \, c_m \sqrt{C_{DN}} \sqrt{z_\text{ref}/z_{0m}} \sqrt{|Ri_b|}}
 $$
 
 $$
-f_h = 1 - \frac{3b \, Ri_b}
-{1 + 3b \, c_h \sqrt{C_{HN}} \sqrt{z_\text{ref}/z_{0h}} \sqrt{|Ri_b|}}
+f_h = 1 - \frac{3b \, Ri_b}{1 + 3b \, c_h \sqrt{C_{HN}} \sqrt{z_\text{ref}/z_{0h}} \sqrt{|Ri_b|}}
 $$
 
 **Stable conditions** ($Ri_b \ge 0$):

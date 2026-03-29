@@ -14,10 +14,7 @@ the boundary layer.
 ### Equilibrium temperature
 
 $$
-T_\text{eq}(\varphi, p) = \max\left(T_\text{min}, \;
-\left[315 - \Delta T_y \sin^2\varphi
-- \Delta\theta_z \ln\frac{p}{p_0} \cos^2\varphi\right]
-\left(\frac{p}{p_0}\right)^\kappa \right)
+T_\text{eq}(\varphi, p) = \max\left(T_\text{min}, \; \left[315 - \Delta T_y \sin^2\varphi - \Delta\theta_z \ln\frac{p}{p_0} \cos^2\varphi\right] \left(\frac{p}{p_0}\right)^\kappa \right)
 $$
 
 This produces a warm equator, cold poles, and a statically stable stratosphere (where
@@ -28,8 +25,7 @@ $T_\text{eq}$ is clamped to $T_\text{min}$).
 The temperature is relaxed toward $T_\text{eq}$ with a latitude- and height-dependent rate:
 
 $$
-k_T = k_a + (k_s - k_a) \, \max\left(0, \frac{\sigma - \sigma_b}{1 - \sigma_b}\right)
-\cos^4\varphi
+k_T = k_a + (k_s - k_a) \, \max\left(0, \frac{\sigma - \sigma_b}{1 - \sigma_b}\right) \cos^4\varphi
 $$
 
 The relaxation is fast near the surface at low latitudes ($\sim$4-day timescale) and slow
@@ -100,8 +96,7 @@ jet peaks at about 35 m/s in the upper troposphere.
 The initial temperature is analytically derived from thermal wind balance:
 
 $$
-T'(\varphi, \eta) = \frac{3\eta\pi u_0}{4R} \sin\eta_v \sqrt{\cos\eta_v}
-\left[A(\varphi) \cdot 2u_0 \cos^{3/2}\eta_v + B(\varphi) \cdot a\Omega\right]
+T'(\varphi, \eta) = \frac{3\eta\pi u_0}{4R} \sin\eta_v \sqrt{\cos\eta_v} \left[A(\varphi) \cdot 2u_0 \cos^{3/2}\eta_v + B(\varphi) \cdot a\Omega\right]
 $$
 
 where
@@ -111,8 +106,7 @@ A(\varphi) = -2\sin^6\varphi\left(\cos^2\varphi + \tfrac{1}{3}\right) + \tfrac{1
 $$
 
 $$
-B(\varphi) = \tfrac{8}{5}\cos^3\varphi\left(\sin^2\varphi + \tfrac{2}{3}\right)
-- \frac{\pi}{4}
+B(\varphi) = \tfrac{8}{5}\cos^3\varphi\left(\sin^2\varphi + \tfrac{2}{3}\right) - \frac{\pi}{4}
 $$
 
 ### Parameters

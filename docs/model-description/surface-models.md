@@ -10,8 +10,7 @@ The simplest surface boundary condition is a fixed, zonally symmetric SST profil
 Frierson et al. (2006):
 
 $$
-T_s(\varphi) = \max\left(T_\text{min}, \;
-T_\text{min} + \Delta T \, \exp\left(-\frac{\varphi^2}{2\varphi_w^2}\right)\right)
+T_s(\varphi) = \max\left(T_\text{min}, \; T_\text{min} + \Delta T \, \exp\left(-\frac{\varphi^2}{2\varphi_w^2}\right)\right)
 $$
 
 | Parameter | Default | Description |
@@ -40,8 +39,7 @@ convergence of oceanic heat transport (q-flux).
 ### Net surface energy balance
 
 $$
-F_\text{net} = S_\text{abs} + F^\downarrow_\text{LW}
-- \sigma_\text{SB} T_s^4 - H - L_v E
+F_\text{net} = S_\text{abs} + F^\downarrow_\text{LW} - \sigma_\text{SB} T_s^4 - H - L_v E
 $$
 
 where $S_\text{abs}$ is the absorbed shortwave radiation (after surface albedo),
@@ -55,16 +53,13 @@ The SST tendency depends on $T_s$ through the longwave emission and surface flux
 maintain stability, the update uses a linearized implicit scheme:
 
 $$
-T_s^{n+1} = T_s^n + \Delta t \,
-\frac{F_\text{net} + Q_\text{flux}}{C_\text{ocean} - \Delta t \, \partial F / \partial T_s}
+T_s^{n+1} = T_s^n + \Delta t \, \frac{F_\text{net} + Q_\text{flux}}{C_\text{ocean} - \Delta t \, \partial F / \partial T_s}
 $$
 
 The flux derivative is
 
 $$
-\frac{\partial F}{\partial T_s} = -4\sigma_\text{SB} T_s^3
-- \rho \, c_p C_H |V|
-- \rho \, L_v C_H |V| \frac{dq_\text{sat}}{dT_s}
+\frac{\partial F}{\partial T_s} = -4\sigma_\text{SB} T_s^3 - \rho \, c_p C_H |V| - \rho \, L_v C_H |V| \frac{dq_\text{sat}}{dT_s}
 $$
 
 Since all three terms are negative, the denominator is always larger than
@@ -124,8 +119,7 @@ runoff (excess above the bucket capacity). The bucket depth is bounded between 0
 $W_\text{max}$:
 
 $$
-W^{n+1} = \text{clip}\left(W^n + \Delta t \,
-\frac{P - \beta E_\text{pot}}{\rho_w}, \; 0, \; W_\text{max}\right)
+W^{n+1} = \text{clip}\left(W^n + \Delta t \, \frac{P - \beta E_\text{pot}}{\rho_w}, \; 0, \; W_\text{max}\right)
 $$
 
 ### Evaporation reduction
@@ -145,8 +139,7 @@ occurs; below it, evaporation decreases linearly to zero.
 The land surface albedo varies with soil moisture:
 
 $$
-\alpha_\text{land} = \alpha_\text{dry} + (\alpha_\text{wet} - \alpha_\text{dry})
-\, \min\left(1, \frac{W}{W_\text{max}}\right)
+\alpha_\text{land} = \alpha_\text{dry} + (\alpha_\text{wet} - \alpha_\text{dry}) \min\left(1, \frac{W}{W_\text{max}}\right)
 $$
 
 Dry soils are more reflective than wet soils. The effective surface albedo blends ocean and
@@ -173,8 +166,7 @@ precipitation.
 Cloud cover in the free troposphere is
 
 $$
-C = \min\left(1, \; w_p \sqrt{P_\text{mm/day}}
-+ \min\left(1, \; (r \cdot \Delta\text{RH})^2 \right)\right)
+C = \min\left(1, \; w_p \sqrt{P_\text{mm/day}} + \min\left(1, \; (r \cdot \Delta\text{RH})^2 \right)\right)
 $$
 
 where $\Delta\text{RH} = \max(0, \text{RH} - \text{RH}_1)$ is the relative humidity excess
@@ -254,9 +246,7 @@ The daily-mean insolation at latitude $\varphi$ is obtained by analytically inte
 over the diurnal cycle (Hartmann, 2016):
 
 $$
-\bar{S}(\varphi, d) = \frac{S_0}{\pi} \left(\frac{a}{r}\right)^2
-\left[h_0 \sin\varphi \sin\delta
-+ \cos\varphi \cos\delta \sin h_0 \right]
+\bar{S}(\varphi, d) = \frac{S_0}{\pi} \left(\frac{a}{r}\right)^2 \left[h_0 \sin\varphi \sin\delta + \cos\varphi \cos\delta \sin h_0 \right]
 $$
 
 where $h_0$ is the sunrise hour angle:
@@ -289,8 +279,7 @@ smoothing.
 **Gaussian mountain**: an isolated peak at $(\varphi_0, \lambda_0)$:
 
 $$
-z(\varphi, \lambda) = h_0 \exp\left(
--\frac{(\varphi - \varphi_0)^2 + (\lambda - \lambda_0)^2}{\sigma^2}\right)
+z(\varphi, \lambda) = h_0 \exp\left(-\frac{(\varphi - \varphi_0)^2 + (\lambda - \lambda_0)^2}{\sigma^2}\right)
 $$
 
 **Zonal ridge**: a latitude-only ridge:
@@ -368,8 +357,7 @@ T_\text{target} = (1 - f_\text{land}) \, T_\text{SST}
 $$
 
 $$
-q_\text{target} = (1 - f_\text{land}) \, q_\text{sat}(T_\text{SST})
-+ f_\text{land} \, \beta \, q_\text{sat}(T_\text{soil})
+q_\text{target} = (1 - f_\text{land}) \, q_\text{sat}(T_\text{SST}) + f_\text{land} \, \beta \, q_\text{sat}(T_\text{soil})
 $$
 
 where $f_\text{land}$ is the land fraction and $\beta$ is the bucket evaporation efficiency.

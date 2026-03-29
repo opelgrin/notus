@@ -14,8 +14,7 @@ computed as point-wise products on the grid.
 A scalar field on the sphere is expanded as
 
 $$
-f(\lambda, \varphi) = \sum_{m=0}^{T} \sum_{n=m}^{T} \hat{f}_n^m \,
-\bar{P}_n^m(\sin\varphi) \, e^{im\lambda}
+f(\lambda, \varphi) = \sum_{m=0}^{T} \sum_{n=m}^{T} \hat{f}_n^m \, \bar{P}_n^m(\sin\varphi) \, e^{im\lambda}
 $$
 
 where $\lambda$ is longitude, $\varphi$ is latitude, $m$ is the zonal wavenumber, $n$ is
@@ -26,16 +25,14 @@ The $\bar{P}_n^m$ are fully normalized associated Legendre polynomials, satisfyi
 orthonormality condition
 
 $$
-\int_{-1}^{1} \bar{P}_n^m(\mu) \, \bar{P}_{n'}^m(\mu) \, d\mu
-= \frac{2}{2n+1} \, \delta_{nn'}
+\int_{-1}^{1} \bar{P}_n^m(\mu) \, \bar{P}_{n'}^m(\mu) \, d\mu = \frac{2}{2n+1} \, \delta_{nn'}
 $$
 
 where $\mu = \sin\varphi$. With this normalization the spherical harmonics
 $Y_n^m = \bar{P}_n^m(\sin\varphi) \, e^{im\lambda}$ are orthonormal over the unit sphere:
 
 $$
-\int_0^{2\pi} \int_{-\pi/2}^{\pi/2}
-Y_n^m \, {Y_{n'}^{m'}}^* \, \cos\varphi \, d\varphi \, d\lambda = \delta_{nn'}\delta_{mm'}
+\int_0^{2\pi} \int_{-\pi/2}^{\pi/2} Y_n^m \, {Y_{n'}^{m'}}^* \, \cos\varphi \, d\varphi \, d\lambda = \delta_{nn'}\delta_{mm'}
 $$
 
 ### Legendre polynomial computation
@@ -44,8 +41,7 @@ The normalized associated Legendre polynomials are computed via three-term recur
 Starting from the sectoral value ($n = m$), computed iteratively to avoid overflow:
 
 $$
-\bar{P}_m^m(\mu) = (-1)^m \prod_{i=1}^{m}
-\sqrt{\frac{2i+1}{2i}} \; (1 - \mu^2)^{m/2}
+\bar{P}_m^m(\mu) = (-1)^m \prod_{i=1}^{m} \sqrt{\frac{2i+1}{2i}} \; (1 - \mu^2)^{m/2}
 $$
 
 The first tesseral value is
@@ -57,15 +53,13 @@ $$
 and subsequent values follow from
 
 $$
-\bar{P}_n^m(\mu) = a_n^m \, \mu \, \bar{P}_{n-1}^m(\mu)
-- b_n^m \, \bar{P}_{n-2}^m(\mu)
+\bar{P}_n^m(\mu) = a_n^m \, \mu \, \bar{P}_{n-1}^m(\mu) - b_n^m \, \bar{P}_{n-2}^m(\mu)
 $$
 
 with recurrence coefficients
 
 $$
-a_n^m = \sqrt{\frac{(2n-1)(2n+1)}{(n-m)(n+m)}}, \qquad
-b_n^m = \sqrt{\frac{(2n+1)(n+m-1)(n-m-1)}{(n-m)(n+m)(2n-3)}}
+a_n^m = \sqrt{\frac{(2n-1)(2n+1)}{(n-m)(n+m)}}, \qquad b_n^m = \sqrt{\frac{(2n+1)(n+m-1)(n-m-1)}{(n-m)(n+m)(2n-3)}}
 $$
 
 ### Spectral indexing
@@ -89,8 +83,7 @@ Legendre polynomial $P_{N_\text{lat}}(\sin\varphi)$, and longitudes are equally 
 For a truncation $T$, the default grid uses the **quadratic** (alias-free) rule:
 
 $$
-N_\text{lat} = \left\lceil \frac{3T + 1}{2} \right\rceil
-\quad \text{(rounded up to the next even number)}
+N_\text{lat} = \left\lceil \frac{3T + 1}{2} \right\rceil \quad \text{(rounded up to the next even number)}
 $$
 
 $$
@@ -111,9 +104,7 @@ weights of $P_{N_\text{lat}}(\mu)$ via standard Gauss-Legendre quadrature. Latit
 ordered north to south. The weights satisfy
 
 $$
-\sum_{j=1}^{N_\text{lat}} w_j \, P_n(\mu_j) \, P_{n'}(\mu_j)
-= \frac{2}{2n+1} \, \delta_{nn'}
-\qquad \text{for } n + n' \le 2N_\text{lat} - 1
+\sum_{j=1}^{N_\text{lat}} w_j \, P_n(\mu_j) \, P_{n'}(\mu_j) = \frac{2}{2n+1} \, \delta_{nn'} \qquad \text{for } n + n' \le 2N_\text{lat} - 1
 $$
 
 Longitudes are uniformly spaced:
@@ -130,8 +121,7 @@ The transform from grid-point values to spectral coefficients is factored into t
 coefficients
 
 $$
-\tilde{f}_m(\varphi_j) = \sum_{k=0}^{N_\text{lon}-1}
-f(\lambda_k, \varphi_j) \, e^{-im\lambda_k}
+\tilde{f}_m(\varphi_j) = \sum_{k=0}^{N_\text{lon}-1} f(\lambda_k, \varphi_j) \, e^{-im\lambda_k}
 $$
 
 via a real-to-complex FFT, retaining wavenumbers $m = 0, 1, \ldots, T$.
@@ -140,8 +130,7 @@ via a real-to-complex FFT, retaining wavenumbers $m = 0, 1, \ldots, T$.
 project onto the associated Legendre polynomials:
 
 $$
-\hat{f}_n^m = \frac{1}{2N_\text{lon}} \sum_{j=1}^{N_\text{lat}}
-w_j \, \tilde{f}_m(\varphi_j) \, \bar{P}_n^m(\sin\varphi_j)
+\hat{f}_n^m = \frac{1}{2N_\text{lon}} \sum_{j=1}^{N_\text{lat}} w_j \, \tilde{f}_m(\varphi_j) \, \bar{P}_n^m(\sin\varphi_j)
 $$
 
 The prefactor $1/(2N_\text{lon})$ combines the longitude trapezoidal rule ($2\pi /
@@ -155,8 +144,7 @@ The inverse transform reverses the two steps.
 $\varphi_j$, sum over total wavenumber:
 
 $$
-\tilde{f}_m(\varphi_j) = N_\text{lon} \sum_{n=m}^{T}
-\hat{f}_n^m \, \bar{P}_n^m(\sin\varphi_j)
+\tilde{f}_m(\varphi_j) = N_\text{lon} \sum_{n=m}^{T} \hat{f}_n^m \, \bar{P}_n^m(\sin\varphi_j)
 $$
 
 The factor $N_\text{lon}$ pre-multiplies the Fourier coefficients to compensate for the
@@ -182,8 +170,7 @@ $\lambda_n = -n(n+1)/a^2$.
 ### Inverse Laplacian
 
 $$
-\widehat{\nabla^{-2} f}_n^m = \frac{1}{\lambda_n} \, \hat{f}_n^m
-\qquad (n \ge 1)
+\widehat{\nabla^{-2} f}_n^m = \frac{1}{\lambda_n} \, \hat{f}_n^m \qquad (n \ge 1)
 $$
 
 The global mean ($n = 0$) is set to zero, since the inverse Laplacian is defined only up to
@@ -201,9 +188,7 @@ The meridional derivative is not diagonal in spectral space; instead it couples 
 total wavenumbers via the recurrence
 
 $$
-\widehat{\cos\varphi \frac{\partial f}{\partial \varphi}}\bigg|_n^m
-= (n+2) \, \varepsilon_{n+1}^m \, \hat{f}_{n+1}^m
-- (n-1) \, \varepsilon_n^m \, \hat{f}_{n-1}^m
+\widehat{\cos\varphi \frac{\partial f}{\partial \varphi}}\bigg|_n^m = (n+2) \, \varepsilon_{n+1}^m \, \hat{f}_{n+1}^m - (n-1) \, \varepsilon_n^m \, \hat{f}_{n-1}^m
 $$
 
 with coupling coefficient
@@ -218,22 +203,17 @@ Winds are recovered from the streamfunction $\psi$ and velocity potential $\chi$
 from the vorticity $\zeta$ and divergence $\delta$ via the inverse Laplacian:
 
 $$
-\hat{\psi}_n^m = \nabla^{-2} \hat{\zeta}_n^m, \qquad
-\hat{\chi}_n^m = \nabla^{-2} \hat{\delta}_n^m
+\hat{\psi}_n^m = \nabla^{-2} \hat{\zeta}_n^m, \qquad \hat{\chi}_n^m = \nabla^{-2} \hat{\delta}_n^m
 $$
 
 The wind components (scaled by $\cos\varphi$) are then
 
 $$
-\widehat{u\cos\varphi} = \frac{1}{a}\left(
--\widehat{\cos\varphi\,\frac{\partial\psi}{\partial\varphi}}
-+ \frac{\partial\hat{\chi}}{\partial\lambda}\right)
+\widehat{u\cos\varphi} = \frac{1}{a}\left(-\widehat{\cos\varphi\,\frac{\partial\psi}{\partial\varphi}} + \frac{\partial\hat{\chi}}{\partial\lambda}\right)
 $$
 
 $$
-\widehat{v\cos\varphi} = \frac{1}{a}\left(
-\frac{\partial\hat{\psi}}{\partial\lambda}
-+ \widehat{\cos\varphi\,\frac{\partial\chi}{\partial\varphi}}\right)
+\widehat{v\cos\varphi} = \frac{1}{a}\left(\frac{\partial\hat{\psi}}{\partial\lambda} + \widehat{\cos\varphi\,\frac{\partial\chi}{\partial\varphi}}\right)
 $$
 
 ### Spectral divergence and curl
@@ -242,13 +222,11 @@ Given spectral flux components $\hat{A}$ and $\hat{B}$ (representing zonal and m
 fluxes divided by $\cos^2\varphi$), the spectral divergence and curl of the flux vector are
 
 $$
-\widehat{\nabla \cdot \mathbf{F}}\bigg|_n^m
-= \frac{1}{a}\left(im\,\hat{A}_n^m + \frac{d\hat{B}_n^m}{d\mu}\right)
+\widehat{\nabla \cdot \mathbf{F}}\bigg|_n^m = \frac{1}{a}\left(im\,\hat{A}_n^m + \frac{d\hat{B}_n^m}{d\mu}\right)
 $$
 
 $$
-\widehat{(\nabla \times \mathbf{F})_z}\bigg|_n^m
-= \frac{1}{a}\left(-im\,\hat{B}_n^m + \frac{d\hat{A}_n^m}{d\mu}\right)
+\widehat{(\nabla \times \mathbf{F})_z}\bigg|_n^m = \frac{1}{a}\left(-im\,\hat{B}_n^m + \frac{d\hat{A}_n^m}{d\mu}\right)
 $$
 
 where $\mu = \sin\varphi$ and $d/d\mu$ is computed via a three-term recurrence analogous to
@@ -259,9 +237,7 @@ the meridional derivative.
 Scale-selective diffusion of order $2p$ acts on spectral coefficients as
 
 $$
-\frac{\partial \hat{f}_n^m}{\partial t}\bigg|_\text{diff}
-= (-1)^{p+1} \, \nu_{2p} \, \nabla^{2p} \hat{f}_n^m
-= -\nu_{2p} \left(\frac{n(n+1)}{a^2}\right)^p \hat{f}_n^m
+\frac{\partial \hat{f}_n^m}{\partial t}\bigg|_\text{diff} = (-1)^{p+1} \, \nu_{2p} \, \nabla^{2p} \hat{f}_n^m = -\nu_{2p} \left(\frac{n(n+1)}{a^2}\right)^p \hat{f}_n^m
 $$
 
 The coefficient $\nu_{2p}$ is chosen so that the smallest retained scale ($n = T$) is
@@ -280,8 +256,7 @@ An additional multiplicative filter (Hou and Li, 2007) may be applied once per t
 suppress noise at the smallest scales:
 
 $$
-\hat{f}_n^m \leftarrow \hat{f}_n^m \,
-\exp\left(-\alpha \left(\frac{n}{T}\right)^{2s}\right)
+\hat{f}_n^m \leftarrow \hat{f}_n^m \, \exp\left(-\alpha \left(\frac{n}{T}\right)^{2s}\right)
 $$
 
 where $s$ is the filter order (default 18) and $\alpha = \Delta t \cdot 2\Omega / \tau_f$

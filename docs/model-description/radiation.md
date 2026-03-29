@@ -10,8 +10,7 @@ across the layer.
 The radiative heating rate at level $k$ is
 
 $$
-Q_k = -\frac{g}{c_p} \frac{F^\uparrow_{k+1/2} - F^\uparrow_{k-1/2}
-- F^\downarrow_{k+1/2} + F^\downarrow_{k-1/2}}{\Delta p_k}
+Q_k = -\frac{g}{c_p} \frac{F^\uparrow_{k+1/2} - F^\uparrow_{k-1/2} - F^\downarrow_{k+1/2} + F^\downarrow_{k-1/2}}{\Delta p_k}
 $$
 
 where $F^\uparrow$ and $F^\downarrow$ are the upward and downward radiative fluxes at
@@ -29,8 +28,7 @@ The optical depth from the top of the atmosphere to level $\sigma$ varies with l
 $\varphi$ as
 
 $$
-\tau(\sigma, \varphi) = \tau_0(\varphi) \left[
-f_l \, \sigma + (1 - f_l) \, \sigma^\alpha \right]
+\tau(\sigma, \varphi) = \tau_0(\varphi) \left[f_l \, \sigma + (1 - f_l) \, \sigma^\alpha \right]
 $$
 
 where the surface optical depth has a meridional gradient:
@@ -102,16 +100,13 @@ the humidity-dependent water vapor absorption. The optical depth is accumulated 
 model top by summing over layers:
 
 $$
-\tau_{k+1/2} = \tau_{k-1/2} + (a_\text{LW} + b_\text{LW} q_k) \,
-\frac{\Delta p_k}{p_0}
+\tau_{k+1/2} = \tau_{k-1/2} + (a_\text{LW} + b_\text{LW} q_k) \, \frac{\Delta p_k}{p_0}
 $$
 
 The shortwave optical depth uses the same structure:
 
 $$
-\tau_{\text{SW},k+1/2} = \tau_{\text{SW},k-1/2}
-+ (\tau_{\text{SW},0} + a_\text{SW} + b_\text{SW} q_k) \,
-\frac{\Delta p_k}{p_0}
+\tau_{\text{SW},k+1/2} = \tau_{\text{SW},k-1/2} + (\tau_{\text{SW},0} + a_\text{SW} + b_\text{SW} q_k) \, \frac{\Delta p_k}{p_0}
 $$
 
 | Parameter | Default | Description |
@@ -197,8 +192,7 @@ Two shortwave bands partition the incoming solar flux:
 **Visible band** absorptivity per layer:
 
 $$
-\alpha_\text{vis} = \alpha_\text{dry} + \alpha_\text{aer} \, \sigma_k^2
-+ \alpha_\text{wv1} \, q_k
+\alpha_\text{vis} = \alpha_\text{dry} + \alpha_\text{aer} \, \sigma_k^2 + \alpha_\text{wv1} \, q_k
 $$
 
 where the aerosol absorption is weighted by $\sigma^2$ (concentrated near the surface) and

@@ -57,13 +57,11 @@ blends three Gaussian bumps centered on these regions of interest.
 The geopotential integration requires logarithmic sigma ratios defined at half levels:
 
 $$
-\alpha_j = \frac{1}{2} \ln\frac{\sigma_\text{full}[j+1]}{\sigma_\text{full}[j]}
-\qquad \text{for } j < L-1
+\alpha_j = \frac{1}{2} \ln\frac{\sigma_\text{full}[j+1]}{\sigma_\text{full}[j]} \qquad \text{for } j < L-1
 $$
 
 $$
-\alpha_{L-1} = -\ln \sigma_\text{full}[L-1]
-\qquad \text{(bottom level)}
+\alpha_{L-1} = -\ln \sigma_\text{full}[L-1] \qquad \text{(bottom level)}
 $$
 
 These arise from the analytical integration of the hydrostatic equation between adjacent
@@ -141,19 +139,14 @@ Vertical advection of any field $f$ defined at full levels uses centered second-
 differences. First, the vertical gradient at half levels is computed:
 
 $$
-\left.\frac{\partial f}{\partial\sigma}\right|_{k+1/2}
-= \frac{f_{k+1} - f_k}{\sigma_\text{full}[k+1] - \sigma_\text{full}[k]}
+\left.\frac{\partial f}{\partial\sigma}\right|_{k+1/2} = \frac{f_{k+1} - f_k}{\sigma_\text{full}[k+1] - \sigma_\text{full}[k]}
 $$
 
 with zero-gradient boundary conditions at the top and bottom. The vertical advection at full
 levels is then
 
 $$
--\dot{\sigma}\frac{\partial f}{\partial\sigma}\bigg|_k
-= -\frac{1}{2}\left(
-\dot{\sigma}_{k-1/2} \left.\frac{\partial f}{\partial\sigma}\right|_{k-1/2}
-+ \dot{\sigma}_{k+1/2} \left.\frac{\partial f}{\partial\sigma}\right|_{k+1/2}
-\right)
+-\dot{\sigma}\frac{\partial f}{\partial\sigma}\bigg|_k = -\frac{1}{2}\left(\dot{\sigma}_{k-1/2} \left.\frac{\partial f}{\partial\sigma}\right|_{k-1/2} + \dot{\sigma}_{k+1/2} \left.\frac{\partial f}{\partial\sigma}\right|_{k+1/2}\right)
 $$
 
 The averaging of the two half-level products ensures second-order accuracy and prevents
@@ -166,9 +159,7 @@ heating term of the thermodynamic equation. Following Durran, it is computed at 
 as
 
 $$
-\left(\frac{\omega}{p}\right)_k
-= \mathbf{v}_k \cdot \nabla\ln p_s
-- \frac{1}{\Delta\sigma_k}\left(\alpha_k \, F_k + \alpha_{k-1} \, F_{k-1}\right)
+\left(\frac{\omega}{p}\right)_k = \mathbf{v}_k \cdot \nabla\ln p_s - \frac{1}{\Delta\sigma_k}\left(\alpha_k \, F_k + \alpha_{k-1} \, F_{k-1}\right)
 $$
 
 where

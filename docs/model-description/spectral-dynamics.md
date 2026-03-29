@@ -41,13 +41,11 @@ which expect fluxes in this form. The vorticity and divergence tendencies from t
 are
 
 $$
-\frac{\partial\hat{\zeta}}{\partial t}\bigg|_\text{adv}
-= \text{curl}_z(\hat{A}_\zeta, \hat{B}_\zeta)
+\frac{\partial\hat{\zeta}}{\partial t}\bigg|_\text{adv} = \text{curl}_z(\hat{A}_\zeta, \hat{B}_\zeta)
 $$
 
 $$
-\frac{\partial\hat{\delta}}{\partial t}\bigg|_\text{adv}
-= -\text{div}(\hat{A}_\zeta, \hat{B}_\zeta)
+\frac{\partial\hat{\delta}}{\partial t}\bigg|_\text{adv} = -\text{div}(\hat{A}_\zeta, \hat{B}_\zeta)
 $$
 
 ### Kinetic energy
@@ -75,10 +73,7 @@ semi-implicit scheme assumes the advective form $-\mathbf{v} \cdot \nabla T'$. S
 differ by $T' \delta$, a grid-point correction is added:
 
 $$
-\frac{\partial T}{\partial t}\bigg|_\text{nodal}
-= \dot{\sigma}\frac{\partial T}{\partial\sigma}\bigg|_\text{explicit}
-+ \kappa T \frac{\omega}{p}
-+ T' \delta
+\frac{\partial T}{\partial t}\bigg|_\text{nodal} = \dot{\sigma}\frac{\partial T}{\partial\sigma}\bigg|_\text{explicit} + \kappa T \frac{\omega}{p} + T' \delta
 $$
 
 This nodal correction, transformed to spectral space and added to the flux divergence,
@@ -137,11 +132,11 @@ L_\delta = -\nabla^2(\Phi' + R \, T_{v,\text{ref}} \, \ln p_s)
 $$
 
 $$
-L_T = -\mathbf{H} \, \boldsymbol{\delta}
+L_T = -\mathbf{H} \, \mathbf{\delta}
 $$
 
 $$
-L_{\ln p_s} = -\boldsymbol{\Delta\sigma}^T \boldsymbol{\delta}
+L_{\ln p_s} = -\mathbf{\Delta\sigma}^T \mathbf{\delta}
 $$
 
 where $\Phi' = \mathbf{G}_v \, \mathbf{T}'$ is the geopotential anomaly computed from
@@ -169,15 +164,14 @@ adiabatic heating term alone.
 The implicit system couples the vertical levels through the matrix
 
 $$
-\mathbf{M} = \mathbf{G}_v \mathbf{H} + R \, T_{v,\text{ref}} \otimes \boldsymbol{\Delta\sigma}
+\mathbf{M} = \mathbf{G}_v \mathbf{H} + R \, T_{v,\text{ref}} \otimes \mathbf{\Delta\sigma}
 $$
 
 The Helmholtz problem to be solved at each time step (see
 [Time Integration](time-integration.md)) takes the form
 
 $$
-\left(\mathbf{I} - s^2 \lambda_n \mathbf{M}\right) \hat{\boldsymbol{\delta}}_n^m
-= \text{rhs}
+\left(\mathbf{I} - s^2 \lambda_n \mathbf{M}\right) \hat{\mathbf{\delta}}_n^m = \text{rhs}
 $$
 
 where $s$ is the implicit step size and $\lambda_n = -n(n+1)/a^2$ is the Laplacian
@@ -197,8 +191,7 @@ $$
 The system then becomes diagonal:
 
 $$
-(1 - s^2 \lambda_n \mu_j) \, (\mathbf{P}^{-1} \hat{\boldsymbol{\delta}})_j
-= (\mathbf{P}^{-1} \, \text{rhs})_j
+(1 - s^2 \lambda_n \mu_j) \, (\mathbf{P}^{-1} \hat{\mathbf{\delta}})_j = (\mathbf{P}^{-1} \, \text{rhs})_j
 $$
 
 This requires only $O(L^2)$ work per spectral mode (for the matrix-vector products with
@@ -210,8 +203,7 @@ When topography is present, the surface geopotential $\Phi_s = g z_s$ contribute
 additional term to the divergence tendency:
 
 $$
-\frac{\partial\hat{\delta}}{\partial t}\bigg|_\text{orog}
-= -\nabla^2 \hat{\Phi}_s
+\frac{\partial\hat{\delta}}{\partial t}\bigg|_\text{orog} = -\nabla^2 \hat{\Phi}_s
 $$
 
 This term is pre-computed in spectral space and added to the explicit divergence tendency at

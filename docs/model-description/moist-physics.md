@@ -48,8 +48,7 @@ The moist pseudoadiabatic lapse rate is used to construct reference profiles for
 Betts-Miller convection scheme. A parcel lifted from the surface follows
 
 $$
-\frac{dT}{dp} = \frac{R_d T + L_v q_\text{sat}}
-{c_p p + L_v^2 \varepsilon \, q_\text{sat} / (R_d T^2)}
+\frac{dT}{dp} = \frac{R_d T + L_v q_\text{sat}}{c_p p + L_v^2 \varepsilon \, q_\text{sat} / (R_d T^2)}
 $$
 
 This is integrated upward in log-pressure from the surface to each model level using 200
@@ -72,8 +71,7 @@ should be in a stable atmosphere), the pair is mixed to a common potential tempe
 conserves the column-integrated enthalpy:
 
 $$
-\theta_\text{new} = \frac{\Delta\sigma_k \, T_k + \Delta\sigma_{k+1} \, T_{k+1}}
-{\Delta\sigma_k \, \sigma_k^\kappa + \Delta\sigma_{k+1} \, \sigma_{k+1}^\kappa}
+\theta_\text{new} = \frac{\Delta\sigma_k \, T_k + \Delta\sigma_{k+1} \, T_{k+1}}{\Delta\sigma_k \, \sigma_k^\kappa + \Delta\sigma_{k+1} \, \sigma_{k+1}^\kappa}
 $$
 
 The adjustment sweeps bottom-to-top and is repeated for a configurable number of iterations
@@ -89,8 +87,7 @@ heat release raises the temperature and hence $q_\text{sat}$ itself.
 The moisture increment is
 
 $$
-\Delta q = -\frac{q - \text{rh}_\text{crit} \, q_\text{sat}}
-{1 + \dfrac{L_v^2 \varepsilon \, q_\text{sat}}{c_p R_d T^2}}
+\Delta q = -\frac{q - \text{rh}_\text{crit} \, q_\text{sat}}{1 + L_v^2 \varepsilon \, q_\text{sat} / (c_p R_d T^2)}
 $$
 
 The denominator is the Clausius-Clapeyron correction: it is always $> 1$, reducing the
