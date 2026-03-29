@@ -17,13 +17,18 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
-from notus.physics.forcing import Forcing
+from notus.physics.clouds import CloudDiagnostic, diagnose_clouds
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
+    byrne_shortwave_optical_depth,
     longwave_optical_depth,
     lw_down_surface,
+    shortwave_heating,
+    speedy_lw_down_surface,
+    speedy_shortwave_heating,
 )
+from notus.physics.simple_physics import SimplePhysics
 from notus.physics.solar import daily_mean_insolation
 from notus.physics.surface import (
     BucketLandConfig,
@@ -55,11 +60,9 @@ class _ExplicitOnlyForcing:
     stepper handles it with the ocean update instead.
     """
 
-    def __init__(self, forcing: Forcing) -> None:
+    def __init__(self, forcing: SimplePhysics) -> None:
         self._forcing = forcing
-        # Forward compute_reference_humidity if present
-        if hasattr(forcing, "compute_reference_humidity"):
-            self.compute_reference_humidity = forcing.compute_reference_humidity
+        self.compute_reference_humidity = forcing.compute_reference_humidity
 
     def __call__(
         self,
@@ -76,7 +79,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     reference_temperature: np.ndarray,
     surface_geopotential: jnp.ndarray,
     dt: float,
-    forcing: Forcing,
+    forcing: SimplePhysics,
     ocean_config: SlabOceanConfig,
     q_flux: jnp.ndarray,
     surface_properties: SurfaceProperties | None = None,
@@ -118,9 +121,9 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         Surface geopotential in spectral space.
     dt : float
         Timestep [s].
-    forcing : Forcing
-        Physics forcing (must expose ``apply_implicit`` and
-        ``compute_reference_humidity`` for full functionality).
+    forcing : SimplePhysics
+        Physics forcing (provides radiation config, SST, implicit
+        surface physics, and reference humidity).
     ocean_config : SlabOceanConfig
         Slab ocean parameters.
     q_flux : jnp.ndarray
@@ -166,19 +169,34 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
 
     lowest = levels.n_levels - 1
     dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
-    cfg = forcing.config if hasattr(forcing, "config") else None
-    c_d = cfg.c_d if cfg is not None else 0.0015
-    surface_layer_cfg: SurfaceLayerConfig | None = (
-        cfg.surface_layer if cfg is not None and hasattr(cfg, "surface_layer") else None
-    )
-    sw_tau_0 = cfg.sw_tau_0 if cfg is not None else 0.0
-    radiation_scheme = cfg.radiation_scheme if cfg is not None else "frierson"
-    lw_tau_equator = cfg.tau_equator if cfg is not None else 6.0
-    lw_tau_pole = cfg.tau_pole if cfg is not None else 0.1
-    lw_linear_fraction = cfg.linear_fraction if cfg is not None else 0.1
-    lw_alpha = cfg.alpha if cfg is not None else 4.0
-    lw_byrne_a = cfg.byrne_a if cfg is not None else 0.8678
-    lw_byrne_b = cfg.byrne_b if cfg is not None else 1997.9
+    cfg = forcing.config
+    c_d = cfg.c_d
+    surface_layer_cfg: SurfaceLayerConfig | None = cfg.surface_layer
+    sw_tau_0 = cfg.sw_tau_0
+    sw_exponent = cfg.sw_exponent
+    delta_s = cfg.delta_s
+    radiation_scheme = cfg.radiation_scheme
+    lw_tau_equator = cfg.tau_equator
+    lw_tau_pole = cfg.tau_pole
+    lw_linear_fraction = cfg.linear_fraction
+    lw_alpha = cfg.alpha
+    lw_byrne_a = cfg.byrne_a
+    lw_byrne_b = cfg.byrne_b
+    byrne_sw_a = cfg.byrne_sw_a
+    byrne_sw_b = cfg.byrne_sw_b
+    sp_epslw = cfg.speedy_epslw
+    sp_emisfc = cfg.speedy_surface_emissivity
+    sp_ablwin = cfg.speedy_ablwin
+    sp_ablco2 = cfg.speedy_ablco2
+    sp_ablwv1 = cfg.speedy_ablwv1
+    sp_ablwv2 = cfg.speedy_ablwv2
+    sp_absdry = cfg.speedy_absdry
+    sp_absaer = cfg.speedy_absaer
+    sp_sw_abswv1 = cfg.speedy_sw_abswv1
+    sp_sw_abswv2 = cfg.speedy_sw_abswv2
+    sp_vis_frac = cfg.speedy_visible_fraction
+    clouds_enabled = cfg.enable_clouds
+    cloud_cfg = cfg.cloud_config
     ocean_heat_capacity = ocean_config.heat_capacity
     sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
 
@@ -197,22 +215,115 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     tau_adj = cfg.tau_adjustment if cfg is not None else 43200.0
 
     def _compute_insolation() -> jnp.ndarray:
-        """Compute TOA insolation (seasonal or fixed)."""
+        """Compute TOA insolation (seasonal or fixed Frierson profile)."""
         sin_lat = transform.grid.sin_lat
-        if (
-            hasattr(forcing, "day_of_year")
-            and forcing.day_of_year is not None
-            and cfg is not None
-            and cfg.orbital is not None
-        ):
+        if forcing.day_of_year is not None and cfg.orbital is not None:
             return daily_mean_insolation(
                 sin_lat,
                 forcing.day_of_year,
                 planet.solar_constant,
                 cfg.orbital,
             )
-        delta_s = cfg.delta_s if cfg is not None else 1.4
         return planet.solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+
+    def _diagnose_speedy_clouds(
+        state: PrimitiveEquationState,
+        t_grid: jnp.ndarray,
+        q_grid: jnp.ndarray,
+        ps_grid: jnp.ndarray,
+    ) -> CloudDiagnostic | None:
+        """Diagnose clouds for SPEEDY scheme (returns None if disabled)."""
+        if not clouds_enabled:
+            return None
+        pressure = levels.sigma_full[:, None, None] * ps_grid[None, :, :]
+        q_sat = saturation_specific_humidity(t_grid, pressure, planet.epsilon_moisture)
+        rh = q_grid / jnp.maximum(q_sat, 1e-10)
+        geopotential = planet.gravity * levels.sigma_full[:, None, None] * jnp.ones_like(t_grid)
+        n_lat, n_lon = ps_grid.shape
+        return diagnose_clouds(
+            rh,
+            q_grid,
+            t_grid,
+            geopotential,
+            precipitation_rate=jnp.zeros((n_lat, n_lon)),
+            convective_mask=jnp.zeros_like(t_grid, dtype=bool),
+            gravity=planet.gravity,
+            specific_heat_cp=planet.specific_heat_cp,
+            config=cloud_cfg,
+        )
+
+    def _compute_sw_down_surface(
+        state: PrimitiveEquationState,
+        ps_grid: jnp.ndarray,
+        effective_albedo: float | jnp.ndarray,
+        cloud: CloudDiagnostic | None = None,
+    ) -> jnp.ndarray:
+        """Compute SW flux reaching the surface [W/m²]."""
+        sin_lat = transform.grid.sin_lat
+
+        if radiation_scheme == "speedy" and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            _, sw_down_sfc = speedy_shortwave_heating(
+                levels.dsigma,
+                levels.sigma_full,
+                q_grid,
+                ps_grid,
+                planet.reference_pressure,
+                _compute_insolation(),
+                planet.gravity,
+                planet.specific_heat_cp,
+                surface_albedo=effective_albedo,
+                absdry=sp_absdry,
+                absaer=sp_absaer,
+                abswv1=sp_sw_abswv1,
+                abswv2=sp_sw_abswv2,
+                visible_fraction=sp_vis_frac,
+                cloud=cloud,
+            )
+            return sw_down_sfc
+
+        if sw_tau_0 <= 0.0:
+            n_lat, n_lon = ps_grid.shape
+            return jnp.zeros((n_lat, n_lon))
+
+        insolation = _compute_insolation()
+
+        # Humidity-dependent SW optical depth for Byrne scheme
+        tau_sw: jnp.ndarray | None = None
+        if radiation_scheme == "byrne" and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            tau_sw = byrne_shortwave_optical_depth(
+                levels.dsigma,
+                q_grid,
+                ps_grid,
+                planet.reference_pressure,
+                sw_tau_0=sw_tau_0,
+                byrne_sw_a=byrne_sw_a,
+                byrne_sw_b=byrne_sw_b,
+            )
+
+        _, sw_down_sfc = shortwave_heating(
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            ps_grid,
+            planet.solar_constant,
+            planet.gravity,
+            planet.specific_heat_cp,
+            sw_tau_0=sw_tau_0,
+            sw_exponent=sw_exponent,
+            delta_s=delta_s,
+            insolation=insolation,
+            tau_sw_half=tau_sw,
+            surface_albedo=effective_albedo,
+        )
+        return sw_down_sfc
 
     def _surface_state(
         state: PrimitiveEquationState,
@@ -280,10 +391,36 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     def _compute_lw_down(
         state: PrimitiveEquationState,
         ps_grid: jnp.ndarray,
+        sst: jnp.ndarray | None = None,
+        cloud: CloudDiagnostic | None = None,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
         """Compute downward LW flux and return grid-space fields."""
         t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
         q_grid: jnp.ndarray | None = None
+
+        if radiation_scheme == "speedy" and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            t_sfc = sst if sst is not None else forcing.sst
+            lw_down = speedy_lw_down_surface(
+                t_grid,
+                t_sfc,
+                q_grid,
+                levels.dsigma,
+                ps_grid,
+                planet.reference_pressure,
+                epslw=sp_epslw,
+                surface_emissivity=sp_emisfc,
+                ablwin=sp_ablwin,
+                ablco2=sp_ablco2,
+                ablwv1=sp_ablwv1,
+                ablwv2=sp_ablwv2,
+                cloud=cloud,
+            )
+            return lw_down, t_grid, q_grid
+
         if radiation_scheme == "byrne" and state.humidity is not None:
             q_grid = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
@@ -316,19 +453,28 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     ) -> tuple[PrimitiveEquationState, SurfaceState]:
         """Post-step for ocean-only mode (backward compatible)."""
         # Rayleigh friction
-        if hasattr(forcing, "k_v"):
-            damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
-            state = state.replace(
-                vorticity=state.vorticity * damp,
-                divergence=state.divergence * damp,
-            )
+        damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
+        state = state.replace(
+            vorticity=state.vorticity * damp,
+            divergence=state.divergence * damp,
+        )
 
         wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = _surface_state(
             state,
             surface,
         )
-        insolation = _compute_insolation()
-        lw_down, _t_grid, _q_grid = _compute_lw_down(state, ps_grid)
+        # Cloud diagnosis for speedy scheme
+        cloud_diag = None
+        if radiation_scheme == "speedy" and clouds_enabled and state.humidity is not None:
+            t_for_cloud = jax.vmap(transform.spectral_to_grid)(state.temperature)
+            q_for_cloud = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            cloud_diag = _diagnose_speedy_clouds(state, t_for_cloud, q_for_cloud, ps_grid)
+
+        sw_down_sfc = _compute_sw_down_surface(state, ps_grid, sfc_albedo, cloud=cloud_diag)
+        lw_down, _t_grid, _q_grid = _compute_lw_down(state, ps_grid, cloud=cloud_diag)
 
         ocean = surface.ocean
         net_flux = compute_net_surface_flux(
@@ -337,7 +483,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             q_lowest,
             wind_speed,
             ps_grid,
-            insolation,
+            sw_down_sfc,
             lw_down,
             gravity=planet.gravity,
             gas_constant=planet.gas_constant,
@@ -346,7 +492,6 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             latent_heat=planet.latent_heat_vaporization,
             drag_coefficient=c_h,
             surface_albedo=sfc_albedo,
-            sw_tau_0=sw_tau_0,
         )
         dflux_dt = surface_flux_derivative(
             ocean.surface_temperature,
@@ -400,7 +545,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         )
         return state, SurfaceState(ocean=ocean, land=surface.land)
 
-    def _land_ocean_post_step(
+    def _land_ocean_post_step(  # noqa: PLR0915
         state: PrimitiveEquationState,
         surface: SurfaceState,
         dt_implicit: float,
@@ -413,19 +558,27 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         land: LandState = surface.land  # type: ignore[assignment]
 
         # Rayleigh friction
-        if hasattr(forcing, "k_v"):
-            damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
-            state = state.replace(
-                vorticity=state.vorticity * damp,
-                divergence=state.divergence * damp,
-            )
+        damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
+        state = state.replace(
+            vorticity=state.vorticity * damp,
+            divergence=state.divergence * damp,
+        )
 
         wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = _surface_state(
             state,
             surface,
         )
-        insolation = _compute_insolation()
-        lw_down, t_grid, q_grid = _compute_lw_down(state, ps_grid)
+        # Cloud diagnosis for speedy scheme
+        cloud_diag_lo = None
+        if radiation_scheme == "speedy" and clouds_enabled and state.humidity is not None:
+            t_for_cloud = jax.vmap(transform.spectral_to_grid)(state.temperature)
+            q_for_cloud = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            cloud_diag_lo = _diagnose_speedy_clouds(state, t_for_cloud, q_for_cloud, ps_grid)
+
+        lw_down, t_grid, q_grid = _compute_lw_down(state, ps_grid, cloud=cloud_diag_lo)
 
         ocean = surface.ocean
 
@@ -448,6 +601,13 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         else:
             effective_albedo = sfc_albedo
 
+        sw_down_sfc = _compute_sw_down_surface(
+            state,
+            ps_grid,
+            effective_albedo,
+            cloud=cloud_diag_lo,
+        )
+
         # --- Ocean branch ---
         ocean_net_flux = compute_net_surface_flux(
             ocean.surface_temperature,
@@ -455,7 +615,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             q_lowest,
             wind_speed,
             ps_grid,
-            insolation,
+            sw_down_sfc,
             lw_down,
             gravity=planet.gravity,
             gas_constant=planet.gas_constant,
@@ -464,7 +624,6 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             latent_heat=planet.latent_heat_vaporization,
             drag_coefficient=c_h,
             surface_albedo=effective_albedo,
-            sw_tau_0=sw_tau_0,
         )
         ocean_dflux = surface_flux_derivative(
             ocean.surface_temperature,
@@ -494,7 +653,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             q_lowest,
             wind_speed,
             ps_grid,
-            insolation,
+            sw_down_sfc,
             lw_down,
             beta,
             gravity=planet.gravity,
@@ -504,7 +663,6 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             latent_heat=planet.latent_heat_vaporization,
             drag_coefficient=c_h,
             surface_albedo=effective_albedo,
-            sw_tau_0=sw_tau_0,
         )
         land_dflux = land_flux_derivative(
             land.soil_temperature,

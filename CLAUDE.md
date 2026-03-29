@@ -57,7 +57,7 @@ The model follows a standard spectral-transform GCM pipeline: grid-point physics
 **Module layout under `src/notus/`:**
 - `operators/` — spectral operators (Laplacian, derivatives, filtering, wind reconstruction)
 - `dynamics/` — tendency computations for shallow water and primitive equations
-- `physics/` — parameterizations (radiation, convection, moisture, boundary layer, surface/slab ocean, bucket land, solar geometry)
+- `physics/` — parameterizations (radiation [Frierson/Byrne/SPEEDY multi-band], clouds, convection, moisture, boundary layer, surface/slab ocean, bucket land, solar geometry)
 - `timestepping/` — IMEX leapfrog, semi-implicit Helmholtz solvers, spinup utilities
 - `vertical/` — sigma coordinate, vertical finite-difference operators
 

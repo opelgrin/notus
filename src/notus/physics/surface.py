@@ -423,7 +423,7 @@ def compute_net_surface_flux(
     q_air: jnp.ndarray,
     wind_speed: jnp.ndarray,
     surface_pressure: jnp.ndarray,
-    insolation: jnp.ndarray,
+    sw_down_surface: jnp.ndarray,
     lw_down: jnp.ndarray,
     *,
     gravity: float,
@@ -433,13 +433,16 @@ def compute_net_surface_flux(
     latent_heat: float,
     drag_coefficient: float | jnp.ndarray,
     surface_albedo: float | jnp.ndarray,
-    sw_tau_0: float,
 ) -> jnp.ndarray:
     """Compute net downward surface energy flux [W/m²].
 
     Positive = warming the ocean.
 
     ``F_net = SW_absorbed + LW_down − σ·T_s⁴ − H − L·E``
+
+    The SW flux reaching the surface (``sw_down_surface``) should come
+    from :func:`~notus.physics.radiation.shortwave_heating`, ensuring
+    column-consistent energy conservation.
 
     Parameters
     ----------
@@ -453,8 +456,9 @@ def compute_net_surface_flux(
         Lowest-level wind speed [m/s], shape ``(n_lat, n_lon)``.
     surface_pressure : jnp.ndarray
         Surface pressure [Pa], shape ``(n_lat, n_lon)``.
-    insolation : jnp.ndarray
-        TOA insolation [W/m²], shape ``(n_lat,)``.
+    sw_down_surface : jnp.ndarray
+        Downward SW flux at the surface [W/m²], shape ``(n_lat, n_lon)``
+        or ``(n_lat,)``.  From :func:`shortwave_heating`.
     lw_down : jnp.ndarray
         Downward LW flux at the surface [W/m²], shape ``(n_lat, n_lon)``.
     gravity : float
@@ -471,8 +475,6 @@ def compute_net_surface_flux(
         Surface drag coefficient C_D.  Scalar or array ``(n_lat, n_lon)``.
     surface_albedo : float or jnp.ndarray
         Surface albedo (0-1).  Scalar or array ``(n_lat, n_lon)``.
-    sw_tau_0 : float
-        Shortwave optical depth (for surface-reaching SW fraction).
 
     Returns
     -------
@@ -482,8 +484,9 @@ def compute_net_surface_flux(
     # Broadcast SST to (n_lat, n_lon) if needed
     t_s = surface_temperature[:, None] if surface_temperature.ndim == 1 else surface_temperature
 
-    # SW absorbed at surface: TOA * exp(-tau_sw) * (1 - albedo)
-    sw_surface = insolation[:, None] * jnp.exp(-sw_tau_0) * (1.0 - surface_albedo)
+    # SW absorbed at surface: consistent with atmospheric absorption
+    sw_sfc = sw_down_surface[:, None] if sw_down_surface.ndim == 1 else sw_down_surface
+    sw_surface = sw_sfc * (1.0 - surface_albedo)
 
     # LW up from surface
     lw_up = STEFAN_BOLTZMANN * t_s**4
@@ -691,7 +694,7 @@ def compute_net_land_flux(
     q_air: jnp.ndarray,
     wind_speed: jnp.ndarray,
     surface_pressure: jnp.ndarray,
-    insolation: jnp.ndarray,
+    sw_down_surface: jnp.ndarray,
     lw_down: jnp.ndarray,
     beta: jnp.ndarray,
     *,
@@ -702,7 +705,6 @@ def compute_net_land_flux(
     latent_heat: float,
     drag_coefficient: float | jnp.ndarray,
     surface_albedo: float | jnp.ndarray,
-    sw_tau_0: float,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Compute net downward surface energy flux over land [W/m²].
 
@@ -717,8 +719,9 @@ def compute_net_land_flux(
         Soil temperature [K], shape ``(n_lat, n_lon)``.
     t_air, q_air, wind_speed, surface_pressure : jnp.ndarray
         Lowest-level atmospheric fields, shape ``(n_lat, n_lon)``.
-    insolation : jnp.ndarray
-        TOA insolation [W/m²], shape ``(n_lat,)``.
+    sw_down_surface : jnp.ndarray
+        Downward SW flux at the surface [W/m²], shape ``(n_lat, n_lon)``.
+        From :func:`shortwave_heating`.
     lw_down : jnp.ndarray
         Downward LW flux at the surface [W/m²], shape ``(n_lat, n_lon)``.
     beta : jnp.ndarray
@@ -729,8 +732,6 @@ def compute_net_land_flux(
         Surface transfer coefficient C_H.
     surface_albedo : float or jnp.ndarray
         Surface albedo (0-1).
-    sw_tau_0 : float
-        Shortwave optical depth.
 
     Returns
     -------
@@ -742,8 +743,8 @@ def compute_net_land_flux(
     """
     t_s = land_temperature
 
-    # SW absorbed at surface
-    sw_surface = insolation[:, None] * jnp.exp(-sw_tau_0) * (1.0 - surface_albedo)
+    # SW absorbed at surface: consistent with atmospheric absorption
+    sw_surface = sw_down_surface * (1.0 - surface_albedo)
 
     # LW up from surface
     lw_up = STEFAN_BOLTZMANN * t_s**4

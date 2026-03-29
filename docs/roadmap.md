@@ -308,7 +308,67 @@ Frierson (2006) / Manabe (1969) single-layer soil energy balance with bucket hyd
 - The explicit LW radiation in `SimplePhysics.__call__` uses `self.sst` as the surface emission boundary. For coupled land runs, this means LW radiation over land uses the ocean SST rather than T_land. The error is modest (~10 W/m² for a 15 K difference) because the land energy balance in the coupled post-step uses the correct T_land. A future improvement would pass the blended surface temperature through `forcing.sst`, but this requires updating it every timestep (not just per-day), which is incompatible with `jax.lax.scan`.
 - The bucket drains significantly over 10 days (0.11 → 0.01 m) as evaporation exceeds precipitation during the cold-start transient. In equilibrium, the precipitation-evaporation balance should maintain the bucket near its critical depth.
 
-## Phase 9 — Topography
+## Phase 9 — Radiation Upgrade (complete)
+
+Replaced the semi-gray Byrne scheme (which had a -145 W/m² global energy imbalance) with a SPEEDY-style multi-band radiation scheme, plus diagnostic clouds. Prioritized over topography because radiation balance is a prerequisite for meaningful coupled experiments.
+
+**What was built:**
+
+*Tier 1 — SW energy conservation:*
+- `shortwave_heating()` returns `(heating_rate, sw_down_surface)` tuple — single source of truth for surface SW, eliminating the independent recomputation that caused the imbalance
+- Surface energy balance functions (`compute_net_surface_flux`, `compute_net_land_flux`) accept the consistent `sw_down_surface` from the radiation solver
+- Reflected upward beam undergoes Beer-Lambert absorption on the return pass (double-pass SW)
+- Humidity-dependent SW optical depth: `byrne_shortwave_optical_depth()` with `dτ/d(p/p₀) = a_sw + b_sw·q`
+- SW column closure exact to machine precision (verified by tests)
+
+*Tier 2 — SPEEDY multi-band radiation (Molteni 2003):*
+- 4-band LW with temperature-dependent band fractions (`radset` formula):
+  - Band 0 (window): `ablwin=0.3` (dry air only)
+  - Band 1 (CO₂): `ablco2=6.0` (well-mixed, tunable for climate sensitivity)
+  - Band 2 (H₂O weak): `ablwv1=0.7·q`
+  - Band 3 (H₂O strong): `ablwv2=50.0·q`
+  - Band fractions shift with temperature — warmer surfaces emit more in the window band where the atmosphere is transparent, providing a critical negative feedback
+- 2-band SW:
+  - Band 1 (visible, 95%): dry air + aerosol(σ²) + weak H₂O (`abswv1=0.022`)
+  - Band 2 (near-IR, 5%): strong H₂O (`abswv2=15.0`, 680× stronger)
+- Two-stream LW via `jax.vmap` over bands for clean parallelization
+- Surface emissivity < 1 (`emisfc=0.98`)
+- Returns OLR for diagnostics
+
+*Diagnostic cloud scheme:*
+- RH-based cloud cover in free troposphere + precipitation contribution
+- Stability-dependent stratiform clouds at PBL top (dry static energy gradient)
+- SW: cloud reflection at cloud top (`albcl=0.43`) + stratiform reflection (`albcls=0.50`) + cloud absorption in visible band
+- LW: thick cloud absorption (`ablcl1=12.0`) below cloud top in window band, thin cloud absorption (`ablcl2=0.6`) in window + H₂O bands above
+- `CloudConfig` dataclass with SPEEDY defaults, `enable_clouds=True/False` flag
+
+*Forcing protocol cleanup:*
+- `build_coupled_pe_stepper` and `spinup_prescribed_sst` now take `SimplePhysics` directly instead of the `Forcing` protocol with `hasattr` guards and `Any` casts
+- Removed ~30 lines of defensive checks that obscured the actual requirements
+- `build_pe_stepper` retains `Forcing` protocol (genuinely works with HeldSuarez)
+
+**Validation (prescribed-SST, 300 days at T21 L20):**
+
+| Metric | Byrne | SPEEDY clear | SPEEDY + clouds |
+|--------|-------|-------------|-----------------|
+| Net TOA flux | +109 W/m² | +3 W/m² | -7 W/m² |
+| OLR | 218 | 318 | 328 |
+| Greenhouse effect | 163 | 63 | 54 |
+| Planetary albedo | 3.9% | 5.5% | 5.4% |
+| H₂O SW feedback | 0.2 | 1.5 | 2.3 |
+| SW column closure | exact | exact | exact |
+
+- SPEEDY dramatically improves energy balance: +3 W/m² vs +109 W/m² (Byrne)
+- Clouds add 16 W/m² LW greenhouse, warming atmosphere by 12 K
+- Coupled slab ocean stable with SPEEDY at dt=900 (where Byrne land-ocean blows up)
+
+**Lessons learned:**
+- The 4-band LW with temperature-dependent fractions is the key to energy balance. The window band shifts emission toward transparent wavelengths at warm surface temperatures, providing OLR ≈ absorbed SW without fine-tuning. Single-band schemes cannot achieve this because they have no spectral degree of freedom.
+- The SPEEDY near-IR H₂O absorption (`abswv2=15.0`) is 680× stronger than visible (`abswv1=0.022`). Nearly all humidity-dependent SW absorption happens in the near-IR band, which is only 5% of solar irradiance. A single-band SW scheme with `byrne_sw_b=0.2` vastly underestimates this effect.
+- Diagnostic clouds from RH alone (without precipitation) still provide meaningful LW greenhouse effect. SW cloud albedo requires the precipitation contribution for realistic values — this will improve when precipitation is threaded through from the moist physics.
+- The `Forcing` protocol was too narrow for the coupled stepper, which needs radiation config, SST, day_of_year, k_v, and implicit physics. Typing as `SimplePhysics` directly is more honest and eliminates fragile duck-typing.
+
+## Phase 10 — Topography
 
 Prescribed orography and its dynamical/physical effects.
 
@@ -318,20 +378,12 @@ Prescribed orography and its dynamical/physical effects.
 - Surface pressure initialization consistent with orography
 - Orographic effects on precipitation, flow deflection, rain shadows
 
-## Phase 10 — Radiation Upgrade
-
-The current Byrne semi-gray scheme has a -145 W/m² global energy imbalance (SW surface and atmospheric absorption computed independently). Phase 10 fixes this and optionally upgrades to multi-band radiation.
-
-**Plan (tiered):**
-- Fix energy conservation in the semi-gray scheme: ensure SW reaching the surface equals TOA minus atmospheric absorption (currently computed independently, causing the imbalance). Minimal code change.
-- Multi-band gray (Isca-style): 2-3 LW bands + 2 SW bands with band-specific optical depths tuned to match RRTMGP in a mean sense. Gives water vapor feedback, CO2 sensitivity, and proper surface budgets without the weight of full correlated-k.
-- RRTMGP (aspirational): correlated-k method via pyrrtmgp or a JAX port. State-of-the-art accuracy for quantitative climate sensitivity experiments.
-
 ## Phase 11+ — Future Wishlist
 
 Optional extensions for further realism.
 
 **Candidates:**
+- RRTMGP (aspirational): correlated-k method via pyrrtmgp or a JAX port for state-of-the-art accuracy
 - Diurnal cycle (instantaneous solar zenith angle, time-of-day dependent insolation)
 - Sea ice thermodynamics (ice fraction, ice temperature, albedo feedback, freezing/melting)
 - Snow cover (albedo feedback, insulation, melt hydrology)

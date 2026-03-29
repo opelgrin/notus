@@ -35,8 +35,10 @@ from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
+    byrne_shortwave_optical_depth,
     longwave_optical_depth,
     lw_down_surface,
+    shortwave_heating,
 )
 from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.surface import compute_net_surface_flux
@@ -85,13 +87,40 @@ def diagnose_surface_flux(
 
     sst = forcing.sst  # (n_lat,)
 
-    # --- Insolation ---
+    # --- SW surface flux (consistent with atmospheric absorption) ---
+    n_lat, n_lon = surface_pressure.shape
     if cfg.sw_tau_0 > 0.0:
-        insolation = (
-            planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+        tau_sw: jnp.ndarray | None = None
+        if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+            q_grid_sw = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            tau_sw = byrne_shortwave_optical_depth(
+                levels.dsigma,
+                q_grid_sw,
+                surface_pressure,
+                planet.reference_pressure,
+                sw_tau_0=cfg.sw_tau_0,
+                byrne_sw_a=cfg.byrne_sw_a,
+                byrne_sw_b=cfg.byrne_sw_b,
+            )
+        _, sw_down_sfc = shortwave_heating(
+            levels.sigma_half,
+            levels.dsigma,
+            sin_lat,
+            surface_pressure,
+            planet.solar_constant,
+            planet.gravity,
+            planet.specific_heat_cp,
+            sw_tau_0=cfg.sw_tau_0,
+            sw_exponent=cfg.sw_exponent,
+            delta_s=cfg.delta_s,
+            tau_sw_half=tau_sw,
+            surface_albedo=planet.surface_albedo,
         )
     else:
-        insolation = jnp.zeros_like(sin_lat)
+        sw_down_sfc = jnp.zeros((n_lat, n_lon))
 
     # --- LW down at surface from the two-stream radiation solver ---
     if cfg.radiation_scheme == "byrne" and state.humidity is not None:
@@ -133,7 +162,7 @@ def diagnose_surface_flux(
         q_lowest,
         wind_speed,
         surface_pressure,
-        insolation,
+        sw_down_sfc,
         lw_down,
         gravity=planet.gravity,
         gas_constant=planet.gas_constant,
@@ -142,7 +171,6 @@ def diagnose_surface_flux(
         latent_heat=planet.latent_heat_vaporization,
         drag_coefficient=cfg.c_d,
         surface_albedo=planet.surface_albedo,
-        sw_tau_0=cfg.sw_tau_0,
     )
 
     # Zonal mean
@@ -157,6 +185,8 @@ def run_diagnose_qflux(
     dt: float = 900.0,
     output_path: str = "qflux.npz",
     restart_path: str | None = None,
+    scheme: str = "byrne",
+    clouds: bool = False,
 ) -> bool:
     """Run prescribed-SST integration and diagnose Q-flux."""
     print(f"Q-flux diagnosis: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
@@ -179,10 +209,10 @@ def run_diagnose_qflux(
         seed=42,
     )
 
-    config = SimplePhysicsConfig(
-        radiation_scheme="byrne",
-        sw_tau_0=0.22,
-    )
+    if scheme == "speedy":
+        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
+    else:
+        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
@@ -301,6 +331,8 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
+    parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
+    parser.add_argument("--clouds", action="store_true", help="Enable diagnostic clouds (speedy)")
     parser.add_argument("--output", type=str, default="qflux.npz", help="Output .npz path")
     parser.add_argument(
         "--save-restart",
@@ -318,6 +350,8 @@ def main() -> None:
         dt=args.dt,
         output_path=args.output,
         restart_path=args.save_restart,
+        scheme=args.scheme,
+        clouds=args.clouds,
     )
 
     sys.exit(0 if passed else 1)
