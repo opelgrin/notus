@@ -40,13 +40,11 @@ from notus import (
     compute_zonal_mean_state,
     exponential_filter,
     held_suarez_initial_state,
-    plot_map,
-    plot_zonal_mean,
     run_simulation,
     state_to_dataset,
     uniform_sigma_levels,
-    zonal_mean_to_dataset,
 )
+from notus.viz import plot_map, plot_zonal_mean, zonal_mean_to_dataset
 
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
