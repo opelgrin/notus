@@ -78,7 +78,7 @@ def _run_jw_integration(
 
     diag0 = compute_conservation_diagnostics(perturbed, transform, EARTH, levels, surface_phi)
 
-    prev, curr = init_fn(perturbed)
+    prev, curr, _diags = init_fn(perturbed)
     steps_per_day = int(86400 / dt)
 
     ps_min_daily: list[float] = []
@@ -87,7 +87,7 @@ def _run_jw_integration(
 
     for _day in range(n_days):
         for _ in range(steps_per_day):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         # Surface pressure diagnostics
         lnps_grid = np.asarray(transform.spectral_to_grid(curr.log_surface_pressure))

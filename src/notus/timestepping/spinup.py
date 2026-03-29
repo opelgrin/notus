@@ -33,6 +33,7 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
+from notus.physics.forcing import PhysicsDiagnostics
 from notus.physics.physics_suite import PhysicsSuite
 from notus.physics.surface import compute_net_surface_flux
 from notus.state import PrimitiveEquationState
@@ -220,22 +221,29 @@ def spinup_prescribed_sst(
     n_days = spinup_days + averaging_days
     n_lat = transform.grid.n_lat
 
+    carry_t = tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics]
+
     def one_day(
-        carry: tuple[PrimitiveEquationState, PrimitiveEquationState],
+        carry: carry_t,
         _: None,
-    ) -> tuple[tuple[PrimitiveEquationState, PrimitiveEquationState], None]:
-        prev, curr = carry
+    ) -> tuple[carry_t, None]:
+        prev, curr, prev_diags = carry
 
         def step(
-            carry: tuple[PrimitiveEquationState, PrimitiveEquationState],
+            carry: carry_t,
             _: None,
-        ) -> tuple[tuple[PrimitiveEquationState, PrimitiveEquationState], None]:
-            p, c = carry
-            p, c = step_fn(p, c)
-            return (p, c), None
+        ) -> tuple[carry_t, None]:
+            p, c, pd = carry
+            p, c, pd = step_fn(p, c)
+            return (p, c, pd), None
 
-        (prev, curr), _ = jax.lax.scan(step, (prev, curr), None, length=steps_per_day)
-        return (prev, curr), None
+        carry_out, _ = jax.lax.scan(
+            step,
+            (prev, curr, prev_diags),
+            None,
+            length=steps_per_day,
+        )
+        return carry_out, None
 
     one_day_jit = jax.jit(one_day)
     diagnose_jit = jax.jit(
@@ -243,8 +251,8 @@ def spinup_prescribed_sst(
     )
 
     # Initialize
-    prev, curr = init_fn(state)
-    (prev, curr), _ = one_day_jit((prev, curr), None)
+    prev, curr, diags = init_fn(state)
+    (prev, curr, diags), _ = one_day_jit((prev, curr, diags), None)
 
     # Integration
     flux_accum = np.zeros(n_lat)
@@ -252,7 +260,7 @@ def spinup_prescribed_sst(
     spinup_state = curr
 
     for day in range(2, n_days + 1):
-        (prev, curr), _ = one_day_jit((prev, curr), None)
+        (prev, curr, diags), _ = one_day_jit((prev, curr, diags), None)
 
         if day == spinup_days + 1:
             spinup_state = curr

@@ -597,7 +597,7 @@ class TestLandOceanIntegration:
         steps_per_day = 96
         forcing.day_of_year = jnp.float64(0.0)
         forcing.prescribed_sst = surface.ocean.surface_temperature
-        prev, curr, surface = init_fn(s["result"].state, surface)
+        prev, curr, surface, _diags = init_fn(s["result"].state, surface)
 
         for day in range(1, n_days + 1):
             forcing.day_of_year = jnp.float64(day)
@@ -605,7 +605,7 @@ class TestLandOceanIntegration:
 
             def scan_body(carry, _):
                 p, c, sfc = carry
-                p, c, sfc = step_fn(p, c, sfc)
+                p, c, sfc, _diags = step_fn(p, c, sfc)
                 return (p, c, sfc), None
 
             (prev, curr, surface), _ = jax.lax.scan(

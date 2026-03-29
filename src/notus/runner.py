@@ -50,6 +50,7 @@ Coupled slab-ocean with seasonal cycle::
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -58,6 +59,7 @@ from typing import overload
 import jax
 import jax.numpy as jnp
 
+from notus.physics.forcing import PhysicsDiagnostics
 from notus.physics.physics_suite import PhysicsSuite
 from notus.physics.surface import SurfaceState
 from notus.state import PrimitiveEquationState
@@ -66,22 +68,30 @@ from notus.state import PrimitiveEquationState
 logger = logging.getLogger(__name__)
 
 # Type aliases for the two modes
-_AtmCarry = tuple[PrimitiveEquationState, PrimitiveEquationState]
-_CoupledCarry = tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState]
+_AtmCarry = tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics]
+_CoupledCarry = tuple[
+    PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics
+]
 
-_AtmInitFn = Callable[[PrimitiveEquationState], _AtmCarry]
+_AtmInitFn = Callable[
+    [PrimitiveEquationState],
+    tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics],
+]
 _AtmStepFn = Callable[
     [PrimitiveEquationState, PrimitiveEquationState],
-    tuple[PrimitiveEquationState, PrimitiveEquationState],
+    tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics],
 ]
-_AtmCallback = Callable[[int, PrimitiveEquationState], object]
+_AtmCallback = Callable[..., object]
 
-_CoupledInitFn = Callable[[PrimitiveEquationState, SurfaceState], _CoupledCarry]
+_CoupledInitFn = Callable[
+    [PrimitiveEquationState, SurfaceState],
+    tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics],
+]
 _CoupledStepFn = Callable[
     [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
-    tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+    tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics],
 ]
-_CoupledCallback = Callable[[int, PrimitiveEquationState, SurfaceState], object]
+_CoupledCallback = Callable[..., object]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -121,17 +131,22 @@ def _build_atm_one_day(
     """Build JIT-compiled one-day function for atmosphere-only runs."""
 
     def one_day(carry: _AtmCarry, day_of_year: jnp.ndarray) -> tuple[_AtmCarry, None]:
-        prev, curr = carry
+        prev, curr, prev_diags = carry
         if forcing is not None and seasonal:
             forcing.day_of_year = day_of_year
 
         def step(carry: _AtmCarry, _: None) -> tuple[_AtmCarry, None]:
-            p, c = carry
-            p, c = step_fn(p, c)
-            return (p, c), None
+            p, c, pd = carry
+            p, c, pd = step_fn(p, c)
+            return (p, c, pd), None
 
-        (prev, curr), _ = jax.lax.scan(step, (prev, curr), None, length=steps_per_day)
-        return (prev, curr), None
+        carry_out, _ = jax.lax.scan(
+            step,
+            (prev, curr, prev_diags),
+            None,
+            length=steps_per_day,
+        )
+        return carry_out, None
 
     return jax.jit(one_day)
 
@@ -145,19 +160,24 @@ def _build_coupled_one_day(
     """Build JIT-compiled one-day function for coupled runs."""
 
     def one_day(carry: _CoupledCarry, day_of_year: jnp.ndarray) -> tuple[_CoupledCarry, None]:
-        prev, curr, sfc = carry
+        prev, curr, sfc, prev_diags = carry
         if forcing is not None:
             if seasonal:
                 forcing.day_of_year = day_of_year
             forcing.prescribed_sst = sfc.ocean.surface_temperature
 
         def step(carry: _CoupledCarry, _: None) -> tuple[_CoupledCarry, None]:
-            p, c, s = carry
-            p, c, s = step_fn(p, c, s)
-            return (p, c, s), None
+            p, c, s, pd = carry
+            p, c, s, pd = step_fn(p, c, s)
+            return (p, c, s, pd), None
 
-        (prev, curr, sfc), _ = jax.lax.scan(step, (prev, curr, sfc), None, length=steps_per_day)
-        return (prev, curr, sfc), None
+        carry_out, _ = jax.lax.scan(
+            step,
+            (prev, curr, sfc, prev_diags),
+            None,
+            length=steps_per_day,
+        )
+        return carry_out, None
 
     return jax.jit(one_day)
 
@@ -251,8 +271,11 @@ def run_simulation(
         Callback invoked after each simulated day.  Signature depends
         on mode:
 
-        - **Atmosphere-only**: ``on_day(day, state) -> result``
-        - **Coupled**: ``on_day(day, state, surface) -> result``
+        - **Atmosphere-only**: ``on_day(day, state, diags)``
+        - **Coupled**: ``on_day(day, state, surface, diags)``
+
+        For backward compatibility, callbacks with fewer parameters
+        (omitting ``diags``) are also supported.
 
         Return values are collected in ``SimulationResult.diagnostics``.
         Return ``None`` to skip collecting for that day.
@@ -298,7 +321,7 @@ def run_simulation(
             steps_per_day,
             start_day,
             n_days,
-            on_day,  # type: ignore[arg-type]
+            on_day,
             verbose,
             log_interval,
         )
@@ -312,7 +335,7 @@ def run_simulation(
         steps_per_day,
         start_day,
         n_days,
-        on_day,  # type: ignore[arg-type]
+        on_day,
         verbose,
         log_interval,
     )
@@ -337,20 +360,20 @@ def _run_atm_only(
     diagnostics: list[object] = []
 
     t0 = time.perf_counter()
-    prev, curr = init_fn(initial_state)
+    prev, curr, diags = init_fn(initial_state)
     day_val = jnp.float64(start_day % days_per_year if seasonal else 0.0)
-    (prev, curr), _ = one_day_jit((prev, curr), day_val)
+    (prev, curr, diags), _ = one_day_jit((prev, curr, diags), day_val)
     if verbose:
         logger.info("Day 1 (incl. JIT compile): %.1fs", time.perf_counter() - t0)
 
-    _invoke_atm_callback(on_day, start_day + 1, curr, diagnostics)
+    _invoke_atm_callback(on_day, start_day + 1, curr, diags, diagnostics)
 
     t_start = time.perf_counter()
     for day_idx in range(2, n_days + 1):
         day = start_day + day_idx
         day_val = jnp.float64(day % days_per_year if seasonal else 0.0)
-        (prev, curr), _ = one_day_jit((prev, curr), day_val)
-        _invoke_atm_callback(on_day, day, curr, diagnostics)
+        (prev, curr, diags), _ = one_day_jit((prev, curr, diags), day_val)
+        _invoke_atm_callback(on_day, day, curr, diags, diagnostics)
         _log_progress(verbose, day_idx, day, n_days, log_interval, t_start)
 
     return SimulationResult(
@@ -383,20 +406,20 @@ def _run_coupled(
     diagnostics: list[object] = []
 
     t0 = time.perf_counter()
-    prev, curr, surface = init_fn(initial_state, surface)
+    prev, curr, surface, diags = init_fn(initial_state, surface)
     day_val = jnp.float64(start_day % days_per_year if seasonal else 0.0)
-    (prev, curr, surface), _ = one_day_jit((prev, curr, surface), day_val)
+    (prev, curr, surface, diags), _ = one_day_jit((prev, curr, surface, diags), day_val)
     if verbose:
         logger.info("Day 1 (incl. JIT compile): %.1fs", time.perf_counter() - t0)
 
-    _invoke_coupled_callback(on_day, start_day + 1, curr, surface, diagnostics)
+    _invoke_coupled_callback(on_day, start_day + 1, curr, surface, diags, diagnostics)
 
     t_start = time.perf_counter()
     for day_idx in range(2, n_days + 1):
         day = start_day + day_idx
         day_val = jnp.float64(day % days_per_year if seasonal else 0.0)
-        (prev, curr, surface), _ = one_day_jit((prev, curr, surface), day_val)
-        _invoke_coupled_callback(on_day, day, curr, surface, diagnostics)
+        (prev, curr, surface, diags), _ = one_day_jit((prev, curr, surface, diags), day_val)
+        _invoke_coupled_callback(on_day, day, curr, surface, diags, diagnostics)
         _log_progress(verbose, day_idx, day, n_days, log_interval, t_start)
 
     return SimulationResult(
@@ -409,16 +432,28 @@ def _run_coupled(
     )
 
 
+def _callback_nparams(fn: Callable[..., object]) -> int:
+    """Count the number of positional parameters in a callback."""
+    sig = inspect.signature(fn)
+    return sum(
+        1
+        for p in sig.parameters.values()
+        if p.kind in {p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD} and p.default is p.empty
+    )
+
+
 def _invoke_atm_callback(
     on_day: _AtmCallback | None,
     day: int,
     state: PrimitiveEquationState,
+    diags: PhysicsDiagnostics,
     diagnostics: list[object],
 ) -> None:
     """Invoke atmosphere-only callback and collect non-None results."""
     if on_day is None:
         return
-    result = on_day(day, state)
+    n = _callback_nparams(on_day)
+    result = on_day(day, state, diags) if n >= 3 else on_day(day, state)  # noqa: PLR2004
     if result is not None:
         diagnostics.append(result)
 
@@ -428,12 +463,16 @@ def _invoke_coupled_callback(
     day: int,
     state: PrimitiveEquationState,
     surface: SurfaceState,
+    diags: PhysicsDiagnostics,
     diagnostics: list[object],
 ) -> None:
     """Invoke coupled callback and collect non-None results."""
     if on_day is None:
         return
-    result = on_day(day, state, surface)
+    n = _callback_nparams(on_day)
+    result = (
+        on_day(day, state, surface, diags) if n >= 4 else on_day(day, state, surface)  # noqa: PLR2004
+    )
     if result is not None:
         diagnostics.append(result)
 

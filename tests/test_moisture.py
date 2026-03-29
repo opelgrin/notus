@@ -374,9 +374,9 @@ class TestPassiveTracerTransport:
             forcing=forcing,
         )
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         for _ in range(10):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         # Should still have humidity
         assert curr.humidity is not None
@@ -413,9 +413,9 @@ class TestPassiveTracerTransport:
             forcing=forcing,
         )
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         for _ in range(5):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         # Now compute explicit tendency on the evolved state
         tend_fn = primitive_equation_tendencies(
@@ -452,9 +452,9 @@ class TestPassiveTracerTransport:
             forcing=forcing,
         )
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         for _ in range(5):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         assert not curr.has_humidity
         assert curr.humidity is None
@@ -1013,10 +1013,10 @@ class TestMoistAquaplanetIntegration:
             forcing=forcing,
         )
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         n_steps = int(10 * 86400 / dt)  # 10 days
         for _ in range(n_steps):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         # All fields should be finite
         assert jnp.all(jnp.isfinite(curr.temperature))
@@ -1054,10 +1054,10 @@ class TestMoistAquaplanetIntegration:
             forcing=forcing,
         )
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         n_steps = int(10 * 86400 / dt)
         for _ in range(n_steps):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         assert curr.humidity is not None
         q_grid = jax.vmap(transform.spectral_to_grid)(curr.humidity)
@@ -1098,9 +1098,9 @@ class TestMoistAquaplanetIntegration:
             forcing=forcing,
         )
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         for _ in range(50):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         assert not curr.has_humidity
         assert jnp.all(jnp.isfinite(curr.temperature))

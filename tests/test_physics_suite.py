@@ -852,7 +852,7 @@ class TestPhysicsSuiteForcing:
     ) -> None:
         """Output should have same shape as input state."""
         state, ps_grid = isothermal_state
-        tendencies = sp_forcing(state, ps_grid)
+        tendencies, _diags = sp_forcing(state, ps_grid)
         assert tendencies.vorticity.shape == state.vorticity.shape
         assert tendencies.divergence.shape == state.divergence.shape
         assert tendencies.temperature.shape == state.temperature.shape
@@ -865,7 +865,7 @@ class TestPhysicsSuiteForcing:
     ) -> None:
         """Physics suite should not produce surface pressure tendencies."""
         state, ps_grid = isothermal_state
-        tendencies = sp_forcing(state, ps_grid)
+        tendencies, _diags = sp_forcing(state, ps_grid)
         np.testing.assert_allclose(tendencies.log_surface_pressure, 0.0, atol=1e-30)
 
     def test_rayleigh_drag_only_in_boundary_layer(
@@ -879,7 +879,7 @@ class TestPhysicsSuiteForcing:
         state = state.replace(
             vorticity=jnp.ones_like(state.vorticity) * (1.0 + 0j),
         )
-        tendencies = sp_forcing(state, ps_grid)
+        tendencies, _diags = sp_forcing(state, ps_grid)
 
         sigma_b = sp_forcing.config.sigma_b
         for k in range(levels.n_levels):
@@ -898,7 +898,7 @@ class TestPhysicsSuiteForcing:
     ) -> None:
         """An isothermal atmosphere should produce nonzero temperature tendencies."""
         state, ps_grid = isothermal_state
-        tendencies = sp_forcing(state, ps_grid)
+        tendencies, _diags = sp_forcing(state, ps_grid)
         assert float(jnp.max(jnp.abs(tendencies.temperature))) > 0.0
 
     def test_jit_compatible(
@@ -908,7 +908,7 @@ class TestPhysicsSuiteForcing:
     ) -> None:
         """PhysicsSuite should be JIT-compilable."""
         state, ps_grid = isothermal_state
-        tendencies = jax.jit(sp_forcing)(state, ps_grid)
+        tendencies, _diags = jax.jit(sp_forcing)(state, ps_grid)
         assert tendencies.temperature.shape == state.temperature.shape
 
 
@@ -955,10 +955,10 @@ class TestPhysicsSuiteIntegration:
         )
 
         step_fn = jax.jit(step_fn)
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
 
         for _ in range(n_steps):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         t_grid = jax.vmap(t21_transform_module.spectral_to_grid)(curr.temperature)
         lnps_grid = t21_transform_module.spectral_to_grid(curr.log_surface_pressure)

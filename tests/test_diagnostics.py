@@ -179,9 +179,9 @@ class TestConservationDiagnostics:
 
         diag0 = compute_conservation_diagnostics(state, transform, EARTH, levels, surface_phi)
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         for _ in range(n_steps):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         diag1 = compute_conservation_diagnostics(curr, transform, EARTH, levels, surface_phi)
 
@@ -221,9 +221,9 @@ class TestConservationDiagnostics:
 
         diag0 = compute_conservation_diagnostics(perturbed, transform, EARTH, levels, surface_phi)
 
-        prev, curr = init_fn(perturbed)
+        prev, curr, _diags = init_fn(perturbed)
         for _ in range(n_steps):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         diag1 = compute_conservation_diagnostics(curr, transform, EARTH, levels, surface_phi)
 
