@@ -49,7 +49,7 @@ The model follows a standard spectral-transform GCM pipeline: grid-point physics
 - `PrimitiveEquationState` / `ShallowWaterState` — immutable JAX pytree dataclasses holding spectral coefficients
 - `SigmaLevels` — vertical sigma coordinate definition
 - `PlanetaryConstants` — planet parameters (Earth predefined as `EARTH`)
-- `Forcing` protocol — physics interface; implementations: `HeldSuarez`, `SimplePhysics`
+- `Forcing` protocol — physics interface; implementations: `HeldSuarez`, `PhysicsSuite`
 - `SurfaceState` — wraps `OceanState` (slab ocean SST) + optional `LandState` (soil temperature, bucket depth)
 - `build_pe_stepper()` — factory that wires dynamics + physics + semi-implicit solver into a single `step(state, dt)` callable
 - `build_coupled_pe_stepper()` — extends `build_pe_stepper` with slab ocean and optional bucket land surface

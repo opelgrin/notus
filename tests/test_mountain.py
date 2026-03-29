@@ -14,8 +14,8 @@ import pytest
 from notus import (
     EARTH,
     GaussianGrid,
-    SimplePhysics,
-    SimplePhysicsConfig,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     SpectralTransform,
     build_pe_stepper,
     compute_conservation_diagnostics,
@@ -211,8 +211,8 @@ def _run_moist_mountain_integration(
     ln_ps = orographic_log_surface_pressure(surface_geopotential, transform, EARTH, ref_temp)
     state = state.replace(log_surface_pressure=ln_ps)
 
-    config = SimplePhysicsConfig()
-    physics = SimplePhysics(transform, EARTH, levels, config)
+    config = PhysicsSuiteConfig()
+    physics = PhysicsSuite(transform, EARTH, levels, config)
     filt = exponential_filter(transform.arrays, dt)
 
     init_fn, step_fn = build_pe_stepper(

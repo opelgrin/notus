@@ -297,7 +297,7 @@ def build_pe_stepper(
     alpha : float
         Implicit weighting (0.5 = centred).
     forcing : Forcing or None
-        Physics forcing callable (e.g. Held-Suarez, SimplePhysics).
+        Physics forcing callable (e.g. Held-Suarez, PhysicsSuite).
         When provided, its tendencies are added to the explicit dynamics
         at each time step.  None disables physics forcing.
 

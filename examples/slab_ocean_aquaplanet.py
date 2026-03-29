@@ -40,13 +40,15 @@ jax.config.update("jax_enable_x64", True)
 from notus import (
     EARTH,
     EARTH_ORBIT,
+    ByrneRadiation,
     GaussianGrid,
     OceanState,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     PrescribedSST,
-    SimplePhysics,
-    SimplePhysicsConfig,
     SlabOceanConfig,
     SpectralTransform,
+    SpeedyRadiation,
     SurfaceState,
     ZonalMeanState,
     build_coupled_pe_stepper,
@@ -121,14 +123,15 @@ def run_slab_ocean_aquaplanet(
     )
 
     if scheme == "speedy":
-        config = SimplePhysicsConfig(
-            radiation_scheme="speedy",
+        from notus.physics.clouds import CloudConfig
+
+        config = PhysicsSuiteConfig(
+            radiation=SpeedyRadiation(clouds=CloudConfig() if clouds else None),
             orbital=EARTH_ORBIT,
-            enable_clouds=clouds,
         )
     else:
-        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT)
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+        config = PhysicsSuiteConfig(radiation=ByrneRadiation(sw_tau_0=0.22), orbital=EARTH_ORBIT)
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
 
     # Slab ocean
     ocean_config = SlabOceanConfig(mixed_layer_depth=50.0)

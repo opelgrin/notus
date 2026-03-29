@@ -38,7 +38,7 @@ Core components
 - Transforms: :class:`SpectralTransform`
 - Constants: :class:`PlanetaryConstants`, :data:`EARTH`
 - State: :class:`PrimitiveEquationState`, :class:`ShallowWaterState`
-- Forcing: :class:`HeldSuarez`, :class:`SimplePhysics`
+- Forcing: :class:`HeldSuarez`, :class:`PhysicsSuite`
 - Steppers: :func:`build_pe_stepper`, :func:`build_coupled_pe_stepper`
 - Vertical: :class:`SigmaLevels`, :func:`standard_sigma_levels`
 - I/O: :func:`save_restart`, :func:`load_restart`
@@ -62,7 +62,7 @@ from notus.initial_conditions import (
     jablonowski_williamson_perturbation,
     jablonowski_williamson_steady_state,
     moist_aquaplanet_initial_state,
-    simple_physics_initial_state,
+    physics_suite_initial_state,
 )
 from notus.io import load_restart, save_restart
 from notus.operators import (
@@ -81,7 +81,9 @@ from notus.operators import (
 from notus.physics import (
     EARTH_ORBIT,
     BucketLandConfig,
+    ByrneRadiation,
     Forcing,
+    FriersonRadiation,
     HeldSuarez,
     HeldSuarezConfig,
     ImplicitForcing,
@@ -89,10 +91,12 @@ from notus.physics import (
     MoistForcing,
     OceanState,
     OrbitalParameters,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     PrescribedSST,
-    SimplePhysics,
-    SimplePhysicsConfig,
+    RadiationConfig,
     SlabOceanConfig,
+    SpeedyRadiation,
     SurfaceLayerConfig,
     SurfaceProperties,
     SurfaceState,
@@ -130,8 +134,10 @@ __all__ = [
     "EARTH",
     "EARTH_ORBIT",
     "BucketLandConfig",
+    "ByrneRadiation",
     "ConservationDiagnostics",
     "Forcing",
+    "FriersonRadiation",
     "GaussianGrid",
     "HeldSuarez",
     "HeldSuarezConfig",
@@ -142,16 +148,18 @@ __all__ = [
     "OceanState",
     "OperatorArrays",
     "OrbitalParameters",
+    "PhysicsSuite",
+    "PhysicsSuiteConfig",
     "PlanetaryConstants",
     "PrescribedSST",
     "PrimitiveEquationState",
+    "RadiationConfig",
     "ShallowWaterState",
     "SigmaLevels",
-    "SimplePhysics",
-    "SimplePhysicsConfig",
     "SimulationResult",
     "SlabOceanConfig",
     "SpectralTransform",
+    "SpeedyRadiation",
     "SpinupResult",
     "SurfaceLayerConfig",
     "SurfaceProperties",
@@ -181,11 +189,11 @@ __all__ = [
     "moist_aquaplanet_initial_state",
     "omega_over_pressure",
     "orographic_log_surface_pressure",
+    "physics_suite_initial_state",
     "run_simulation",
     "save_restart",
     "sigma_dot",
     "sigma_integral",
-    "simple_physics_initial_state",
     "sinusoidal_mountains",
     "smooth_orography",
     "spectral_curl",

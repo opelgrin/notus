@@ -19,7 +19,11 @@ from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
 from notus.physics.clouds import CloudDiagnostic, diagnose_clouds
 from notus.physics.moisture import saturation_specific_humidity
+from notus.physics.physics_suite import PhysicsSuite
 from notus.physics.radiation import (
+    ByrneRadiation,
+    FriersonRadiation,
+    SpeedyRadiation,
     byrne_longwave_optical_depth,
     byrne_shortwave_optical_depth,
     longwave_optical_depth,
@@ -28,7 +32,6 @@ from notus.physics.radiation import (
     speedy_lw_down_surface,
     speedy_shortwave_heating,
 )
-from notus.physics.simple_physics import SimplePhysics
 from notus.physics.solar import daily_mean_insolation
 from notus.physics.surface import (
     BucketLandConfig,
@@ -59,7 +62,7 @@ class _ExplicitOnlyForcing:
     stepper handles it with the ocean update instead.
     """
 
-    def __init__(self, forcing: SimplePhysics) -> None:
+    def __init__(self, forcing: PhysicsSuite) -> None:
         self._forcing = forcing
         self.compute_reference_humidity = forcing.compute_reference_humidity
 
@@ -78,7 +81,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     reference_temperature: np.ndarray,
     surface_geopotential: jnp.ndarray,
     dt: float,
-    forcing: SimplePhysics,
+    forcing: PhysicsSuite,
     ocean_config: SlabOceanConfig,
     q_flux: jnp.ndarray,
     surface_properties: SurfaceProperties | None = None,
@@ -120,7 +123,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         Surface geopotential in spectral space.
     dt : float
         Timestep [s].
-    forcing : SimplePhysics
+    forcing : PhysicsSuite
         Physics forcing (provides radiation config, SST, implicit
         surface physics, and reference humidity).
     ocean_config : SlabOceanConfig
@@ -171,31 +174,72 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
     cfg = forcing.config
     c_d = cfg.c_d
     surface_layer_cfg: SurfaceLayerConfig | None = cfg.surface_layer
-    sw_tau_0 = cfg.sw_tau_0
-    sw_exponent = cfg.sw_exponent
     delta_s = cfg.delta_s
-    radiation_scheme = cfg.radiation_scheme
-    lw_tau_equator = cfg.tau_equator
-    lw_tau_pole = cfg.tau_pole
-    lw_linear_fraction = cfg.linear_fraction
-    lw_alpha = cfg.alpha
-    lw_byrne_a = cfg.byrne_a
-    lw_byrne_b = cfg.byrne_b
-    byrne_sw_a = cfg.byrne_sw_a
-    byrne_sw_b = cfg.byrne_sw_b
-    sp_epslw = cfg.speedy_epslw
-    sp_emisfc = cfg.speedy_surface_emissivity
-    sp_ablwin = cfg.speedy_ablwin
-    sp_ablco2 = cfg.speedy_ablco2
-    sp_ablwv1 = cfg.speedy_ablwv1
-    sp_ablwv2 = cfg.speedy_ablwv2
-    sp_absdry = cfg.speedy_absdry
-    sp_absaer = cfg.speedy_absaer
-    sp_sw_abswv1 = cfg.speedy_sw_abswv1
-    sp_sw_abswv2 = cfg.speedy_sw_abswv2
-    sp_vis_frac = cfg.speedy_visible_fraction
-    clouds_enabled = cfg.enable_clouds
-    cloud_cfg = cfg.cloud_config
+    rad = cfg.radiation
+
+    # Extract radiation-scheme-specific parameters at build time (before JIT).
+    # Use isinstance branches so mypy can narrow the union type.
+    is_speedy = isinstance(rad, SpeedyRadiation)
+    is_byrne = isinstance(rad, ByrneRadiation)
+
+    if isinstance(rad, FriersonRadiation):
+        sw_tau_0 = rad.sw_tau_0
+        sw_exponent = rad.sw_exponent
+        lw_tau_equator = rad.tau_equator
+        lw_tau_pole = rad.tau_pole
+        lw_linear_fraction = rad.linear_fraction
+        lw_alpha = rad.alpha
+        lw_byrne_a = 0.0
+        lw_byrne_b = 0.0
+        byrne_sw_a = 0.0
+        byrne_sw_b = 0.0
+        sp_epslw = sp_emisfc = sp_ablwin = sp_ablco2 = 0.0
+        sp_ablwv1 = sp_ablwv2 = sp_absdry = sp_absaer = 0.0
+        sp_sw_abswv1 = sp_sw_abswv2 = sp_vis_frac = 0.0
+        clouds_enabled = False
+        cloud_cfg = None
+    elif isinstance(rad, ByrneRadiation):
+        sw_tau_0 = rad.sw_tau_0
+        sw_exponent = rad.sw_exponent
+        fri_defaults = FriersonRadiation()
+        lw_tau_equator = fri_defaults.tau_equator
+        lw_tau_pole = fri_defaults.tau_pole
+        lw_linear_fraction = fri_defaults.linear_fraction
+        lw_alpha = fri_defaults.alpha
+        lw_byrne_a = rad.a
+        lw_byrne_b = rad.b
+        byrne_sw_a = rad.sw_a
+        byrne_sw_b = rad.sw_b
+        sp_epslw = sp_emisfc = sp_ablwin = sp_ablco2 = 0.0
+        sp_ablwv1 = sp_ablwv2 = sp_absdry = sp_absaer = 0.0
+        sp_sw_abswv1 = sp_sw_abswv2 = sp_vis_frac = 0.0
+        clouds_enabled = False
+        cloud_cfg = None
+    else:  # SpeedyRadiation
+        sw_tau_0 = 0.0
+        sw_exponent = 2.0
+        fri_defaults = FriersonRadiation()
+        lw_tau_equator = fri_defaults.tau_equator
+        lw_tau_pole = fri_defaults.tau_pole
+        lw_linear_fraction = fri_defaults.linear_fraction
+        lw_alpha = fri_defaults.alpha
+        lw_byrne_a = 0.0
+        lw_byrne_b = 0.0
+        byrne_sw_a = 0.0
+        byrne_sw_b = 0.0
+        sp_epslw = rad.epslw
+        sp_emisfc = rad.surface_emissivity
+        sp_ablwin = rad.ablwin
+        sp_ablco2 = rad.ablco2
+        sp_ablwv1 = rad.ablwv1
+        sp_ablwv2 = rad.ablwv2
+        sp_absdry = rad.absdry
+        sp_absaer = rad.absaer
+        sp_sw_abswv1 = rad.sw_abswv1
+        sp_sw_abswv2 = rad.sw_abswv2
+        sp_vis_frac = rad.visible_fraction
+        clouds_enabled = rad.clouds is not None
+        cloud_cfg = rad.clouds
     ocean_heat_capacity = ocean_config.heat_capacity
     sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
 
@@ -260,7 +304,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         """Compute SW flux reaching the surface [W/m²]."""
         sin_lat = transform.grid.sin_lat
 
-        if radiation_scheme == "speedy" and state.humidity is not None:
+        if is_speedy and state.humidity is not None:
             q_grid = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
                 0.0,
@@ -292,7 +336,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
 
         # Humidity-dependent SW optical depth for Byrne scheme
         tau_sw: jnp.ndarray | None = None
-        if radiation_scheme == "byrne" and state.humidity is not None:
+        if is_byrne and state.humidity is not None:
             q_grid = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
                 0.0,
@@ -397,7 +441,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
         q_grid: jnp.ndarray | None = None
 
-        if radiation_scheme == "speedy" and state.humidity is not None:
+        if is_speedy and state.humidity is not None:
             q_grid = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
                 0.0,
@@ -420,7 +464,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             )
             return lw_down, t_grid, q_grid
 
-        if radiation_scheme == "byrne" and state.humidity is not None:
+        if is_byrne and state.humidity is not None:
             q_grid = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
                 0.0,
@@ -464,7 +508,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         )
         # Cloud diagnosis for speedy scheme
         cloud_diag = None
-        if radiation_scheme == "speedy" and clouds_enabled and state.humidity is not None:
+        if is_speedy and clouds_enabled and state.humidity is not None:
             t_for_cloud = jax.vmap(transform.spectral_to_grid)(state.temperature)
             q_for_cloud = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
@@ -572,7 +616,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         )
         # Cloud diagnosis for speedy scheme
         cloud_diag_lo = None
-        if radiation_scheme == "speedy" and clouds_enabled and state.humidity is not None:
+        if is_speedy and clouds_enabled and state.humidity is not None:
             t_for_cloud = jax.vmap(transform.spectral_to_grid)(state.temperature)
             q_for_cloud = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),

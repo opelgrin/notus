@@ -8,7 +8,13 @@ from notus.physics.forcing import (
     ImplicitForcing,
     MoistForcing,
 )
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
+from notus.physics.physics_suite import PhysicsSuite, PhysicsSuiteConfig
+from notus.physics.radiation import (
+    ByrneRadiation,
+    FriersonRadiation,
+    RadiationConfig,
+    SpeedyRadiation,
+)
 from notus.physics.solar import EARTH_ORBIT, OrbitalParameters
 from notus.physics.surface import (
     BucketLandConfig,
@@ -26,7 +32,9 @@ from notus.physics.surface_types import SurfaceProperties, flat_continent_surfac
 __all__ = [
     "EARTH_ORBIT",
     "BucketLandConfig",
+    "ByrneRadiation",
     "Forcing",
+    "FriersonRadiation",
     "HeldSuarez",
     "HeldSuarezConfig",
     "ImplicitForcing",
@@ -34,10 +42,12 @@ __all__ = [
     "MoistForcing",
     "OceanState",
     "OrbitalParameters",
+    "PhysicsSuite",
+    "PhysicsSuiteConfig",
     "PrescribedSST",
-    "SimplePhysics",
-    "SimplePhysicsConfig",
+    "RadiationConfig",
     "SlabOceanConfig",
+    "SpeedyRadiation",
     "SurfaceLayerConfig",
     "SurfaceProperties",
     "SurfaceState",

@@ -30,11 +30,13 @@ jax.config.update("jax_enable_x64", True)
 
 from notus import (
     EARTH,
+    ByrneRadiation,
     GaussianGrid,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     PrimitiveEquationState,
-    SimplePhysics,
-    SimplePhysicsConfig,
     SpectralTransform,
+    SpeedyRadiation,
     ZonalMeanState,
     build_pe_stepper,
     compute_zonal_mean_state,
@@ -90,12 +92,15 @@ def run_moist_aquaplanet(
     )
 
     if scheme == "speedy":
-        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
+        from notus.physics.clouds import CloudConfig
+
+        rad = SpeedyRadiation(clouds=CloudConfig() if clouds else None)
+        config = PhysicsSuiteConfig(radiation=rad)
     elif scheme == "byrne":
-        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
+        config = PhysicsSuiteConfig(radiation=ByrneRadiation(sw_tau_0=0.22))
     else:
-        config = SimplePhysicsConfig()  # default Frierson
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+        config = PhysicsSuiteConfig()  # default Frierson
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,

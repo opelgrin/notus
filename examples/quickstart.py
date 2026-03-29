@@ -16,7 +16,7 @@ jax.config.update("jax_enable_x64", True)
 from notus import (
     EARTH,
     GaussianGrid,
-    SimplePhysics,
+    PhysicsSuite,
     SpectralTransform,
     build_pe_stepper,
     exponential_filter,
@@ -47,7 +47,7 @@ ln_ps = orographic_log_surface_pressure(surface_phi, transform, EARTH, 264.0)
 state = state.replace(log_surface_pressure=ln_ps)
 
 # Physics (gray radiation, convection, condensation, surface fluxes)
-physics = SimplePhysics(transform, EARTH, levels)
+physics = PhysicsSuite(transform, EARTH, levels)
 dt = 900.0
 
 # Build time stepper

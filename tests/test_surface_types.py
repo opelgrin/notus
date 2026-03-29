@@ -11,7 +11,8 @@ from notus.constants import EARTH
 from notus.grid import GaussianGrid
 from notus.initial_conditions import moist_aquaplanet_initial_state
 from notus.operators import exponential_filter
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
+from notus.physics.physics_suite import PhysicsSuite, PhysicsSuiteConfig
+from notus.physics.radiation import ByrneRadiation
 from notus.physics.solar import EARTH_ORBIT
 from notus.physics.surface import (
     OceanState,
@@ -243,12 +244,11 @@ class TestSurfacePropertiesIntegration:
             initial_rh=0.7,
             seed=42,
         )
-        config = SimplePhysicsConfig(
-            radiation_scheme="byrne",
-            sw_tau_0=0.22,
+        config = PhysicsSuiteConfig(
+            radiation=ByrneRadiation(sw_tau_0=0.22),
             orbital=EARTH_ORBIT,
         )
-        forcing_spinup = SimplePhysics(transform, EARTH, levels, config=config)
+        forcing_spinup = PhysicsSuite(transform, EARTH, levels, config=config)
         result = spinup_prescribed_sst(
             state,
             forcing_spinup,
@@ -280,7 +280,7 @@ class TestSurfacePropertiesIntegration:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Run coupled integration, return (temperature_grid, sst)."""
         s = setup
-        forcing = SimplePhysics(s["transform"], EARTH, s["levels"], config=s["config"])
+        forcing = PhysicsSuite(s["transform"], EARTH, s["levels"], config=s["config"])
         ocean = OceanState(
             surface_temperature=compute_sst(PrescribedSST(), s["grid"].latitudes),
         )

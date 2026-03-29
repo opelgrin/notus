@@ -126,8 +126,8 @@ Gray radiation, dry convective adjustment, and bulk surface flux — following F
 - Prescribed SST: Frierson Gaussian profile T_s(phi) = 271 + 29 exp(-0.5(phi/26deg)^2)
 - Rayleigh boundary-layer drag (same formulation as Held-Suarez)
 - No atmospheric shortwave absorption (Frierson convention: SW heats the surface only)
-- `SimplePhysicsConfig` dataclass for all scheme parameters
-- `SimplePhysics` forcing implementing the `Forcing` protocol (drop-in alternative to Held-Suarez)
+- `PhysicsSuiteConfig` dataclass for all scheme parameters
+- `PhysicsSuite` forcing implementing the `Forcing` protocol (drop-in alternative to Held-Suarez)
 - Aquaplanet example script and five-panel diagnostic visualization
 
 **Validation:**
@@ -151,7 +151,7 @@ Add water vapor as a prognostic tracer with moist physics parameterizations.
 - Large-scale condensation: implicit Frierson (2006) eq. 21 scheme, iterative, energy-conserving per level (cp·ΔT + L·Δq = 0)
 - Simplified Betts-Miller convection (Frierson 2007): parcel ascent with level of zero buoyancy (LZB), deep/shallow distinction via Pq/PT integrals, qref formulation for shallow convection, enthalpy-conserving ΔT offset applied only within the convective column
 - Bulk aerodynamic surface latent heat flux (evaporation)
-- `SimplePhysics` extended with automatic moist/dry pathway selection
+- `PhysicsSuite` extended with automatic moist/dry pathway selection
 - `moist_aquaplanet_initial_state` with RH-based humidity profile
 - Grid-space humidity clipping after each time step to prevent accumulation of negative values from spectral Gibbs ringing (see lessons learned)
 - Backward-compatible: dry states (humidity=None) work identically to Phase 5
@@ -188,7 +188,7 @@ Virtual temperature in the semi-implicit solver, plus implicit treatment of stif
 *Implicit surface fluxes:*
 - Surface sensible heat flux, latent heat flux, and Rayleigh friction treated with backward Euler: `X_new = (X + dt/τ · X_ref) / (1 + dt/τ)`
 - Unconditionally stable regardless of wind speed, drag coefficient, or dt
-- Applied after the IMEX step via `SimplePhysics.apply_implicit(state, dt_implicit)`
+- Applied after the IMEX step via `PhysicsSuite.apply_implicit(state, dt_implicit)`
 - `build_pe_stepper` accepts `implicit_physics` callable for operator splitting
 
 *Implicit Betts-Miller convection:*
@@ -197,7 +197,7 @@ Virtual temperature in the semi-implicit solver, plus implicit treatment of stif
 - Unconditionally stable regardless of dt/tau_bm ratio
 - Eliminates the computational mode excitation that previously limited dt
 
-*All implicit physics enabled by default* via `SimplePhysicsConfig(implicit_surface=True)`. Explicit path retained for debugging and comparison.
+*All implicit physics enabled by default* via `PhysicsSuiteConfig(implicit_surface=True)`. Explicit path retained for debugging and comparison.
 
 **What was NOT implemented (and why):**
 - Vorticity correction and moist κ: ~3% combined effect, deferred.
@@ -236,7 +236,7 @@ Stability-dependent surface fluxes replacing the constant drag coefficient, plus
 - Louis (1979) stability functions: bulk Richardson number, analytic correction factors for momentum and heat transfer coefficients
 - Neutral coefficients from log-profile: `C_DN = (k/ln(z/z0))²`, separate z0 for momentum and heat
 - `SurfaceLayerConfig` dataclass: roughness lengths, Louis parameters, Ri clamp
-- Wired into `SimplePhysics` (explicit and implicit paths) and coupled slab ocean stepper
+- Wired into `PhysicsSuite` (explicit and implicit paths) and coupled slab ocean stepper
 
 *Slab ocean coupling improvements:*
 - Real downward LW flux from the two-stream radiation solver (`lw_down_surface()`), replacing crude `σT⁴(1-exp(-0.5))` approximation that underestimated LW_down by 60%
@@ -305,7 +305,7 @@ Frierson (2006) / Manabe (1969) single-layer soil energy balance with bucket hyd
 **Lessons learned:**
 - The implicit atmospheric decay at the lowest level MUST be applied at land points (decaying toward T_land), not just ocean. Without it, the lowest-level temperature at land points is unconstrained and creates dynamical instability from large air-surface temperature contrasts within 2-3 days.
 - Soil heat capacity of 1×10⁶ J/(m²·K) (thin dry soil) is too low for stability at T21 with dt=900s — the land heats rapidly when the bucket drains and evaporative cooling vanishes. Default of 4×10⁶ (~2 m moist soil) provides stable integration while maintaining realistic diurnal/synoptic response.
-- The explicit LW radiation in `SimplePhysics.__call__` uses `self.sst` as the surface emission boundary. For coupled land runs, this means LW radiation over land uses the ocean SST rather than T_land. The error is modest (~10 W/m² for a 15 K difference) because the land energy balance in the coupled post-step uses the correct T_land. A future improvement would pass the blended surface temperature through `forcing.sst`, but this requires updating it every timestep (not just per-day), which is incompatible with `jax.lax.scan`.
+- The explicit LW radiation in `PhysicsSuite.__call__` uses `self.sst` as the surface emission boundary. For coupled land runs, this means LW radiation over land uses the ocean SST rather than T_land. The error is modest (~10 W/m² for a 15 K difference) because the land energy balance in the coupled post-step uses the correct T_land. A future improvement would pass the blended surface temperature through `forcing.sst`, but this requires updating it every timestep (not just per-day), which is incompatible with `jax.lax.scan`.
 - The bucket drains significantly over 10 days (0.11 → 0.01 m) as evaporation exceeds precipitation during the cold-start transient. In equilibrium, the precipitation-evaporation balance should maintain the bucket near its critical depth.
 
 ## Phase 9 — Radiation Upgrade (complete)
@@ -343,7 +343,7 @@ Replaced the semi-gray Byrne scheme (which had a -145 W/m² global energy imbala
 - `CloudConfig` dataclass with SPEEDY defaults, `enable_clouds=True/False` flag
 
 *Forcing protocol cleanup:*
-- `build_coupled_pe_stepper` and `spinup_prescribed_sst` now take `SimplePhysics` directly instead of the `Forcing` protocol with `hasattr` guards and `Any` casts
+- `build_coupled_pe_stepper` and `spinup_prescribed_sst` now take `PhysicsSuite` directly instead of the `Forcing` protocol with `hasattr` guards and `Any` casts
 - Removed ~30 lines of defensive checks that obscured the actual requirements
 - `build_pe_stepper` retains `Forcing` protocol (genuinely works with HeldSuarez)
 
@@ -366,7 +366,7 @@ Replaced the semi-gray Byrne scheme (which had a -145 W/m² global energy imbala
 - The 4-band LW with temperature-dependent fractions is the key to energy balance. The window band shifts emission toward transparent wavelengths at warm surface temperatures, providing OLR ≈ absorbed SW without fine-tuning. Single-band schemes cannot achieve this because they have no spectral degree of freedom.
 - The SPEEDY near-IR H₂O absorption (`abswv2=15.0`) is 680× stronger than visible (`abswv1=0.022`). Nearly all humidity-dependent SW absorption happens in the near-IR band, which is only 5% of solar irradiance. A single-band SW scheme with `byrne_sw_b=0.2` vastly underestimates this effect.
 - Diagnostic clouds from RH alone (without precipitation) still provide meaningful LW greenhouse effect. SW cloud albedo requires the precipitation contribution for realistic values — this will improve when precipitation is threaded through from the moist physics.
-- The `Forcing` protocol was too narrow for the coupled stepper, which needs radiation config, SST, day_of_year, k_v, and implicit physics. Typing as `SimplePhysics` directly is more honest and eliminates fragile duck-typing.
+- The `Forcing` protocol was too narrow for the coupled stepper, which needs radiation config, SST, day_of_year, k_v, and implicit physics. Typing as `PhysicsSuite` directly is more honest and eliminates fragile duck-typing.
 
 ## Phase 10 — Topography (complete)
 

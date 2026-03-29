@@ -32,10 +32,12 @@ jax.config.update("jax_enable_x64", True)
 
 from notus import (
     EARTH,
+    ByrneRadiation,
     GaussianGrid,
-    SimplePhysics,
-    SimplePhysicsConfig,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     SpectralTransform,
+    SpeedyRadiation,
     build_pe_stepper,
     exponential_filter,
     grid_surface_pressure,
@@ -94,13 +96,17 @@ def _diagnose_byrne(
     t_grid: jnp.ndarray,
     q_grid: jnp.ndarray,
     surface_temperature: jnp.ndarray,
-    forcing: SimplePhysics,
+    forcing: PhysicsSuite,
     surface_pressure: jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Byrne scheme: return (lw_heating, olr, lw_down, sw_heating, sw_down, sw_down_dry)."""
     planet = forcing.planet
     levels = forcing.levels
     cfg = forcing.config
+    rad = cfg.radiation
+    if not isinstance(rad, ByrneRadiation):
+        msg = "Expected ByrneRadiation"
+        raise TypeError(msg)
     sin_lat = forcing.transform.grid.sin_lat
 
     tau_lw = byrne_longwave_optical_depth(
@@ -108,8 +114,8 @@ def _diagnose_byrne(
         q_grid,
         surface_pressure,
         planet.reference_pressure,
-        byrne_a=cfg.byrne_a,
-        byrne_b=cfg.byrne_b,
+        byrne_a=rad.a,
+        byrne_b=rad.b,
     )
     lw_heating, lw_down_sfc = longwave_heating(
         t_grid,
@@ -127,9 +133,9 @@ def _diagnose_byrne(
         q_grid,
         surface_pressure,
         planet.reference_pressure,
-        sw_tau_0=cfg.sw_tau_0,
-        byrne_sw_a=cfg.byrne_sw_a,
-        byrne_sw_b=cfg.byrne_sw_b,
+        sw_tau_0=rad.sw_tau_0,
+        byrne_sw_a=rad.sw_a,
+        byrne_sw_b=rad.sw_b,
     )
     sw_heating, sw_down_sfc = shortwave_heating(
         levels.sigma_half,
@@ -139,8 +145,8 @@ def _diagnose_byrne(
         planet.solar_constant,
         planet.gravity,
         planet.specific_heat_cp,
-        sw_tau_0=cfg.sw_tau_0,
-        sw_exponent=cfg.sw_exponent,
+        sw_tau_0=rad.sw_tau_0,
+        sw_exponent=rad.sw_exponent,
         delta_s=cfg.delta_s,
         tau_sw_half=tau_sw,
         surface_albedo=planet.surface_albedo,
@@ -153,8 +159,8 @@ def _diagnose_byrne(
         planet.solar_constant,
         planet.gravity,
         planet.specific_heat_cp,
-        sw_tau_0=cfg.sw_tau_0,
-        sw_exponent=cfg.sw_exponent,
+        sw_tau_0=rad.sw_tau_0,
+        sw_exponent=rad.sw_exponent,
         delta_s=cfg.delta_s,
         surface_albedo=planet.surface_albedo,
     )
@@ -165,13 +171,17 @@ def _diagnose_speedy(
     t_grid: jnp.ndarray,
     q_grid: jnp.ndarray,
     surface_temperature: jnp.ndarray,
-    forcing: SimplePhysics,
+    forcing: PhysicsSuite,
     surface_pressure: jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """SPEEDY scheme: return (lw_heating, olr, lw_down, sw_heating, sw_down, sw_down_dry)."""
     planet = forcing.planet
     levels = forcing.levels
     cfg = forcing.config
+    rad = cfg.radiation
+    if not isinstance(rad, SpeedyRadiation):
+        msg = "Expected SpeedyRadiation"
+        raise TypeError(msg)
     sin_lat = forcing.transform.grid.sin_lat
 
     lw_heating, lw_down_sfc, olr = speedy_longwave_heating(
@@ -183,12 +193,12 @@ def _diagnose_speedy(
         planet.reference_pressure,
         planet.gravity,
         planet.specific_heat_cp,
-        epslw=cfg.speedy_epslw,
-        surface_emissivity=cfg.speedy_surface_emissivity,
-        ablwin=cfg.speedy_ablwin,
-        ablco2=cfg.speedy_ablco2,
-        ablwv1=cfg.speedy_ablwv1,
-        ablwv2=cfg.speedy_ablwv2,
+        epslw=rad.epslw,
+        surface_emissivity=rad.surface_emissivity,
+        ablwin=rad.ablwin,
+        ablco2=rad.ablco2,
+        ablwv1=rad.ablwv1,
+        ablwv2=rad.ablwv2,
     )
 
     insolation = planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
@@ -202,11 +212,11 @@ def _diagnose_speedy(
         planet.gravity,
         planet.specific_heat_cp,
         surface_albedo=planet.surface_albedo,
-        absdry=cfg.speedy_absdry,
-        absaer=cfg.speedy_absaer,
-        abswv1=cfg.speedy_sw_abswv1,
-        abswv2=cfg.speedy_sw_abswv2,
-        visible_fraction=cfg.speedy_visible_fraction,
+        absdry=rad.absdry,
+        absaer=rad.absaer,
+        abswv1=rad.sw_abswv1,
+        abswv2=rad.sw_abswv2,
+        visible_fraction=rad.visible_fraction,
     )
     # Dry comparison: zero humidity
     q_dry = jnp.zeros_like(q_grid)
@@ -220,11 +230,11 @@ def _diagnose_speedy(
         planet.gravity,
         planet.specific_heat_cp,
         surface_albedo=planet.surface_albedo,
-        absdry=cfg.speedy_absdry,
-        absaer=cfg.speedy_absaer,
-        abswv1=cfg.speedy_sw_abswv1,
-        abswv2=cfg.speedy_sw_abswv2,
-        visible_fraction=cfg.speedy_visible_fraction,
+        absdry=rad.absdry,
+        absaer=rad.absaer,
+        abswv1=rad.sw_abswv1,
+        abswv2=rad.sw_abswv2,
+        visible_fraction=rad.visible_fraction,
     )
     return lw_heating, olr, lw_down_sfc, sw_heating, sw_down_sfc, sw_down_dry
 
@@ -232,7 +242,7 @@ def _diagnose_speedy(
 def diagnose_radiation_budget(
     state,
     transform: SpectralTransform,
-    forcing: SimplePhysics,
+    forcing: PhysicsSuite,
     surface_pressure: jnp.ndarray,
     surface_temperature: jnp.ndarray,
 ) -> dict[str, jnp.ndarray]:
@@ -246,7 +256,7 @@ def diagnose_radiation_budget(
     q_grid = jnp.maximum(jax.vmap(transform.spectral_to_grid)(state.humidity), 0.0)
 
     # Dispatch by scheme
-    if cfg.radiation_scheme == "speedy":
+    if isinstance(cfg.radiation, SpeedyRadiation):
         lw_heat, olr, lw_down_sfc, sw_heat, sw_down_sfc, sw_down_dry = _diagnose_speedy(
             t_grid,
             q_grid,
@@ -351,10 +361,14 @@ def run_validation(
 ) -> bool:
     """Run moist aquaplanet and validate radiation budget."""
     if scheme == "byrne":
-        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
+        config = PhysicsSuiteConfig(radiation=ByrneRadiation(sw_tau_0=0.22))
         scheme_label = "Byrne LW + humidity-dependent SW (tau=0.22)"
     elif scheme == "speedy":
-        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
+        from notus.physics.clouds import CloudConfig
+
+        config = PhysicsSuiteConfig(
+            radiation=SpeedyRadiation(clouds=CloudConfig() if clouds else None),
+        )
         scheme_label = "SPEEDY 4-band LW + 2-band SW" + (" + clouds" if clouds else "")
     else:
         print(f"ERROR: unknown scheme '{scheme}'")
@@ -380,7 +394,7 @@ def run_validation(
         seed=42,
     )
 
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,

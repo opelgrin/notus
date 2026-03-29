@@ -74,10 +74,10 @@ Run the gray-radiation aquaplanet with surface fluxes (Frierson et al. 2006):
 
 ```bash
 # Quick demo (T21, 300 days)
-uv run python examples/simple_physics_aquaplanet.py
+uv run python examples/physics_suite_aquaplanet.py
 
 # Generate diagnostic plots
-uv run python examples/plot_simple_physics.py
+uv run python examples/plot_physics_suite.py
 ```
 
 ### Moist aquaplanet

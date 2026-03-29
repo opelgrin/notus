@@ -26,7 +26,7 @@ from notus.physics.moisture import (
     saturation_specific_humidity,
     saturation_vapor_pressure,
 )
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
+from notus.physics.physics_suite import PhysicsSuite, PhysicsSuiteConfig
 from notus.physics.surface import surface_latent_heat_flux
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
@@ -889,29 +889,29 @@ class TestBettsMillerConvection:
 # ---------------------------------------------------------------------------
 
 
-class TestSimplePhysicsConfigValidation:
+class TestPhysicsSuiteConfigValidation:
     def test_tau_bm_must_be_positive(self) -> None:
         with pytest.raises(ValueError, match="tau_bm"):
-            SimplePhysicsConfig(tau_bm=0.0)
+            PhysicsSuiteConfig(tau_bm=0.0)
 
     def test_rh_ref_must_be_in_unit_interval(self) -> None:
         with pytest.raises(ValueError, match="rh_ref"):
-            SimplePhysicsConfig(rh_ref=1.5)
+            PhysicsSuiteConfig(rh_ref=1.5)
 
     def test_rh_ref_must_be_positive(self) -> None:
         with pytest.raises(ValueError, match="rh_ref"):
-            SimplePhysicsConfig(rh_ref=0.0)
+            PhysicsSuiteConfig(rh_ref=0.0)
 
     def test_n_condensation_iterations_must_be_positive(self) -> None:
         with pytest.raises(ValueError, match="n_condensation_iterations"):
-            SimplePhysicsConfig(n_condensation_iterations=0)
+            PhysicsSuiteConfig(n_condensation_iterations=0)
 
     def test_rh_condensation_must_be_in_unit_interval(self) -> None:
         with pytest.raises(ValueError, match="rh_condensation"):
-            SimplePhysicsConfig(rh_condensation=1.1)
+            PhysicsSuiteConfig(rh_condensation=1.1)
 
     def test_valid_config_accepted(self) -> None:
-        cfg = SimplePhysicsConfig(
+        cfg = PhysicsSuiteConfig(
             tau_bm=3600.0,
             rh_ref=0.8,
             n_condensation_iterations=5,
@@ -1001,7 +1001,7 @@ class TestMoistAquaplanetIntegration:
         )
         dt = 600.0
         filt = exponential_filter(transform.arrays, dt)
-        forcing = SimplePhysics(transform, EARTH, levels)
+        forcing = PhysicsSuite(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
             transform,
             EARTH,
@@ -1042,7 +1042,7 @@ class TestMoistAquaplanetIntegration:
         )
         dt = 600.0
         filt = exponential_filter(transform.arrays, dt)
-        forcing = SimplePhysics(transform, EARTH, levels)
+        forcing = PhysicsSuite(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
             transform,
             EARTH,
@@ -1076,17 +1076,17 @@ class TestMoistAquaplanetIntegration:
         transform: SpectralTransform,
         levels: SigmaLevels,
     ) -> None:
-        """Dry SimplePhysics (no humidity) still works after moist changes."""
-        from notus.initial_conditions import simple_physics_initial_state
+        """Dry PhysicsSuite (no humidity) still works after moist changes."""
+        from notus.initial_conditions import physics_suite_initial_state
 
-        state, ref_temps, surf_geo = simple_physics_initial_state(
+        state, ref_temps, surf_geo = physics_suite_initial_state(
             transform,
             EARTH,
             levels,
         )
         dt = 600.0
         filt = exponential_filter(transform.arrays, dt)
-        forcing = SimplePhysics(transform, EARTH, levels)
+        forcing = PhysicsSuite(transform, EARTH, levels)
         init_fn, step_fn = build_pe_stepper(
             transform,
             EARTH,

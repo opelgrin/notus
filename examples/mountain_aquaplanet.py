@@ -32,11 +32,14 @@ jax.config.update("jax_enable_x64", True)
 
 from notus import (
     EARTH,
+    ByrneRadiation,
+    FriersonRadiation,
     GaussianGrid,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     PrimitiveEquationState,
-    SimplePhysics,
-    SimplePhysicsConfig,
     SpectralTransform,
+    SpeedyRadiation,
     build_pe_stepper,
     compute_zonal_mean_state,
     exponential_filter,
@@ -149,8 +152,13 @@ def run_mountain_aquaplanet(
     # ----------------------------------------------------------------
     # 4. Physics and time stepper
     # ----------------------------------------------------------------
-    config = SimplePhysicsConfig(radiation_scheme=scheme)
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+    radiation_configs = {
+        "frierson": FriersonRadiation(),
+        "byrne": ByrneRadiation(sw_tau_0=0.22),
+        "speedy": SpeedyRadiation(),
+    }
+    config = PhysicsSuiteConfig(radiation=radiation_configs[scheme])
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
 
     init_fn, step_fn = build_pe_stepper(

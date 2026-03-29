@@ -379,9 +379,9 @@ def held_suarez_initial_state(
 #: Alias for :func:`held_suarez_initial_state`.
 #:
 #: The dry isothermal rest state is suitable for both Held-Suarez and
-#: simple-physics (Frierson-style) aquaplanet experiments.  For moist
+#: physics suite (Frierson-style) aquaplanet experiments.  For moist
 #: runs, use :func:`moist_aquaplanet_initial_state` instead.
-simple_physics_initial_state = held_suarez_initial_state
+physics_suite_initial_state = held_suarez_initial_state
 
 
 def moist_aquaplanet_initial_state(
@@ -432,7 +432,7 @@ def moist_aquaplanet_initial_state(
     surface_geopotential : jnp.ndarray
         Surface geopotential, shape ``(n_spectral,)``.
     """
-    state, ref_temps, surf_geo = simple_physics_initial_state(
+    state, ref_temps, surf_geo = physics_suite_initial_state(
         transform,
         planet,
         levels,
