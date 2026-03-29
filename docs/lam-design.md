@@ -46,7 +46,7 @@ p(k, i, j) = A(k) * p_ref + B(k) * p_s(i, j)
 - Near surface: A ≈ 0, B ≈ 1 (terrain-following, resolves boundary layer over topography)
 - Near model top: A → p_top/p_ref, B → 0 (flat pressure surfaces, no terrain imprint)
 
-This is a strict generalization of Notus's pure sigma coordinate (A=0, B=sigma). When Notus upgrades to hybrid levels in Phase 8, the vertical discretization can be shared directly.
+This is a strict generalization of Notus's pure sigma coordinate (A=0, B=sigma). Notus currently uses pure sigma levels (`SigmaLevels`); if/when it gains hybrid levels, the vertical discretization can be shared directly.
 
 Standard A/B coefficient sets exist in the literature (ECMWF L60/L91, or simpler versions with fewer levels). The design should accept arbitrary A(k), B(k) arrays.
 
@@ -133,16 +133,22 @@ The LAM depends on `notus` as a Python package. Shared components:
 
 ### Imported directly from Notus
 - `notus.constants.PlanetaryConstants`, `EARTH` — physical constants
-- `notus.vertical.sigma.SigmaLevels` (or `HybridLevels` after Phase 8) — vertical coordinate definition
+- `notus.vertical.sigma.SigmaLevels` — vertical coordinate definition (pure sigma)
 - `notus.vertical.operators` — geopotential integration, sigma_dot, vertical advection
-- `notus.physics.radiation` — gray LW (and SW after Phase 7)
-- `notus.physics.convection` — Betts-Miller scheme
-- `notus.physics.moisture` — saturation thermodynamics, large-scale condensation
-- `notus.physics.surface` — bulk surface fluxes
+- `notus.physics.radiation` — Frierson (gray LW + optional SW), Byrne (humidity-dependent), SPEEDY (4 LW + 2 SW multi-band)
+- `notus.physics.convection` — dry convective adjustment, large-scale condensation (implicit), simplified Betts-Miller (deep/shallow)
+- `notus.physics.moisture` — saturation thermodynamics (Bolton 1980), moist pseudoadiabat
+- `notus.physics.surface` — bulk aerodynamic fluxes, slab ocean (implicit stepping), bucket land hydrology, `SurfaceState`/`OceanState`/`LandState`
+- `notus.physics.boundary_layer` — Louis (1979) stability-dependent transfer coefficients, `SurfaceLayerConfig`
+- `notus.physics.clouds` — diagnostic RH-based cloud scheme (convective + stratiform), coupled to SPEEDY radiation
+- `notus.physics.solar` — orbital parameters, solar declination, daily-mean insolation (seasonal cycle)
+- `notus.physics.physics_suite` — `PhysicsSuite` composable forcing (wraps radiation, convection, surface, boundary layer)
+- `notus.topography` — idealized orography generators (Gaussian mountain, zonal ridge, sinusoidal), spectral smoothing, surface pressure initialization
+- `notus.timestepping.coupled` — `CoupledStepper` / `build_coupled_pe_stepper()` coupling atmosphere + slab ocean + optional bucket land + surface geopotential
 - `notus.transforms.SpectralTransform` — used only in the nesting coupler to convert Notus output to grid space
 
 ### Adapted / wrapped
-- Physics forcing: Notus's `Forcing` protocol assumes spectral input/output. The LAM needs a grid-point forcing protocol:
+- Physics forcing: Notus's `Forcing` protocol wraps spectral ↔ grid transforms around grid-point column physics. The LAM needs a grid-point forcing protocol that calls the underlying column physics directly, skipping the spectral round-trips:
 
 ```python
 class GridForcing(Protocol):
@@ -157,7 +163,9 @@ class GridForcing(Protocol):
     ) -> GridTendencies: ...
 ```
 
-The column physics functions inside Notus (radiation, convection, condensation, surface flux) already work on grid-point arrays. The LAM wrappers call these directly, skipping the spectral transform round-trips.
+The column physics functions inside Notus (radiation, convection, condensation, surface flux, boundary layer, clouds) already work on grid-point arrays. The LAM wrappers call these directly. The `PhysicsSuite` class demonstrates how these components compose — the LAM `GridForcing` would follow a similar pattern but without spectral state conversion.
+
+- Coupled surface: `CoupledStepper` currently threads `SurfaceState` (slab ocean + optional bucket land) through the atmospheric time stepping. The LAM equivalent would call the same surface stepping functions (`step_slab_ocean_implicit`, `step_bucket_hydrology`, `step_land_implicit`) directly on LAM grid-point fields.
 
 ### New to the LAM
 - `RotatedLatLonGrid` — grid definition with rotation parameters
@@ -274,8 +282,9 @@ One-way nesting from Notus global output to LAM boundaries.
 Reuse Notus physics for realistic regional simulations.
 
 **Deliverables:**
-- `GridForcing` wrappers around Notus column physics
-- Surface temperature (slab ocean or prescribed SST on LAM domain)
+- `GridForcing` wrappers around Notus column physics (radiation, convection, condensation, boundary layer, clouds)
+- Surface coupling: slab ocean, prescribed SST, or bucket land on LAM domain (reusing `step_slab_ocean_implicit`, `step_bucket_hydrology`, `step_land_implicit`)
+- Seasonal forcing via Notus solar geometry (`daily_mean_insolation`, `OrbitalParameters`)
 - Regional diagnostics and visualization
 
 **Validation:**
@@ -284,12 +293,13 @@ Reuse Notus physics for realistic regional simulations.
 
 ### Phase 6 — Topography and land surface
 
-Terrain-following coordinates and land-sea contrast (depends on Notus Phase 8).
+Terrain-following coordinates and land-sea contrast.
 
 **Deliverables:**
-- Hybrid sigma-pressure with topographic surface geopotential
+- Hybrid sigma-pressure with topographic surface geopotential (Notus already has surface geopotential support via `topography.py` and `build_coupled_pe_stepper`, but uses pure sigma; the LAM's hybrid coordinate needs terrain-following metric terms)
 - Terrain-following metric terms in pressure gradient and advection
-- Land surface model (shared with Notus)
+- Land surface model reusing Notus bucket land (`BucketLandConfig`, `LandState`, `step_land_implicit`, `step_bucket_hydrology`) with spatially varying surface properties (`SurfaceProperties`, `flat_continent_surface`)
+- High-resolution topography on the LAM grid (can use Notus's `smooth_orography` for spectral smoothing, but the LAM may also want grid-space smoothing)
 
 **Validation:**
 - Flow over an idealized mountain (Schaer et al. 2002)
