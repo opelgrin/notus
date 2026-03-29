@@ -21,8 +21,8 @@ Usage
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
-import time
 
 import jax
 import jax.numpy as jnp
@@ -31,28 +31,34 @@ import numpy as np
 
 jax.config.update("jax_enable_x64", True)
 
-from notus.constants import EARTH
-from notus.diagnostics import ZonalMeanState, compute_zonal_mean_state
-from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state
-from notus.operators import exponential_filter
-from notus.operators.vector import uv_from_vordiv
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
-from notus.physics.solar import EARTH_ORBIT
-from notus.physics.surface import (
+from notus import (
+    EARTH,
+    EARTH_ORBIT,
     BucketLandConfig,
+    GaussianGrid,
     OceanState,
     PrescribedSST,
+    SimplePhysics,
+    SimplePhysicsConfig,
     SlabOceanConfig,
+    SpectralTransform,
     SurfaceState,
+    ZonalMeanState,
+    build_coupled_pe_stepper,
     compute_sst,
+    compute_zonal_mean_state,
+    exponential_filter,
+    flat_continent_surface,
+    grid_winds_at_level,
     init_land_state,
+    moist_aquaplanet_initial_state,
+    run_simulation,
+    spinup_prescribed_sst,
+    standard_sigma_levels,
 )
-from notus.physics.surface_types import flat_continent_surface
-from notus.timestepping.coupled import build_coupled_pe_stepper
-from notus.timestepping.spinup import spinup_prescribed_sst
-from notus.transforms import SpectralTransform
-from notus.vertical.sigma import standard_sigma_levels
+
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 def run_land_ocean(
@@ -104,7 +110,7 @@ def run_land_ocean(
 
     # --- Surface configuration ---
     # Flat continent: 30S-60N, 0-180E (roughly Eurasia-like in extent)
-    lat_deg = np.degrees(np.asarray(grid.latitudes))
+    lat_deg = np.asarray(grid.latitudes_deg)
     sfc_props = flat_continent_surface(
         grid.latitudes,
         grid.longitudes,
@@ -137,8 +143,7 @@ def run_land_ocean(
     filt = exponential_filter(transform.arrays, dt)
     spinup_forcing = SimplePhysics(transform, EARTH, levels, config=config)
 
-    t_spinup = time.perf_counter()
-    result = spinup_prescribed_sst(
+    spinup_result = spinup_prescribed_sst(
         state,
         spinup_forcing,
         transform,
@@ -153,11 +158,9 @@ def run_land_ocean(
         surface_albedo=EARTH.surface_albedo,
         verbose=True,
     )
-    t_spinup_done = time.perf_counter() - t_spinup
-    print(f"  Spinup complete in {t_spinup_done:.0f}s")
     print(
-        f"  Q-flux range: [{float(jnp.min(result.q_flux)):.1f}, "
-        f"{float(jnp.max(result.q_flux)):.1f}] W/m^2"
+        f"  Q-flux range: [{float(jnp.min(spinup_result.q_flux)):.1f}, "
+        f"{float(jnp.max(spinup_result.q_flux)):.1f}] W/m^2"
     )
 
     # --- Initialize surface state ---
@@ -177,6 +180,8 @@ def run_land_ocean(
     )
 
     # --- Build coupled stepper ---
+    days_per_year = EARTH_ORBIT.days_per_year
+
     init_fn, step_fn = build_coupled_pe_stepper(
         transform=transform,
         planet=EARTH,
@@ -186,137 +191,96 @@ def run_land_ocean(
         dt=dt,
         forcing=forcing,
         ocean_config=ocean_config,
-        q_flux=result.q_flux,
+        q_flux=spinup_result.q_flux,
         surface_properties=sfc_props,
         land_config=land_config,
         spectral_filter=filt,
     )
 
-    steps_per_day = int(86400 / dt)
-    days_per_year = EARTH_ORBIT.days_per_year
-
-    def one_day(
-        carry: tuple,
-        day_of_year: jnp.ndarray,
-    ) -> tuple[tuple, None]:
-        prev, curr, sfc = carry
-        forcing.day_of_year = day_of_year
-
-        def step(carry: tuple, _: None) -> tuple[tuple, None]:
-            p, c, s = carry
-            p, c, s = step_fn(p, c, s)
-            return (p, c, s), None
-
-        (prev, curr, sfc), _ = jax.lax.scan(step, (prev, curr, sfc), None, length=steps_per_day)
-        return (prev, curr, sfc), None
-
-    one_day_jit = jax.jit(one_day)
-
-    # --- Initialize with spun-up state ---
-    print("\n--- Coupled integration ---")
-    print("Initializing...")
-    t0 = time.perf_counter()
-    prev, curr, surface = init_fn(result.state, surface)
-
-    # Force JIT compilation
-    (prev, curr, surface), _ = one_day_jit((prev, curr, surface), jnp.float64(0.0))
-    t_compile = time.perf_counter() - t0
-    print(f"Day 1 (incl. JIT compile): {t_compile:.1f}s")
-
     # --- Accumulator ---
     n_avg = 0
     accum_zm: ZonalMeanState | None = None
-
-    def _accumulate(curr_state: jnp.ndarray) -> None:
-        nonlocal n_avg, accum_zm
-        zm = compute_zonal_mean_state(curr_state, transform)
-        n_avg += 1
-        if accum_zm is None:
-            accum_zm = zm
-        else:
-            accum_zm = ZonalMeanState(
-                u=accum_zm.u + zm.u,
-                v=accum_zm.v + zm.v,
-                temperature=accum_zm.temperature + zm.temperature,
-                u_prime_sq=accum_zm.u_prime_sq + zm.u_prime_sq,
-                v_prime_sq=accum_zm.v_prime_sq + zm.v_prime_sq,
-                uv_prime=accum_zm.uv_prime + zm.uv_prime,
-                vt_prime=accum_zm.vt_prime + zm.vt_prime,
-            )
+    blew_up = False
 
     eq_idx = np.argmin(np.abs(lat_deg))
     jet_level = max(0, n_levels // 4)
+    land_mask = land_frac > 0.5
 
-    def _print_status(day: int, elapsed: float) -> bool:
-        """Print diagnostics. Returns False if blowup detected."""
-        t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
-        sst = np.asarray(surface.ocean.surface_temperature)
-
-        u_spec, _ = uv_from_vordiv(
-            curr.vorticity[jet_level],
-            curr.divergence[jet_level],
-            transform.arrays,
-        )
-        u_grid = np.asarray(transform.spectral_to_grid(u_spec))
-        cos_lat = np.asarray(grid.cos_lat)
-        u_grid = u_grid / cos_lat[:, None]
-
-        t_mean = float(np.mean(t_grid))
-        days_per_sec = (day - 1) / elapsed if elapsed > 0 else 0
-        phase = "spinup" if day <= spinup_days else "averaging"
-
-        # Land diagnostics
-        land_t = np.asarray(surface.land.soil_temperature)
-        bucket = np.asarray(surface.land.bucket_depth)
-        land_mask = land_frac > 0.5
-        land_t_mean = float(np.mean(land_t[land_mask])) if np.any(land_mask) else 0.0
-        bucket_mean = float(np.mean(bucket[land_mask])) if np.any(land_mask) else 0.0
-
-        q_str = ""
-        if curr.has_humidity:
-            q_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.humidity))
-            q_mean_gkg = float(np.mean(q_grid)) * 1000
-            q_str = f"  q={q_mean_gkg:.2f}g/kg"
-
-        print(
-            f"  Day {day:5d} [{phase:>9s}]: "
-            f"SST=[{np.min(sst):.1f},{np.max(sst):.1f}] "
-            f"T_land={land_t_mean:.1f} K "
-            f"bucket={bucket_mean:.3f}m "
-            f"|U|={np.max(np.abs(u_grid)):.1f}"
-            f"{q_str}"
-            f"  [{days_per_sec:.1f} d/s]"
-        )
-
-        if not np.isfinite(t_mean) or not np.all(np.isfinite(sst)):
-            print("ERROR: Integration has blown up!")
-            return False
-        return True
-
-    # --- Main integration loop ---
-    t_start = time.perf_counter()
-    for day in range(2, n_days + 1):
-        day_of_year = jnp.float64(day % days_per_year)
-        forcing.sst = surface.ocean.surface_temperature
-        (prev, curr, surface), _ = one_day_jit((prev, curr, surface), day_of_year)
+    def on_day(day: int, curr_state: object, sfc: object) -> None:
+        nonlocal n_avg, accum_zm, blew_up
 
         if day > spinup_days:
-            _accumulate(curr)
+            zm = compute_zonal_mean_state(curr_state, transform)  # type: ignore[arg-type]
+            n_avg += 1
+            accum_zm = zm if accum_zm is None else jax.tree.map(np.add, accum_zm, zm)
 
         if day <= 10 or day % 50 == 0 or day == n_days:
-            elapsed = time.perf_counter() - t_start
-            if not _print_status(day, elapsed):
-                return False
+            t_grid = np.asarray(
+                jax.vmap(transform.spectral_to_grid)(curr_state.temperature)  # type: ignore[union-attr]
+            )
+            sst = np.asarray(sfc.ocean.surface_temperature)  # type: ignore[union-attr]
 
-    total_time = time.perf_counter() - t0
-    print(f"\nDone. Total wall time: {total_time:.0f}s ({total_time / 3600:.1f}h)")
+            u_grid, _v = grid_winds_at_level(curr_state, jet_level, transform)  # type: ignore[arg-type]
+            u_grid = np.asarray(u_grid)
+
+            t_mean = float(np.mean(t_grid))
+            phase = "spinup" if day <= spinup_days else "averaging"
+
+            # Land diagnostics
+            land_t = np.asarray(sfc.land.soil_temperature)  # type: ignore[union-attr]
+            bucket = np.asarray(sfc.land.bucket_depth)  # type: ignore[union-attr]
+            land_t_mean = float(np.mean(land_t[land_mask])) if np.any(land_mask) else 0.0
+            bucket_mean = float(np.mean(bucket[land_mask])) if np.any(land_mask) else 0.0
+
+            q_str = ""
+            if curr_state.has_humidity:  # type: ignore[union-attr]
+                q_grid = np.asarray(
+                    jax.vmap(transform.spectral_to_grid)(curr_state.humidity)  # type: ignore[union-attr]
+                )
+                q_mean_gkg = float(np.mean(q_grid)) * 1000
+                q_str = f"  q={q_mean_gkg:.2f}g/kg"
+
+            print(
+                f"  Day {day:5d} [{phase:>9s}]: "
+                f"SST=[{np.min(sst):.1f},{np.max(sst):.1f}] "
+                f"T_land={land_t_mean:.1f} K "
+                f"bucket={bucket_mean:.3f}m "
+                f"|U|={np.max(np.abs(u_grid)):.1f}"
+                f"{q_str}"
+            )
+
+            if not np.isfinite(t_mean) or not np.all(np.isfinite(sst)):
+                print("ERROR: Integration has blown up!")
+                blew_up = True
+
+    # --- Run ---
+    print("\n--- Coupled integration ---")
+    result = run_simulation(
+        init_fn=init_fn,
+        step_fn=step_fn,
+        initial_state=spinup_result.state,
+        dt=dt,
+        n_days=n_days,
+        surface=surface,
+        forcing=forcing,
+        days_per_year=days_per_year,
+        on_day=on_day,
+        verbose=False,
+    )
+
+    if blew_up:
+        return False
+
+    print(f"\nDone. Total wall time: {result.wall_time:.0f}s ({result.wall_time / 3600:.1f}h)")
     print(f"Averaged over {n_avg} daily samples")
 
     # --- Final summary ---
-    sst_final = np.asarray(surface.ocean.surface_temperature)
-    land_t_final = np.asarray(surface.land.soil_temperature)
-    bucket_final = np.asarray(surface.land.bucket_depth)
-    land_mask = land_frac > 0.5
+    final_surface = result.surface
+    if final_surface is None:
+        return False
+    sst_final = np.asarray(final_surface.ocean.surface_temperature)
+    land_t_final = np.asarray(final_surface.land.soil_temperature)
+    bucket_final = np.asarray(final_surface.land.bucket_depth)
 
     print("\n--- Final surface state ---")
     print(f"  SST range:        [{np.min(sst_final):.1f}, {np.max(sst_final):.1f}] K")
@@ -335,15 +299,7 @@ def run_land_ocean(
         print(f"  Dry land (W<W_c): {dry_pct:.0f}%")
 
     if accum_zm is not None and n_avg > 0:
-        mean_zm = ZonalMeanState(
-            u=accum_zm.u / n_avg,
-            v=accum_zm.v / n_avg,
-            temperature=accum_zm.temperature / n_avg,
-            u_prime_sq=accum_zm.u_prime_sq / n_avg,
-            v_prime_sq=accum_zm.v_prime_sq / n_avg,
-            uv_prime=accum_zm.uv_prime / n_avg,
-            vt_prime=accum_zm.vt_prime / n_avg,
-        )
+        mean_zm = jax.tree.map(lambda x: x / n_avg, accum_zm)
 
         sigma_full = np.asarray(levels.sigma_full)
         surface_idx = np.argmax(sigma_full)
@@ -355,7 +311,7 @@ def run_land_ocean(
         print(f"  T(pole, sfc)    = {mean_zm.temperature[surface_idx, pole_idx]:.1f} K")
         jet_max = float(np.max(np.abs(mean_zm.u[upper_mask, :])))
         print(f"  Jet max |U|     = {jet_max:.1f} m/s")
-        eke = 0.5 * (mean_zm.u_prime_sq + mean_zm.v_prime_sq)
+        eke = mean_zm.eke
         print(f"  EKE max         = {float(np.max(eke)):.1f} m^2/s^2")
 
     return True
@@ -374,7 +330,10 @@ def main() -> None:
         "--prescribe-spinup", type=int, default=100, help="Prescribed-SST spinup days"
     )
     parser.add_argument(
-        "--prescribe-avg", type=int, default=100, help="Prescribed-SST averaging days for Q-flux"
+        "--prescribe-avg",
+        type=int,
+        default=100,
+        help="Prescribed-SST averaging days for Q-flux",
     )
     args = parser.parse_args()
 

@@ -596,12 +596,12 @@ class TestLandOceanIntegration:
         )
         steps_per_day = 96
         forcing.day_of_year = jnp.float64(0.0)
-        forcing.sst = surface.ocean.surface_temperature
+        forcing.prescribed_sst = surface.ocean.surface_temperature
         prev, curr, surface = init_fn(s["result"].state, surface)
 
         for day in range(1, n_days + 1):
             forcing.day_of_year = jnp.float64(day)
-            forcing.sst = surface.ocean.surface_temperature
+            forcing.prescribed_sst = surface.ocean.surface_temperature
 
             def scan_body(carry, _):
                 p, c, sfc = carry

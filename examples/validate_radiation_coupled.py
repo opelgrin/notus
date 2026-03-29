@@ -2,7 +2,7 @@
 """Validate radiation energy conservation in a coupled slab ocean run.
 
 Three-phase validation:
-1. Prescribed-SST spinup (200 days) → diagnose Q-flux
+1. Prescribed-SST spinup (200 days) -> diagnose Q-flux
 2. Coupled slab ocean integration (300 days from warm start)
 3. Radiation budget diagnosis on the equilibrated coupled state
 
@@ -31,12 +31,26 @@ jax.config.update("jax_enable_x64", True)
 
 from validate_radiation import compute_olr
 
-from notus.constants import EARTH
-from notus.diagnostics import spherical_integral
-from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state
-from notus.operators import exponential_filter
-from notus.operators.vector import uv_from_vordiv
+from notus import (
+    EARTH,
+    GaussianGrid,
+    OceanState,
+    PrescribedSST,
+    SimplePhysics,
+    SimplePhysicsConfig,
+    SlabOceanConfig,
+    SpectralTransform,
+    SurfaceState,
+    build_coupled_pe_stepper,
+    compute_sst,
+    exponential_filter,
+    grid_surface_pressure,
+    moist_aquaplanet_initial_state,
+    spherical_integral,
+    spinup_prescribed_sst,
+    standard_sigma_levels,
+    uv_from_vordiv,
+)
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     STEFAN_BOLTZMANN,
@@ -44,18 +58,6 @@ from notus.physics.radiation import (
     byrne_shortwave_optical_depth,
     shortwave_heating,
 )
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
-from notus.physics.surface import (
-    OceanState,
-    PrescribedSST,
-    SlabOceanConfig,
-    SurfaceState,
-    compute_sst,
-)
-from notus.timestepping.coupled import build_coupled_pe_stepper
-from notus.timestepping.spinup import spinup_prescribed_sst
-from notus.transforms import SpectralTransform
-from notus.vertical.sigma import standard_sigma_levels
 
 
 def global_mean(field: jnp.ndarray, grid: GaussianGrid) -> float:
@@ -309,16 +311,15 @@ def run_validation(
 
     t_start2 = time.perf_counter()
     for day in range(2, coupled_days + 1):
-        forcing.sst = surface.ocean.surface_temperature
+        forcing.prescribed_sst = surface.ocean.surface_temperature
         (prev, curr, surface), _ = one_day_coupled_jit((prev, curr, surface), None)
 
         sst = np.asarray(surface.ocean.surface_temperature)
-        eq_idx = np.argmin(np.abs(np.degrees(np.asarray(grid.latitudes))))
+        eq_idx = np.argmin(np.abs(np.asarray(grid.latitudes_deg)))
 
         # Averaging period: accumulate budget
         if day > coupled_spinup:
-            lnps = transform.spectral_to_grid(curr.log_surface_pressure)
-            ps = EARTH.reference_pressure * jnp.exp(lnps)
+            ps = grid_surface_pressure(curr, transform, EARTH)
             budget = diagnose_coupled_budget(
                 curr,
                 transform,
@@ -411,7 +412,7 @@ def run_validation(
     sst_drift = sst_second_half - sst_first_half
 
     sst_final = np.asarray(surface.ocean.surface_temperature)
-    lat_deg = np.degrees(np.asarray(grid.latitudes))
+    lat_deg = np.asarray(grid.latitudes_deg)
     eq_idx = np.argmin(np.abs(lat_deg))
     pole_idx = np.argmin(np.abs(np.abs(lat_deg) - 90.0))
 

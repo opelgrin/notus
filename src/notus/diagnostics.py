@@ -31,6 +31,66 @@ from notus.transforms import SpectralTransform
 from notus.vertical.sigma import SigmaLevels
 
 
+def grid_winds_at_level(
+    state: PrimitiveEquationState,
+    level: int,
+    transform: SpectralTransform,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Reconstruct grid-space winds (u, v) at a single sigma level.
+
+    Converts spectral vorticity/divergence to wind components and
+    divides by cos(lat) to obtain true (u, v).
+
+    Parameters
+    ----------
+    state : PrimitiveEquationState
+        Model state in spectral space.
+    level : int
+        Sigma level index (0 = top, n_levels-1 = surface).
+    transform : SpectralTransform
+        Spectral transform.
+
+    Returns
+    -------
+    tuple[jnp.ndarray, jnp.ndarray]
+        ``(u, v)`` wind components in m/s, each shape ``(n_lat, n_lon)``.
+    """
+    u_cos_spec, v_cos_spec = uv_from_vordiv(
+        state.vorticity[level],
+        state.divergence[level],
+        transform.arrays,
+    )
+    cos_lat = jnp.maximum(transform.grid.cos_lat[:, None], 1.0e-30)
+    u = transform.spectral_to_grid(u_cos_spec) / cos_lat
+    v = transform.spectral_to_grid(v_cos_spec) / cos_lat
+    return u, v
+
+
+def grid_surface_pressure(
+    state: PrimitiveEquationState,
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+) -> jnp.ndarray:
+    """Compute surface pressure on the grid from spectral log(ps).
+
+    Parameters
+    ----------
+    state : PrimitiveEquationState
+        Model state in spectral space.
+    transform : SpectralTransform
+        Spectral transform.
+    planet : PlanetaryConstants
+        Planetary constants (provides reference pressure).
+
+    Returns
+    -------
+    jnp.ndarray
+        Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+    """
+    lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
+    return planet.reference_pressure * jnp.exp(lnps_grid)
+
+
 def spherical_integral(
     field: jnp.ndarray,
     grid: GaussianGrid,
@@ -250,6 +310,11 @@ class ZonalMeanState:
     v_prime_sq: jnp.ndarray
     uv_prime: jnp.ndarray
     vt_prime: jnp.ndarray
+
+    @property
+    def eke(self) -> jnp.ndarray:
+        """Eddy kinetic energy ½(u'² + v'²), shape ``(n_levels, n_lat)``."""
+        return 0.5 * (self.u_prime_sq + self.v_prime_sq)
 
 
 def compute_zonal_mean_state(

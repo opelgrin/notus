@@ -12,7 +12,7 @@ Typical usage
 -------------
     # In-memory (recommended for scripts)
     result = spinup_prescribed_sst(state, forcing, transform, levels, ...)
-    ocean = OceanState(surface_temperature=forcing.sst)
+    ocean = OceanState(surface_temperature=forcing.prescribed_sst)
     init_fn, step_fn = build_coupled_pe_stepper(..., q_flux=result.q_flux)
     prev, curr, ocean = init_fn(result.state, ocean)
 
@@ -198,7 +198,7 @@ def _diagnose_surface_flux(
         )
         lw_down = speedy_lw_down_surface(
             t_grid,
-            forcing.sst,
+            forcing.prescribed_sst,
             q_grid_lw,
             levels.dsigma,
             surface_pressure,
@@ -246,7 +246,7 @@ def _diagnose_surface_flux(
 
     # Net flux (same function as coupled stepper)
     net_flux = compute_net_surface_flux(
-        forcing.sst,
+        forcing.prescribed_sst,
         t_lowest,
         q_lowest,
         wind_speed,

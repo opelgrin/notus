@@ -403,7 +403,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
                 0.0,
             )
-            t_sfc = sst if sst is not None else forcing.sst
+            t_sfc = sst if sst is not None else forcing.prescribed_sst
             lw_down = speedy_lw_down_surface(
                 t_grid,
                 t_sfc,

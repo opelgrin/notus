@@ -192,7 +192,7 @@ class TestRayleighFriction:
         """k_v should be zero for σ < σ_b (= 0.7)."""
         sigma_full = np.asarray(hs_forcing.levels.sigma_full)
         k_v = np.asarray(hs_forcing.k_v)
-        above_bl = sigma_full < hs_forcing.sigma_b
+        above_bl = sigma_full < hs_forcing.config.sigma_b
         assert np.allclose(k_v[above_bl], 0.0, atol=1e-30), (
             f"Non-zero friction above boundary layer: {k_v[above_bl]}"
         )
@@ -201,7 +201,7 @@ class TestRayleighFriction:
         """k_v should be positive for σ > σ_b."""
         sigma_full = np.asarray(hs_forcing.levels.sigma_full)
         k_v = np.asarray(hs_forcing.k_v)
-        in_bl = sigma_full > hs_forcing.sigma_b
+        in_bl = sigma_full > hs_forcing.config.sigma_b
         assert np.all(k_v[in_bl] > 0.0), f"Zero friction in boundary layer: {k_v[in_bl]}"
 
     def test_maximum_at_surface(self, hs_forcing: HeldSuarez) -> None:
@@ -211,7 +211,7 @@ class TestRayleighFriction:
         sigma_full = np.asarray(hs_forcing.levels.sigma_full)
         surface_idx = np.argmax(sigma_full)
         sigma_frac_surface = (sigma_full[surface_idx] - 0.7) / 0.3
-        expected = hs_forcing.k_f * sigma_frac_surface
+        expected = hs_forcing.config.k_f * sigma_frac_surface
         assert k_v[surface_idx] == pytest.approx(expected, rel=1e-10)
 
     def test_friction_tendency_opposes_motion(

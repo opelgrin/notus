@@ -30,12 +30,20 @@ import numpy as np
 
 jax.config.update("jax_enable_x64", True)
 
-from notus.constants import EARTH
-from notus.diagnostics import spherical_integral
-from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state
-from notus.operators import exponential_filter
-from notus.operators.vector import uv_from_vordiv
+from notus import (
+    EARTH,
+    GaussianGrid,
+    SimplePhysics,
+    SimplePhysicsConfig,
+    SpectralTransform,
+    build_pe_stepper,
+    exponential_filter,
+    grid_surface_pressure,
+    moist_aquaplanet_initial_state,
+    spherical_integral,
+    standard_sigma_levels,
+    uv_from_vordiv,
+)
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     STEFAN_BOLTZMANN,
@@ -46,10 +54,6 @@ from notus.physics.radiation import (
     speedy_longwave_heating,
     speedy_shortwave_heating,
 )
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
-from notus.timestepping.imex import build_pe_stepper
-from notus.transforms import SpectralTransform
-from notus.vertical.sigma import standard_sigma_levels
 
 
 def compute_olr(
@@ -429,9 +433,10 @@ def run_validation(
                 return False
 
         if day > spinup_days:
-            lnps_grid = transform.spectral_to_grid(curr.log_surface_pressure)
-            ps_grid = EARTH.reference_pressure * jnp.exp(lnps_grid)
-            budget = diagnose_radiation_budget(curr, transform, forcing, ps_grid, forcing.sst)
+            ps_grid = grid_surface_pressure(curr, transform, EARTH)
+            budget = diagnose_radiation_budget(
+                curr, transform, forcing, ps_grid, forcing.prescribed_sst
+            )
             n_samples += 1
             if not accum:
                 accum = dict(budget.items())
@@ -534,7 +539,7 @@ def _print_report(mean_budget: dict[str, jnp.ndarray], grid: GaussianGrid) -> bo
 
     print("=" * 64)
 
-    lat_deg = np.degrees(np.asarray(grid.latitudes))
+    lat_deg = np.asarray(grid.latitudes_deg)
     print("\n  Zonal-Mean Radiation Budget [W/m²]")
     print("  " + "-" * 72)
     print(
