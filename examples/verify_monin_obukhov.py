@@ -12,10 +12,11 @@ coupled mode. This avoids the violent cold-start transient.
 Usage
 -----
     # Default: automatic spinup + coupled run
-    uv run python examples/verify_mo.py
+    uv run python examples/verify_monin_obukhov.py
 
     # From pre-computed files (faster for repeated runs)
-    uv run python examples/verify_mo.py --restart-file restart.npz --q-flux-file qflux.npz
+    uv run python examples/verify_monin_obukhov.py \
+        --restart-file restart.npz --q-flux-file qflux.npz
 """
 
 from __future__ import annotations

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Frierson et al. (2006) physics suite aquaplanet integration.
+"""Dry Frierson aquaplanet integration.
 
 Runs an aquaplanet with gray longwave radiation, dry convective adjustment,
 bulk surface sensible heat flux, Rayleigh boundary-layer drag, and prescribed
-SST.  No atmospheric shortwave absorption (Frierson convention).  Starts from
-an isothermal rest state at T21 L20.
+SST.  No moisture, no shortwave absorption (Frierson 2006 convention).
+Starts from an isothermal rest state at T21 L20.
 
 After a spinup period, accumulates time-averaged zonal-mean fields and prints
 basic diagnostics.
 
 Usage
 -----
-    uv run python examples/physics_suite_aquaplanet.py
-    uv run python examples/physics_suite_aquaplanet.py --days 300 --spinup 100
-    uv run python examples/physics_suite_aquaplanet.py --truncation 42 --dt 600
+    uv run python examples/dry_aquaplanet.py
+    uv run python examples/dry_aquaplanet.py --days 300 --spinup 100
+    uv run python examples/dry_aquaplanet.py --truncation 42 --dt 600
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def run_aquaplanet(
 
     Returns True if the integration completes without blowup.
     """
-    print(f"Physics suite aquaplanet: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
+    print(f"Dry aquaplanet: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
     print(f"  Spinup: {spinup_days} days, averaging: {n_days - spinup_days} days")
 
     if n_days <= spinup_days:

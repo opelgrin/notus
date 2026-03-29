@@ -251,7 +251,7 @@ Stability-dependent surface fluxes replacing the constant drag coefficient, plus
 - 28 unit tests for boundary layer module (362 total, all passing)
 - 100-day slab ocean aquaplanet stable with MO at dt=900 (warm start + diagnosed Q-flux)
 - MO produces physically correct differences from baseline: weaker surface fluxes (C_H≈0.0007 vs 0.0015), warmer equatorial SST, more moisture, stronger jets
-- `verify_mo.py` is fully self-contained: runs spinup + Q-flux diagnosis + baseline + MO comparison with zero external files
+- `verify_monin_obukhov.py` is fully self-contained: runs spinup + Q-flux diagnosis + baseline + MO comparison with zero external files
 
 **Lessons learned:**
 - Cold-starting a coupled slab ocean integration from an isothermal atmosphere creates violent radiative transients (T spike >500 K within days). The proper procedure is `spinup_prescribed_sst()` followed by coupled mode — standard practice in real GCMs but easy to forget in an idealized model.

@@ -74,10 +74,10 @@ Run the gray-radiation aquaplanet with surface fluxes (Frierson et al. 2006):
 
 ```bash
 # Quick demo (T21, 300 days)
-uv run python examples/physics_suite_aquaplanet.py
+uv run python examples/dry_aquaplanet.py
 
 # Generate diagnostic plots
-uv run python examples/plot_physics_suite.py
+uv run python examples/plot_dry_aquaplanet.py
 ```
 
 ### Moist aquaplanet
@@ -92,7 +92,7 @@ uv run python examples/moist_aquaplanet.py
 uv run python examples/moist_aquaplanet.py --scheme speedy --clouds
 
 # Byrne two-band radiation
-uv run python examples/byrne_aquaplanet.py --scheme speedy --clouds --days 300
+uv run python examples/moist_aquaplanet.py --scheme byrne --days 300
 
 # Generate diagnostic plots (U, T, q, EKE, spinup, surface pressure)
 uv run python examples/plot_moist_aquaplanet.py

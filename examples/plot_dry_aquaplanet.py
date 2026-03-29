@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generate Frierson aquaplanet diagnostic visualizations.
+"""Generate dry Frierson aquaplanet diagnostic visualizations.
 
-Runs a physics suite integration and produces diagnostic plots:
+Runs a dry aquaplanet integration and produces diagnostic plots:
 
 1. Zonal-mean zonal wind U(lat, sigma)
 2. Zonal-mean temperature T(lat, sigma)
@@ -11,8 +11,8 @@ Runs a physics suite integration and produces diagnostic plots:
 
 Usage
 -----
-    uv run python examples/plot_physics_suite.py
-    uv run python examples/plot_physics_suite.py --truncation 42 --days 600 --dt 600
+    uv run python examples/plot_dry_aquaplanet.py
+    uv run python examples/plot_dry_aquaplanet.py --truncation 42 --days 600 --dt 600
 """
 
 from __future__ import annotations
@@ -288,7 +288,7 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=600.0, help="Timestep [s]")
-    parser.add_argument("--output", type=str, default="physics_suite.png", help="Output filename")
+    parser.add_argument("--output", type=str, default="dry_aquaplanet.png", help="Output filename")
     parser.add_argument("--dpi", type=int, default=200, help="Output DPI")
     args = parser.parse_args()
 
