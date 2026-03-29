@@ -137,7 +137,7 @@ See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
 - [x] **Phase 8B — Surface type infrastructure**: land-sea masks, per-gridpoint albedo and roughness, flat continent generator
 - [x] **Phase 8C — Bucket land surface**: Frierson/Manabe soil energy balance, bucket hydrology (P-E-R), evaporation resistance, blended ocean-land fluxes
 - [x] **Phase 9 — Radiation upgrade**: SW energy conservation, SPEEDY 4-band LW + 2-band SW, diagnostic clouds, CO₂ knob (TOA imbalance: +109 → -7 W/m²)
-- [ ] **Phase 10 — Topography**: prescribed orography, spectral smoothing, surface pressure initialization
+- [x] **Phase 10 — Topography**: prescribed orography, spectral smoothing, surface pressure initialization
 
 ## Tests
 
