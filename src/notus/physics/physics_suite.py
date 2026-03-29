@@ -25,7 +25,7 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
-from notus.physics.clouds import diagnose_clouds
+from notus.physics.clouds import CloudDiagnostic, diagnose_clouds
 from notus.physics.convection import (
     betts_miller_convection,
     dry_convective_adjustment,
@@ -41,8 +41,10 @@ from notus.physics.radiation import (
     byrne_shortwave_optical_depth,
     longwave_heating,
     longwave_optical_depth,
+    lw_down_surface,
     shortwave_heating,
     speedy_longwave_heating,
+    speedy_lw_down_surface,
     speedy_shortwave_heating,
 )
 from notus.physics.solar import OrbitalParameters, daily_mean_insolation
@@ -245,6 +247,254 @@ class PhysicsSuite:
         if sst.ndim == 1:
             return sst[:, None]
         return sst
+
+    # ------------------------------------------------------------------
+    # Public surface-flux methods (used by the coupled stepper)
+    # ------------------------------------------------------------------
+
+    def compute_insolation(
+        self,
+        *,
+        day_of_year: jnp.ndarray | None = None,
+    ) -> jnp.ndarray:
+        """Compute TOA insolation [W/m²], shape ``(n_lat,)``.
+
+        Uses daily-mean solar geometry when orbital parameters and
+        ``day_of_year`` are both available; otherwise falls back to the
+        fixed Frierson analytic profile.
+        """
+        sin_lat = self.transform.grid.sin_lat
+        day = day_of_year if day_of_year is not None else self.day_of_year
+        if day is not None and self.config.orbital is not None:
+            return daily_mean_insolation(
+                sin_lat,
+                day,
+                self.planet.solar_constant,
+                self.config.orbital,
+            )
+        delta_s = self.config.delta_s
+        return self.planet.solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+
+    def compute_clouds(
+        self,
+        state: PrimitiveEquationState,
+        surface_pressure: jnp.ndarray,
+    ) -> CloudDiagnostic | None:
+        """Diagnose clouds for SPEEDY radiation.
+
+        Returns ``None`` when clouds are disabled or the radiation
+        scheme is not :class:`SpeedyRadiation`.
+        """
+        rad = self.config.radiation
+        if not isinstance(rad, SpeedyRadiation) or rad.clouds is None:
+            return None
+        if state.humidity is None:
+            return None
+        levels = self.levels
+        planet = self.planet
+        t_grid = jax.vmap(self.transform.spectral_to_grid)(state.temperature)
+        q_grid = jnp.maximum(
+            jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+            0.0,
+        )
+        pressure = levels.sigma_full[:, None, None] * surface_pressure[None, :, :]
+        q_sat = saturation_specific_humidity(t_grid, pressure, planet.epsilon_moisture)
+        rh = q_grid / jnp.maximum(q_sat, 1e-10)
+        geopotential = planet.gravity * levels.sigma_full[:, None, None] * jnp.ones_like(t_grid)
+        return diagnose_clouds(
+            rh,
+            q_grid,
+            t_grid,
+            geopotential,
+            precipitation_rate=jnp.zeros(surface_pressure.shape),
+            convective_mask=jnp.zeros_like(t_grid, dtype=bool),
+            gravity=planet.gravity,
+            specific_heat_cp=planet.specific_heat_cp,
+            config=rad.clouds,
+        )
+
+    def compute_sw_down_surface(
+        self,
+        state: PrimitiveEquationState,
+        surface_pressure: jnp.ndarray,
+        *,
+        effective_albedo: float | jnp.ndarray,
+        day_of_year: jnp.ndarray | None = None,
+        cloud: CloudDiagnostic | None = None,
+    ) -> jnp.ndarray:
+        """Downward SW flux at the surface [W/m²].
+
+        Dispatches across Frierson / Byrne / SPEEDY radiation schemes.
+
+        Parameters
+        ----------
+        state : PrimitiveEquationState
+            Current atmospheric state (spectral).
+        surface_pressure : jnp.ndarray
+            Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+        effective_albedo : float or jnp.ndarray
+            Surface albedo (scalar or spatially varying).
+        day_of_year : jnp.ndarray or None
+            Day of year for seasonal insolation.
+        cloud : CloudDiagnostic or None
+            Pre-computed cloud diagnostic (SPEEDY only).
+
+        Returns
+        -------
+        jnp.ndarray
+            Downward SW flux at the surface, shape ``(n_lat, n_lon)``.
+        """
+        rad = self.config.radiation
+        levels = self.levels
+        planet = self.planet
+
+        if isinstance(rad, SpeedyRadiation) and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            insolation = self.compute_insolation(day_of_year=day_of_year)
+            _, sw_down_sfc = speedy_shortwave_heating(
+                levels.dsigma,
+                levels.sigma_full,
+                q_grid,
+                surface_pressure,
+                planet.reference_pressure,
+                insolation,
+                planet.gravity,
+                planet.specific_heat_cp,
+                surface_albedo=effective_albedo,
+                absdry=rad.absdry,
+                absaer=rad.absaer,
+                abswv1=rad.sw_abswv1,
+                abswv2=rad.sw_abswv2,
+                visible_fraction=rad.visible_fraction,
+                cloud=cloud,
+            )
+            return sw_down_sfc
+
+        if isinstance(rad, (FriersonRadiation, ByrneRadiation)) and rad.sw_tau_0 > 0.0:
+            insolation = self.compute_insolation(day_of_year=day_of_year)
+            tau_sw: jnp.ndarray | None = None
+            if isinstance(rad, ByrneRadiation) and state.humidity is not None:
+                q_grid = jnp.maximum(
+                    jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+                    0.0,
+                )
+                tau_sw = byrne_shortwave_optical_depth(
+                    levels.dsigma,
+                    q_grid,
+                    surface_pressure,
+                    planet.reference_pressure,
+                    sw_tau_0=rad.sw_tau_0,
+                    byrne_sw_a=rad.sw_a,
+                    byrne_sw_b=rad.sw_b,
+                )
+            _, sw_down_sfc = shortwave_heating(
+                levels.sigma_half,
+                levels.dsigma,
+                self.transform.grid.sin_lat,
+                surface_pressure,
+                planet.solar_constant,
+                planet.gravity,
+                planet.specific_heat_cp,
+                sw_tau_0=rad.sw_tau_0,
+                sw_exponent=rad.sw_exponent,
+                delta_s=self.config.delta_s,
+                insolation=insolation,
+                tau_sw_half=tau_sw,
+                surface_albedo=effective_albedo,
+            )
+            return sw_down_sfc
+
+        n_lat, n_lon = surface_pressure.shape
+        return jnp.zeros((n_lat, n_lon))
+
+    def compute_lw_down_surface(
+        self,
+        state: PrimitiveEquationState,
+        surface_pressure: jnp.ndarray,
+        *,
+        sst: jnp.ndarray | None = None,
+        cloud: CloudDiagnostic | None = None,
+    ) -> jnp.ndarray:
+        """Downward LW flux at the surface [W/m²].
+
+        Dispatches across Frierson / Byrne / SPEEDY radiation schemes.
+
+        Parameters
+        ----------
+        state : PrimitiveEquationState
+            Current atmospheric state (spectral).
+        surface_pressure : jnp.ndarray
+            Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+        sst : jnp.ndarray or None
+            Surface temperature [K].  Required for SPEEDY LW.
+            Defaults to ``self.prescribed_sst``.
+        cloud : CloudDiagnostic or None
+            Pre-computed cloud diagnostic (SPEEDY only).
+
+        Returns
+        -------
+        jnp.ndarray
+            Downward LW flux at the surface, shape ``(n_lat, n_lon)``.
+        """
+        rad = self.config.radiation
+        levels = self.levels
+        planet = self.planet
+        t_grid = jax.vmap(self.transform.spectral_to_grid)(state.temperature)
+
+        if isinstance(rad, SpeedyRadiation) and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            t_sfc = sst if sst is not None else self.prescribed_sst
+            return speedy_lw_down_surface(
+                t_grid,
+                t_sfc,
+                q_grid,
+                levels.dsigma,
+                surface_pressure,
+                planet.reference_pressure,
+                epslw=rad.epslw,
+                surface_emissivity=rad.surface_emissivity,
+                ablwin=rad.ablwin,
+                ablco2=rad.ablco2,
+                ablwv1=rad.ablwv1,
+                ablwv2=rad.ablwv2,
+                cloud=cloud,
+            )
+
+        if isinstance(rad, ByrneRadiation) and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            tau_half = byrne_longwave_optical_depth(
+                levels.dsigma,
+                q_grid,
+                surface_pressure,
+                planet.reference_pressure,
+                byrne_a=rad.a,
+                byrne_b=rad.b,
+            )
+        else:
+            fri = rad if isinstance(rad, FriersonRadiation) else FriersonRadiation()
+            tau_half = longwave_optical_depth(
+                levels.sigma_half,
+                self.transform.grid.sin_lat,
+                tau_equator=fri.tau_equator,
+                tau_pole=fri.tau_pole,
+                linear_fraction=fri.linear_fraction,
+                alpha=fri.alpha,
+            )
+
+        return lw_down_surface(t_grid, tau_half)
+
+    # ------------------------------------------------------------------
+    # Internal radiation helpers
+    # ------------------------------------------------------------------
 
     def _compute_radiation_heating(
         self,

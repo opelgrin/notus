@@ -33,21 +33,7 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
-from notus.physics.clouds import diagnose_clouds
-from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.physics_suite import PhysicsSuite
-from notus.physics.radiation import (
-    ByrneRadiation,
-    FriersonRadiation,
-    SpeedyRadiation,
-    byrne_longwave_optical_depth,
-    byrne_shortwave_optical_depth,
-    longwave_optical_depth,
-    lw_down_surface,
-    shortwave_heating,
-    speedy_lw_down_surface,
-    speedy_shortwave_heating,
-)
 from notus.physics.surface import compute_net_surface_flux
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
@@ -94,15 +80,10 @@ def _diagnose_surface_flux(
     slab ocean stepper — for self-consistent Q-flux diagnosis.
     """
     planet = forcing.planet
-    levels = forcing.levels
     cfg = forcing.config
-    rad = cfg.radiation
-    lowest = levels.n_levels - 1
-    sin_lat = transform.grid.sin_lat
+    lowest = forcing.levels.n_levels - 1
 
-    # Full temperature field (needed for two-stream LW)
-    t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
-    t_lowest = t_grid[lowest]
+    effective_albedo = surface_albedo if surface_albedo is not None else planet.surface_albedo
 
     # Surface winds
     u_cos_spec, v_cos_spec = uv_from_vordiv(
@@ -115,132 +96,18 @@ def _diagnose_surface_flux(
     v_grid = transform.spectral_to_grid(v_cos_spec) / cos_lat_safe
     wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
 
-    # SW surface flux: consistent with atmospheric absorption
-    effective_albedo = surface_albedo if surface_albedo is not None else planet.surface_albedo
-    n_lat, n_lon = surface_pressure.shape
-
-    if isinstance(rad, SpeedyRadiation) and state.humidity is not None:
-        q_grid_sp = jnp.maximum(
-            jax.vmap(transform.spectral_to_grid)(state.humidity),
-            0.0,
-        )
-        # Cloud diagnosis for SPEEDY
-        sp_cloud = None
-        if rad.clouds is not None:
-            pressure = levels.sigma_full[:, None, None] * surface_pressure[None, :, :]
-            q_sat_sp = saturation_specific_humidity(t_grid, pressure, planet.epsilon_moisture)
-            rh_sp = q_grid_sp / jnp.maximum(q_sat_sp, 1e-10)
-            geop = planet.gravity * levels.sigma_full[:, None, None] * jnp.ones_like(t_grid)
-            sp_cloud = diagnose_clouds(
-                rh_sp,
-                q_grid_sp,
-                t_grid,
-                geop,
-                precipitation_rate=jnp.zeros((n_lat, n_lon)),
-                convective_mask=jnp.zeros_like(t_grid, dtype=bool),
-                gravity=planet.gravity,
-                specific_heat_cp=planet.specific_heat_cp,
-                config=rad.clouds,
-            )
-        insol = planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
-        _, sw_down_sfc = speedy_shortwave_heating(
-            levels.dsigma,
-            levels.sigma_full,
-            q_grid_sp,
-            surface_pressure,
-            planet.reference_pressure,
-            insol,
-            planet.gravity,
-            planet.specific_heat_cp,
-            surface_albedo=effective_albedo,
-            absdry=rad.absdry,
-            absaer=rad.absaer,
-            abswv1=rad.sw_abswv1,
-            abswv2=rad.sw_abswv2,
-            visible_fraction=rad.visible_fraction,
-            cloud=sp_cloud,
-        )
-    elif isinstance(rad, (FriersonRadiation, ByrneRadiation)) and rad.sw_tau_0 > 0.0:
-        tau_sw: jnp.ndarray | None = None
-        if isinstance(rad, ByrneRadiation) and state.humidity is not None:
-            q_grid_sw = jnp.maximum(
-                jax.vmap(transform.spectral_to_grid)(state.humidity),
-                0.0,
-            )
-            tau_sw = byrne_shortwave_optical_depth(
-                levels.dsigma,
-                q_grid_sw,
-                surface_pressure,
-                planet.reference_pressure,
-                sw_tau_0=rad.sw_tau_0,
-                byrne_sw_a=rad.sw_a,
-                byrne_sw_b=rad.sw_b,
-            )
-        _, sw_down_sfc = shortwave_heating(
-            levels.sigma_half,
-            levels.dsigma,
-            sin_lat,
-            surface_pressure,
-            planet.solar_constant,
-            planet.gravity,
-            planet.specific_heat_cp,
-            sw_tau_0=rad.sw_tau_0,
-            sw_exponent=rad.sw_exponent,
-            delta_s=cfg.delta_s,
-            tau_sw_half=tau_sw,
-            surface_albedo=effective_albedo,
-        )
-    else:
-        sw_down_sfc = jnp.zeros((n_lat, n_lon))
-
-    # Downward LW
-    if isinstance(rad, SpeedyRadiation) and state.humidity is not None:
-        q_grid_lw = jnp.maximum(
-            jax.vmap(transform.spectral_to_grid)(state.humidity),
-            0.0,
-        )
-        lw_down = speedy_lw_down_surface(
-            t_grid,
-            forcing.prescribed_sst,
-            q_grid_lw,
-            levels.dsigma,
-            surface_pressure,
-            planet.reference_pressure,
-            epslw=rad.epslw,
-            surface_emissivity=rad.surface_emissivity,
-            ablwin=rad.ablwin,
-            ablco2=rad.ablco2,
-            ablwv1=rad.ablwv1,
-            ablwv2=rad.ablwv2,
-            cloud=sp_cloud,
-        )
-    elif isinstance(rad, ByrneRadiation) and state.humidity is not None:
-        q_grid = jnp.maximum(
-            jax.vmap(transform.spectral_to_grid)(state.humidity),
-            0.0,
-        )
-        tau_half = byrne_longwave_optical_depth(
-            levels.dsigma,
-            q_grid,
-            surface_pressure,
-            planet.reference_pressure,
-            byrne_a=rad.a,
-            byrne_b=rad.b,
-        )
-        lw_down = lw_down_surface(t_grid, tau_half)
-    else:
-        fri = rad if isinstance(rad, FriersonRadiation) else FriersonRadiation()
-        tau_half = longwave_optical_depth(
-            levels.sigma_half,
-            sin_lat,
-            tau_equator=fri.tau_equator,
-            tau_pole=fri.tau_pole,
-            linear_fraction=fri.linear_fraction,
-            alpha=fri.alpha,
-        )
-        lw_down = lw_down_surface(t_grid, tau_half)
+    # Radiation surface fluxes via PhysicsSuite methods
+    cloud = forcing.compute_clouds(state, surface_pressure)
+    sw_down_sfc = forcing.compute_sw_down_surface(
+        state,
+        surface_pressure,
+        effective_albedo=effective_albedo,
+        cloud=cloud,
+    )
+    lw_down = forcing.compute_lw_down_surface(state, surface_pressure, cloud=cloud)
 
     # Humidity at lowest level
+    t_lowest = transform.spectral_to_grid(state.temperature[lowest])
     q_lowest = jnp.zeros_like(t_lowest)
     if state.humidity is not None:
         q_lowest = jnp.maximum(
