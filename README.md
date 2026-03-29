@@ -27,11 +27,15 @@ The model is planet-agnostic — it can simulate any rotating planet with an ide
 
 ## Installation
 
+Requires Python 3.13 or newer.
+
 Install from PyPI:
 
 ```bash
 pip install notus-gcm
 ```
+
+The PyPI package becomes available after the first tagged release is published.
 
 For local development:
 
