@@ -8,6 +8,7 @@ import xarray as xr
 
 from notus.viz.animate import animate_field
 
+
 pytestmark = pytest.mark.filterwarnings(
     "ignore:Animation was deleted without rendering anything:UserWarning",
 )

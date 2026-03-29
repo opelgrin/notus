@@ -127,6 +127,10 @@ allowed-confusables = [
     "RUF069",  # Float equality for unit scale checks
 ]
 
+"src/notus/viz/__init__.py" = [
+    "RUF067",  # Lazy export resolution for optional visualization deps
+]
+
 "examples/**" = [
     "T201",    # print() is the primary output mechanism
     "E402",    # Imports after jax.config.update

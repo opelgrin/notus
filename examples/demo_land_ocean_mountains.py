@@ -59,17 +59,14 @@ from notus import (
     init_land_state,
     moist_aquaplanet_initial_state,
     orographic_log_surface_pressure,
-    plot_map,
-    plot_spectrum,
-    plot_zonal_mean,
     run_simulation,
     smooth_orography,
     spinup_prescribed_sst,
     standard_sigma_levels,
     state_to_dataset,
-    zonal_mean_to_dataset,
 )
 from notus.physics.forcing import PhysicsDiagnostics
+from notus.viz import plot_map, plot_spectrum, plot_zonal_mean, zonal_mean_to_dataset
 
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -359,7 +356,7 @@ def main() -> None:
 
     # --- Animation: precipitation evolution ---
     if args.animate and len(precip_snapshots) > 1:
-        from notus import animate_field
+        from notus.viz import animate_field
 
         anim_file = args.output.rsplit(".", 1)[0] + "_precip_anim.gif"
         print(f"Generating precipitation animation ({len(precip_snapshots)} frames)...")

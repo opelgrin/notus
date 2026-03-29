@@ -42,13 +42,11 @@ from notus import (
     compute_zonal_mean_state,
     exponential_filter,
     moist_aquaplanet_initial_state,
-    plot_map,
-    plot_zonal_mean,
     run_simulation,
     standard_sigma_levels,
     state_to_dataset,
-    zonal_mean_to_dataset,
 )
+from notus.viz import plot_map, plot_zonal_mean, zonal_mean_to_dataset
 
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")

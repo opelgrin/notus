@@ -44,6 +44,8 @@ Core components
 - I/O: :func:`save_restart`, :func:`load_restart`
 """
 
+from __future__ import annotations
+
 from notus.constants import EARTH, PlanetaryConstants
 from notus.diagnostics import (
     ConservationDiagnostics,
@@ -131,14 +133,6 @@ from notus.vertical import (
     vertical_advection,
 )
 from notus.vertical.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
-from notus.viz import (
-    animate_field,
-    plot_hovmoller,
-    plot_map,
-    plot_spectrum,
-    plot_zonal_mean,
-    zonal_mean_to_dataset,
-)
 from notus.xarray import (
     DatasetContents,
     dataset_to_state,
@@ -185,7 +179,6 @@ __all__ = [
     "SurfaceProperties",
     "SurfaceState",
     "ZonalMeanState",
-    "animate_field",
     "build_coupled_pe_stepper",
     "build_pe_stepper",
     "compute_conservation_diagnostics",
@@ -215,10 +208,6 @@ __all__ = [
     "omega_over_pressure",
     "orographic_log_surface_pressure",
     "physics_suite_initial_state",
-    "plot_hovmoller",
-    "plot_map",
-    "plot_spectrum",
-    "plot_zonal_mean",
     "run_simulation",
     "save_restart",
     "sigma_dot",
@@ -237,6 +226,5 @@ __all__ = [
     "uv_from_vordiv",
     "vertical_advection",
     "zonal_derivative",
-    "zonal_mean_to_dataset",
     "zonal_ridge",
 ]
