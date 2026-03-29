@@ -46,6 +46,8 @@ def run_seasonal_aquaplanet(
     truncation: int = 21,
     n_levels: int = 20,
     dt: float = 900.0,
+    scheme: str = "frierson",
+    clouds: bool = False,
 ) -> bool:
     """Run a seasonal aquaplanet with prescribed SST.
 
@@ -76,11 +78,20 @@ def run_seasonal_aquaplanet(
         seed=42,
     )
 
-    # Frierson gray LW + seasonal insolation (no atmospheric SW absorption)
-    config = SimplePhysicsConfig(
-        radiation_scheme="frierson",
-        orbital=EARTH_ORBIT,
-    )
+    if scheme == "speedy":
+        config = SimplePhysicsConfig(
+            radiation_scheme="speedy",
+            orbital=EARTH_ORBIT,
+            enable_clouds=clouds,
+        )
+    elif scheme == "byrne":
+        config = SimplePhysicsConfig(
+            radiation_scheme="byrne",
+            sw_tau_0=0.22,
+            orbital=EARTH_ORBIT,
+        )
+    else:
+        config = SimplePhysicsConfig(radiation_scheme="frierson", orbital=EARTH_ORBIT)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
 
@@ -209,6 +220,13 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Number of vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
+    parser.add_argument(
+        "--scheme",
+        type=str,
+        default="frierson",
+        choices=["frierson", "byrne", "speedy"],
+    )
+    parser.add_argument("--clouds", action="store_true", help="Enable diagnostic clouds (speedy)")
     args = parser.parse_args()
 
     passed = run_seasonal_aquaplanet(
@@ -217,6 +235,8 @@ def main() -> None:
         truncation=args.truncation,
         n_levels=args.levels,
         dt=args.dt,
+        scheme=args.scheme,
+        clouds=args.clouds,
     )
     sys.exit(0 if passed else 1)
 

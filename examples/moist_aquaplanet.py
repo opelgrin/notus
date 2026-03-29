@@ -35,7 +35,7 @@ from notus.grid import GaussianGrid
 from notus.initial_conditions import moist_aquaplanet_initial_state
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
-from notus.physics.simple_physics import SimplePhysics
+from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.timestepping.imex import build_pe_stepper
 from notus.transforms import SpectralTransform
 from notus.vertical.sigma import standard_sigma_levels
@@ -53,6 +53,8 @@ def run_moist_aquaplanet(
     n_levels: int = 20,
     dt: float = 900.0,
     output_path: str | None = None,
+    scheme: str = "frierson",
+    clouds: bool = False,
 ) -> bool:
     """Run a moist Frierson aquaplanet integration.
 
@@ -78,7 +80,13 @@ def run_moist_aquaplanet(
         seed=42,
     )
 
-    forcing = SimplePhysics(transform, EARTH, levels)
+    if scheme == "speedy":
+        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
+    elif scheme == "byrne":
+        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
+    else:
+        config = SimplePhysicsConfig()  # default Frierson
+    forcing = SimplePhysics(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,
@@ -281,6 +289,13 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Number of vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
+    parser.add_argument(
+        "--scheme",
+        type=str,
+        default="frierson",
+        choices=["frierson", "byrne", "speedy"],
+    )
+    parser.add_argument("--clouds", action="store_true", help="Enable diagnostic clouds (speedy)")
     parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     args = parser.parse_args()
 
@@ -291,6 +306,8 @@ def main() -> None:
         n_levels=args.levels,
         dt=args.dt,
         output_path=args.output,
+        scheme=args.scheme,
+        clouds=args.clouds,
     )
 
     sys.exit(0 if passed else 1)
