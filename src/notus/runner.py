@@ -53,7 +53,6 @@ import dataclasses
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -65,8 +64,18 @@ from notus.state import PrimitiveEquationState
 
 logger = logging.getLogger(__name__)
 
+# Type aliases for the two modes
 _AtmCarry = tuple[PrimitiveEquationState, PrimitiveEquationState]
 _CoupledCarry = tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState]
+
+_AtmStepFn = Callable[
+    [PrimitiveEquationState, PrimitiveEquationState],
+    tuple[PrimitiveEquationState, PrimitiveEquationState],
+]
+_CoupledStepFn = Callable[
+    [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+    tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,11 +103,11 @@ class SimulationResult:
     surface: SurfaceState | None
     n_days: int
     wall_time: float
-    diagnostics: list[Any]
+    diagnostics: list[object]
 
 
 def _build_atm_one_day(
-    step_fn: Callable[..., Any],
+    step_fn: _AtmStepFn,
     forcing: SimplePhysics | None,
     seasonal: bool,
     steps_per_day: int,
@@ -122,7 +131,7 @@ def _build_atm_one_day(
 
 
 def _build_coupled_one_day(
-    step_fn: Callable[..., Any],
+    step_fn: _CoupledStepFn,
     forcing: SimplePhysics | None,
     seasonal: bool,
     steps_per_day: int,
@@ -148,8 +157,8 @@ def _build_coupled_one_day(
 
 
 def run_simulation(
-    init_fn: Callable[..., Any],
-    step_fn: Callable[..., Any],
+    init_fn: Callable[..., object],
+    step_fn: _AtmStepFn | _CoupledStepFn,
     initial_state: PrimitiveEquationState,
     dt: float,
     n_days: int,
@@ -158,7 +167,7 @@ def run_simulation(
     forcing: SimplePhysics | None = None,
     days_per_year: float = 0.0,
     start_day: int = 0,
-    on_day: Callable[..., Any] | None = None,
+    on_day: Callable[..., object] | None = None,
     verbose: bool = True,
     log_interval: int = 50,
 ) -> SimulationResult:
@@ -232,8 +241,8 @@ def run_simulation(
 
     if coupled:
         return _run_coupled(
-            init_fn,
-            step_fn,
+            init_fn,  # type: ignore[arg-type]
+            step_fn,  # type: ignore[arg-type]
             initial_state,
             surface,  # type: ignore[arg-type]
             forcing,
@@ -247,8 +256,8 @@ def run_simulation(
             log_interval,
         )
     return _run_atm_only(
-        init_fn,
-        step_fn,
+        init_fn,  # type: ignore[arg-type]
+        step_fn,  # type: ignore[arg-type]
         initial_state,
         forcing,
         seasonal,
@@ -263,8 +272,8 @@ def run_simulation(
 
 
 def _run_atm_only(
-    init_fn: Callable[..., Any],
-    step_fn: Callable[..., Any],
+    init_fn: Callable[[PrimitiveEquationState], _AtmCarry],
+    step_fn: _AtmStepFn,
     initial_state: PrimitiveEquationState,
     forcing: SimplePhysics | None,
     seasonal: bool,
@@ -272,13 +281,13 @@ def _run_atm_only(
     steps_per_day: int,
     start_day: int,
     n_days: int,
-    on_day: Callable[..., Any] | None,
+    on_day: Callable[..., object] | None,
     verbose: bool,
     log_interval: int,
 ) -> SimulationResult:
     """Run atmosphere-only integration."""
     one_day_jit = _build_atm_one_day(step_fn, forcing, seasonal, steps_per_day)
-    diagnostics: list[Any] = []
+    diagnostics: list[object] = []
 
     t0 = time.perf_counter()
     prev, curr = init_fn(initial_state)
@@ -308,8 +317,8 @@ def _run_atm_only(
 
 
 def _run_coupled(
-    init_fn: Callable[..., Any],
-    step_fn: Callable[..., Any],
+    init_fn: Callable[[PrimitiveEquationState, SurfaceState], _CoupledCarry],
+    step_fn: _CoupledStepFn,
     initial_state: PrimitiveEquationState,
     surface: SurfaceState,
     forcing: SimplePhysics | None,
@@ -318,13 +327,13 @@ def _run_coupled(
     steps_per_day: int,
     start_day: int,
     n_days: int,
-    on_day: Callable[..., Any] | None,
+    on_day: Callable[..., object] | None,
     verbose: bool,
     log_interval: int,
 ) -> SimulationResult:
     """Run coupled atmosphere-surface integration."""
     one_day_jit = _build_coupled_one_day(step_fn, forcing, seasonal, steps_per_day)
-    diagnostics: list[Any] = []
+    diagnostics: list[object] = []
 
     t0 = time.perf_counter()
     prev, curr, surface = init_fn(initial_state, surface)
@@ -354,12 +363,12 @@ def _run_coupled(
 
 
 def _invoke_callback(
-    on_day: Callable[..., Any] | None,
+    on_day: Callable[..., object] | None,
     day: int,
     state: PrimitiveEquationState,
     surface: SurfaceState | None,
     coupled: bool,
-    diagnostics: list[Any],
+    diagnostics: list[object],
 ) -> None:
     """Invoke user callback and collect non-None results."""
     if on_day is None:

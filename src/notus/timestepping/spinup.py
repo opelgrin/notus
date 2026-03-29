@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -349,10 +348,16 @@ def spinup_prescribed_sst(
     n_days = spinup_days + averaging_days
     n_lat = transform.grid.n_lat
 
-    def one_day(carry: tuple[Any, ...], _: None) -> tuple[tuple[Any, ...], None]:
+    def one_day(
+        carry: tuple[PrimitiveEquationState, PrimitiveEquationState],
+        _: None,
+    ) -> tuple[tuple[PrimitiveEquationState, PrimitiveEquationState], None]:
         prev, curr = carry
 
-        def step(carry: tuple[Any, ...], _: None) -> tuple[tuple[Any, ...], None]:
+        def step(
+            carry: tuple[PrimitiveEquationState, PrimitiveEquationState],
+            _: None,
+        ) -> tuple[tuple[PrimitiveEquationState, PrimitiveEquationState], None]:
             p, c = carry
             p, c = step_fn(p, c)
             return (p, c), None

@@ -7,7 +7,6 @@ slab ocean thermodynamics, and bucket land surface model.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -362,14 +361,14 @@ class SurfaceState:
     ocean: OceanState
     land: LandState | None = None
 
-    def replace(self, **kwargs: Any) -> SurfaceState:
+    def replace(self, **kwargs: OceanState | LandState | None) -> SurfaceState:
         """Return a new state with specified fields replaced."""
-        return dataclasses.replace(self, **kwargs)
+        return dataclasses.replace(self, **kwargs)  # type: ignore[arg-type]
 
 
 def _surface_state_flatten(
     state: SurfaceState,
-) -> tuple[tuple[Any, ...], None]:
+) -> tuple[tuple[OceanState, LandState | None], None]:
     return (state.ocean, state.land), None
 
 
