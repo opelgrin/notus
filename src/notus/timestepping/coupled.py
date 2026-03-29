@@ -32,7 +32,6 @@ from notus.physics.simple_physics import SimplePhysics
 from notus.physics.solar import daily_mean_insolation
 from notus.physics.surface import (
     BucketLandConfig,
-    LandState,
     SlabOceanConfig,
     SurfaceState,
     beta_function,
@@ -353,8 +352,8 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         # Surface temperature for MO: blended if land is present
         sst = surface.ocean.surface_temperature
         sst_bc = sst[:, None] if sst.ndim == 1 else sst
-        if has_land and surface.land is not None:
-            t_sfc_2d = (1.0 - land_frac) * sst_bc + land_frac * surface.land.soil_temperature  # type: ignore[operator]
+        if has_land and surface.land is not None and land_frac is not None:
+            t_sfc_2d = (1.0 - land_frac) * sst_bc + land_frac * surface.land.soil_temperature
         else:
             t_sfc_2d = sst_bc * jnp.ones_like(t_lowest_grid)
 
@@ -553,9 +552,12 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         """Post-step with land + ocean coupling."""
         # land_config, land_frac, and surface.land are guaranteed non-None
         # by the has_land check at build time.
-        lc: BucketLandConfig = land_config  # type: ignore[assignment]
-        lf: jnp.ndarray = land_frac  # type: ignore[assignment]
-        land: LandState = surface.land  # type: ignore[assignment]
+        if land_config is None or land_frac is None or surface.land is None:
+            msg = "land_config, land_frac, and surface.land must be non-None"
+            raise RuntimeError(msg)
+        lc = land_config
+        lf = land_frac
+        land = surface.land
 
         # Rayleigh friction
         damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])

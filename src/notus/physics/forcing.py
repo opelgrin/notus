@@ -64,12 +64,12 @@ class Forcing(Protocol):
 
 
 @runtime_checkable
-class ImplicitForcing(Protocol):
-    """Protocol for forcings that provide an implicit boundary-layer correction.
+class ImplicitForcing(Forcing, Protocol):
+    """Protocol for forcings that also provide implicit boundary-layer correction.
 
-    Forcing schemes that treat stiff surface-layer processes (Rayleigh drag,
-    surface heat/moisture fluxes) with implicit exponential decay should
-    implement this protocol.  The ``apply_implicit`` method is called by
+    Extends :class:`Forcing` with an ``apply_implicit`` method for treating
+    stiff surface-layer processes (Rayleigh drag, surface heat/moisture fluxes)
+    with implicit exponential decay.  Called by
     :func:`~notus.timestepping.imex.build_pe_stepper` after the IMEX step.
     """
 
@@ -96,12 +96,12 @@ class ImplicitForcing(Protocol):
 
 
 @runtime_checkable
-class MoistForcing(Protocol):
-    """Protocol for forcings that provide a reference humidity profile.
+class MoistForcing(Forcing, Protocol):
+    """Protocol for forcings that also provide a reference humidity profile.
 
-    Moist physics schemes should implement this so that the semi-implicit
-    solver can compute the virtual reference temperature ``T_v_ref`` needed
-    for the implicit moisture coupling.
+    Extends :class:`Forcing`.  Moist physics schemes should implement this
+    so that the semi-implicit solver can compute the virtual reference
+    temperature ``T_v_ref`` needed for the implicit moisture coupling.
     """
 
     def compute_reference_humidity(

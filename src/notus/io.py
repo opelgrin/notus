@@ -57,6 +57,7 @@ def save_restart(
         data["humidity"] = np.asarray(state.humidity)
     if ocean_sst is not None:
         data["ocean_sst"] = np.asarray(ocean_sst)
+    # numpy stubs type **kwargs as ndarray but reject dict[str, ndarray] expansion
     np.savez(path, **data)  # type: ignore[arg-type]
 
 

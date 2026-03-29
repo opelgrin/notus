@@ -53,6 +53,7 @@ import dataclasses
 import logging
 import time
 from collections.abc import Callable
+from typing import overload
 
 import jax
 import jax.numpy as jnp
@@ -68,14 +69,19 @@ logger = logging.getLogger(__name__)
 _AtmCarry = tuple[PrimitiveEquationState, PrimitiveEquationState]
 _CoupledCarry = tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState]
 
+_AtmInitFn = Callable[[PrimitiveEquationState], _AtmCarry]
 _AtmStepFn = Callable[
     [PrimitiveEquationState, PrimitiveEquationState],
     tuple[PrimitiveEquationState, PrimitiveEquationState],
 ]
+_AtmCallback = Callable[[int, PrimitiveEquationState], object]
+
+_CoupledInitFn = Callable[[PrimitiveEquationState, SurfaceState], _CoupledCarry]
 _CoupledStepFn = Callable[
     [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
     tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
 ]
+_CoupledCallback = Callable[[int, PrimitiveEquationState, SurfaceState], object]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -156,8 +162,46 @@ def _build_coupled_one_day(
     return jax.jit(one_day)
 
 
+# --- Public API: two overloads for atmosphere-only vs coupled ---
+
+
+@overload
 def run_simulation(
-    init_fn: Callable[..., object],
+    init_fn: _AtmInitFn,
+    step_fn: _AtmStepFn,
+    initial_state: PrimitiveEquationState,
+    dt: float,
+    n_days: int,
+    *,
+    forcing: SimplePhysics | None = ...,
+    days_per_year: float = ...,
+    start_day: int = ...,
+    on_day: _AtmCallback | None = ...,
+    verbose: bool = ...,
+    log_interval: int = ...,
+) -> SimulationResult: ...
+
+
+@overload
+def run_simulation(
+    init_fn: _CoupledInitFn,
+    step_fn: _CoupledStepFn,
+    initial_state: PrimitiveEquationState,
+    dt: float,
+    n_days: int,
+    *,
+    surface: SurfaceState,
+    forcing: SimplePhysics | None = ...,
+    days_per_year: float = ...,
+    start_day: int = ...,
+    on_day: _CoupledCallback | None = ...,
+    verbose: bool = ...,
+    log_interval: int = ...,
+) -> SimulationResult: ...
+
+
+def run_simulation(
+    init_fn: _AtmInitFn | _CoupledInitFn,
     step_fn: _AtmStepFn | _CoupledStepFn,
     initial_state: PrimitiveEquationState,
     dt: float,
@@ -167,7 +211,7 @@ def run_simulation(
     forcing: SimplePhysics | None = None,
     days_per_year: float = 0.0,
     start_day: int = 0,
-    on_day: Callable[..., object] | None = None,
+    on_day: _AtmCallback | _CoupledCallback | None = None,
     verbose: bool = True,
     log_interval: int = 50,
 ) -> SimulationResult:
@@ -239,19 +283,22 @@ def run_simulation(
             steps_per_day,
         )
 
-    if coupled:
+    # The overload signatures guarantee type safety at call sites.
+    # mypy cannot narrow union Callable types through the coupled branch,
+    # so we suppress arg-type for the dispatch to typed internal functions.
+    if coupled and surface is not None:
         return _run_coupled(
             init_fn,  # type: ignore[arg-type]
             step_fn,  # type: ignore[arg-type]
             initial_state,
-            surface,  # type: ignore[arg-type]
+            surface,
             forcing,
             seasonal,
             days_per_year,
             steps_per_day,
             start_day,
             n_days,
-            on_day,
+            on_day,  # type: ignore[arg-type]
             verbose,
             log_interval,
         )
@@ -265,14 +312,14 @@ def run_simulation(
         steps_per_day,
         start_day,
         n_days,
-        on_day,
+        on_day,  # type: ignore[arg-type]
         verbose,
         log_interval,
     )
 
 
 def _run_atm_only(
-    init_fn: Callable[[PrimitiveEquationState], _AtmCarry],
+    init_fn: _AtmInitFn,
     step_fn: _AtmStepFn,
     initial_state: PrimitiveEquationState,
     forcing: SimplePhysics | None,
@@ -281,7 +328,7 @@ def _run_atm_only(
     steps_per_day: int,
     start_day: int,
     n_days: int,
-    on_day: Callable[..., object] | None,
+    on_day: _AtmCallback | None,
     verbose: bool,
     log_interval: int,
 ) -> SimulationResult:
@@ -296,14 +343,14 @@ def _run_atm_only(
     if verbose:
         logger.info("Day 1 (incl. JIT compile): %.1fs", time.perf_counter() - t0)
 
-    _invoke_callback(on_day, start_day + 1, curr, None, False, diagnostics)
+    _invoke_atm_callback(on_day, start_day + 1, curr, diagnostics)
 
     t_start = time.perf_counter()
     for day_idx in range(2, n_days + 1):
         day = start_day + day_idx
         day_val = jnp.float64(day % days_per_year if seasonal else 0.0)
         (prev, curr), _ = one_day_jit((prev, curr), day_val)
-        _invoke_callback(on_day, day, curr, None, False, diagnostics)
+        _invoke_atm_callback(on_day, day, curr, diagnostics)
         _log_progress(verbose, day_idx, day, n_days, log_interval, t_start)
 
     return SimulationResult(
@@ -317,7 +364,7 @@ def _run_atm_only(
 
 
 def _run_coupled(
-    init_fn: Callable[[PrimitiveEquationState, SurfaceState], _CoupledCarry],
+    init_fn: _CoupledInitFn,
     step_fn: _CoupledStepFn,
     initial_state: PrimitiveEquationState,
     surface: SurfaceState,
@@ -327,7 +374,7 @@ def _run_coupled(
     steps_per_day: int,
     start_day: int,
     n_days: int,
-    on_day: Callable[..., object] | None,
+    on_day: _CoupledCallback | None,
     verbose: bool,
     log_interval: int,
 ) -> SimulationResult:
@@ -342,14 +389,14 @@ def _run_coupled(
     if verbose:
         logger.info("Day 1 (incl. JIT compile): %.1fs", time.perf_counter() - t0)
 
-    _invoke_callback(on_day, start_day + 1, curr, surface, True, diagnostics)
+    _invoke_coupled_callback(on_day, start_day + 1, curr, surface, diagnostics)
 
     t_start = time.perf_counter()
     for day_idx in range(2, n_days + 1):
         day = start_day + day_idx
         day_val = jnp.float64(day % days_per_year if seasonal else 0.0)
         (prev, curr, surface), _ = one_day_jit((prev, curr, surface), day_val)
-        _invoke_callback(on_day, day, curr, surface, True, diagnostics)
+        _invoke_coupled_callback(on_day, day, curr, surface, diagnostics)
         _log_progress(verbose, day_idx, day, n_days, log_interval, t_start)
 
     return SimulationResult(
@@ -362,18 +409,31 @@ def _run_coupled(
     )
 
 
-def _invoke_callback(
-    on_day: Callable[..., object] | None,
+def _invoke_atm_callback(
+    on_day: _AtmCallback | None,
     day: int,
     state: PrimitiveEquationState,
-    surface: SurfaceState | None,
-    coupled: bool,
     diagnostics: list[object],
 ) -> None:
-    """Invoke user callback and collect non-None results."""
+    """Invoke atmosphere-only callback and collect non-None results."""
     if on_day is None:
         return
-    result = on_day(day, state, surface) if coupled else on_day(day, state)
+    result = on_day(day, state)
+    if result is not None:
+        diagnostics.append(result)
+
+
+def _invoke_coupled_callback(
+    on_day: _CoupledCallback | None,
+    day: int,
+    state: PrimitiveEquationState,
+    surface: SurfaceState,
+    diagnostics: list[object],
+) -> None:
+    """Invoke coupled callback and collect non-None results."""
+    if on_day is None:
+        return
+    result = on_day(day, state, surface)
     if result is not None:
         diagnostics.append(result)
 

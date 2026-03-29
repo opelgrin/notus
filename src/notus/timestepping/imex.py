@@ -222,11 +222,11 @@ def _detect_forcing_capabilities(
         None
     )
     if isinstance(forcing, ImplicitForcing):
-        implicit_physics = forcing.apply_implicit  # type: ignore[unreachable]
+        implicit_physics = forcing.apply_implicit
 
     reference_humidity: np.ndarray | None = None
     if isinstance(forcing, MoistForcing):
-        reference_humidity = forcing.compute_reference_humidity(t_ref)  # type: ignore[unreachable]
+        reference_humidity = forcing.compute_reference_humidity(t_ref)
 
     return implicit_physics, reference_humidity
 

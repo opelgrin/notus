@@ -361,9 +361,21 @@ class SurfaceState:
     ocean: OceanState
     land: LandState | None = None
 
-    def replace(self, **kwargs: OceanState | LandState | None) -> SurfaceState:
-        """Return a new state with specified fields replaced."""
-        return dataclasses.replace(self, **kwargs)  # type: ignore[arg-type]
+    def replace(
+        self,
+        *,
+        ocean: OceanState | None = None,
+        land: LandState | None = None,
+    ) -> SurfaceState:
+        """Return a new state with specified fields replaced.
+
+        Only non-None arguments are applied.  To set ``land`` to ``None``,
+        construct a new ``SurfaceState`` directly.
+        """
+        return SurfaceState(
+            ocean=ocean if ocean is not None else self.ocean,
+            land=land if land is not None else self.land,
+        )
 
 
 def _surface_state_flatten(
