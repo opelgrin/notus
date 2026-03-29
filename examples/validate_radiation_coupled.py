@@ -194,6 +194,8 @@ def run_validation(
     truncation: int = 21,
     n_levels: int = 20,
     dt: float = 900.0,
+    scheme: str = "byrne",
+    clouds: bool = False,
 ) -> bool:
     """Three-phase coupled radiation validation."""
     grid = GaussianGrid(truncation=truncation)
@@ -208,10 +210,10 @@ def run_validation(
         seed=42,
     )
 
-    config = SimplePhysicsConfig(
-        radiation_scheme="byrne",
-        sw_tau_0=0.22,
-    )
+    if scheme == "speedy":
+        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
+    else:
+        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
 
@@ -477,6 +479,8 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
+    parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
+    parser.add_argument("--clouds", action="store_true", help="Enable diagnostic clouds (speedy)")
     args = parser.parse_args()
 
     passed = run_validation(
@@ -487,6 +491,8 @@ def main() -> None:
         truncation=args.truncation,
         n_levels=args.levels,
         dt=args.dt,
+        scheme=args.scheme,
+        clouds=args.clouds,
     )
 
     sys.exit(0 if passed else 1)
