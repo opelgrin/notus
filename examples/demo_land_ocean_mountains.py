@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Land-ocean planet with Gaussian mountains — visualization demo.
 
 Showcases coupled atmosphere-ocean-land dynamics with topography:

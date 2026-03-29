@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Moist aquaplanet — full visualization suite demonstration.
 
 Showcases the complete Notus visualization and diagnostics pipeline:
