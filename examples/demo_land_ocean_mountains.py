@@ -85,6 +85,11 @@ def main() -> None:
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--output", type=str, default="demo_land_ocean_mountains.png")
     parser.add_argument("--dpi", type=int, default=200)
+    parser.add_argument(
+        "--animate",
+        action="store_true",
+        help="Save precipitation animation as GIF",
+    )
     args = parser.parse_args()
 
     # --- Grid and physics ---
@@ -193,6 +198,7 @@ def main() -> None:
     n_samples = 0
     accum_zm: ZonalMeanState | None = None
     accum_precip: np.ndarray | None = None
+    precip_snapshots: list[xr.DataArray] = []
     sigma = np.asarray(levels.sigma_full)
 
     def on_day(
@@ -213,6 +219,21 @@ def main() -> None:
         if diags.precipitation is not None:
             precip = np.asarray(diags.precipitation)
             accum_precip = precip if accum_precip is None else accum_precip + precip
+
+            # Collect precipitation snapshots for animation (every 5 days)
+            if (day - args.spinup) % 5 == 0:
+                precip_mm = precip * 86400.0  # kg/m²/s -> mm/day
+                precip_snapshots.append(
+                    xr.DataArray(
+                        precip_mm,
+                        dims=["lat", "lon"],
+                        coords={
+                            "lat": lat_deg,
+                            "lon": lon_deg,
+                        },
+                        name="precipitation",
+                    ),
+                )
 
     # --- Run ---
     print(
@@ -335,6 +356,26 @@ def main() -> None:
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     fig.savefig(args.output, dpi=args.dpi, bbox_inches="tight")
     print(f"\nSaved to {args.output}")
+
+    # --- Animation: precipitation evolution ---
+    if args.animate and len(precip_snapshots) > 1:
+        from notus import animate_field
+
+        anim_file = args.output.rsplit(".", 1)[0] + "_precip_anim.gif"
+        print(f"Generating precipitation animation ({len(precip_snapshots)} frames)...")
+        anim_fig, anim = animate_field(
+            precip_snapshots,
+            plot_fn="map",
+            title_fmt="Day {i}",
+            interval=150,
+            cmap="Blues",
+            levels=np.linspace(0, 15, 16),
+            extend="max",
+            colorbar_label="mm/day",
+        )
+        anim.save(anim_file, writer="pillow", fps=6)
+        plt.close(anim_fig)
+        print(f"Saved to {anim_file}")
 
 
 if __name__ == "__main__":

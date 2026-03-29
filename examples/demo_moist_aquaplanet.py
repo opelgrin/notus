@@ -65,6 +65,11 @@ def main() -> None:
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--output", type=str, default="demo_moist_aquaplanet.png")
     parser.add_argument("--dpi", type=int, default=200)
+    parser.add_argument(
+        "--animate",
+        action="store_true",
+        help="Save surface pressure animation as GIF",
+    )
     args = parser.parse_args()
 
     # --- Setup ---
@@ -259,6 +264,23 @@ def main() -> None:
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     fig.savefig(args.output, dpi=args.dpi, bbox_inches="tight")
     print(f"\nSaved to {args.output}")
+
+    # --- Animation: surface pressure evolution ---
+    if args.animate and len(ps_snapshots) > 1:
+        from notus import animate_field
+
+        anim_file = args.output.rsplit(".", 1)[0] + "_ps_anim.gif"
+        print(f"Generating surface pressure animation ({len(ps_snapshots)} frames)...")
+        anim_fig, anim = animate_field(
+            ps_snapshots,
+            plot_fn="map",
+            title_fmt="Day {i}",
+            interval=150,
+            levels=np.arange(970, 1035, 5),
+        )
+        anim.save(anim_file, writer="pillow", fps=6)
+        plt.close(anim_fig)
+        print(f"Saved to {anim_file}")
 
 
 if __name__ == "__main__":
