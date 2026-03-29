@@ -3,19 +3,24 @@
 Longwave:
 - Frierson (2006) gray scheme: prescribed tau(sigma, latitude)
 - Byrne (Isca) scheme: humidity-dependent tau for water vapor feedback
+- SPEEDY multi-band scheme: 4 LW bands + 2 SW bands
 
 Shortwave:
 - Beer-Lambert absorption with prescribed or humidity-dependent optical depth
+- SPEEDY two-band scheme with cloud reflection/absorption
 
 All functions are JIT-compatible.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
+
+from notus.physics.clouds import CloudConfig
 
 
 if TYPE_CHECKING:
@@ -23,6 +28,126 @@ if TYPE_CHECKING:
 
 
 STEFAN_BOLTZMANN: float = 5.670374419e-8  # [W/(m² K⁴)]
+
+
+# ---------------------------------------------------------------------------
+# Radiation configuration dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class FriersonRadiation:
+    """Gray longwave radiation with prescribed optical depth.
+
+    Frierson et al. (2006) scheme: tau(sigma, lat) with mixed
+    linear + power-law pressure dependence.
+
+    Parameters
+    ----------
+    tau_equator : float
+        Equatorial longwave optical depth.
+    tau_pole : float
+        Polar longwave optical depth.
+    linear_fraction : float
+        Fraction of LW optical depth with linear pressure dependence.
+    alpha : float
+        Pressure exponent for the nonlinear part of LW optical depth.
+    sw_tau_0 : float
+        Shortwave optical depth. Zero disables atmospheric SW absorption.
+    sw_exponent : float
+        Shortwave pressure exponent for Beer-Lambert absorption.
+    """
+
+    tau_equator: float = 6.0
+    tau_pole: float = 1.5
+    linear_fraction: float = 0.1
+    alpha: float = 4.0
+    sw_tau_0: float = 0.0
+    sw_exponent: float = 2.0
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ByrneRadiation:
+    """Humidity-dependent optical depth with water vapor feedback.
+
+    Byrne (Isca) scheme: dτ/d(p/p₀) = a + b·q, providing a physically
+    motivated water vapor feedback on longwave radiation.
+
+    Parameters
+    ----------
+    a : float
+        Well-mixed gas LW absorption coefficient.
+    b : float
+        Water vapor LW absorption coefficient.
+    sw_a : float
+        Well-mixed gas SW absorption coefficient.
+    sw_b : float
+        Water vapor SW absorption coefficient.
+    sw_tau_0 : float
+        Base shortwave optical depth.
+    sw_exponent : float
+        Shortwave pressure exponent for Beer-Lambert absorption.
+    """
+
+    a: float = 0.8678
+    b: float = 1997.9
+    sw_a: float = 0.0
+    sw_b: float = 0.2
+    sw_tau_0: float = 0.0
+    sw_exponent: float = 2.0
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SpeedyRadiation:
+    """SPEEDY multi-band radiation (4 LW bands, 2 SW bands).
+
+    Based on the SPEEDY model (Molteni 2003). Supports optional
+    diagnostic cloud scheme for SW reflection and LW absorption.
+
+    Parameters
+    ----------
+    epslw : float
+        LW PBL emission fraction.
+    surface_emissivity : float
+        Surface LW emissivity.
+    ablwin : float
+        Window-band absorptivity.
+    ablco2 : float
+        CO₂-band absorptivity.
+    ablwv1 : float
+        H₂O weak-band absorptivity coefficient.
+    ablwv2 : float
+        H₂O strong-band absorptivity coefficient.
+    absdry : float
+        Dry-air absorptivity (SW band 1).
+    absaer : float
+        Aerosol absorptivity coefficient (SW band 1).
+    sw_abswv1 : float
+        Water vapor absorptivity, visible band (SW band 1).
+    sw_abswv2 : float
+        Water vapor absorptivity, near-IR band (SW band 2).
+    visible_fraction : float
+        Fraction of solar irradiance in the visible band.
+    clouds : CloudConfig or None
+        Cloud scheme parameters. ``None`` disables clouds.
+    """
+
+    epslw: float = 0.05
+    surface_emissivity: float = 0.98
+    ablwin: float = 0.3
+    ablco2: float = 6.0
+    ablwv1: float = 0.7
+    ablwv2: float = 50.0
+    absdry: float = 0.033
+    absaer: float = 0.033
+    sw_abswv1: float = 0.022
+    sw_abswv2: float = 15.0
+    visible_fraction: float = 0.95
+    clouds: CloudConfig | None = None
+
+
+#: Union type for radiation scheme configuration.
+RadiationConfig = FriersonRadiation | ByrneRadiation | SpeedyRadiation
 
 
 # ---------------------------------------------------------------------------

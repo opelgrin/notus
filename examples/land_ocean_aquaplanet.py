@@ -35,13 +35,15 @@ from notus import (
     EARTH,
     EARTH_ORBIT,
     BucketLandConfig,
+    ByrneRadiation,
     GaussianGrid,
     OceanState,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     PrescribedSST,
-    SimplePhysics,
-    SimplePhysicsConfig,
     SlabOceanConfig,
     SpectralTransform,
+    SpeedyRadiation,
     SurfaceState,
     ZonalMeanState,
     build_coupled_pe_stepper,
@@ -99,14 +101,15 @@ def run_land_ocean(
 
     # --- Physics configuration ---
     if scheme == "speedy":
-        config = SimplePhysicsConfig(
-            radiation_scheme="speedy",
+        from notus.physics.clouds import CloudConfig
+
+        config = PhysicsSuiteConfig(
+            radiation=SpeedyRadiation(clouds=CloudConfig() if clouds else None),
             orbital=EARTH_ORBIT,
-            enable_clouds=clouds,
         )
     else:
-        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22, orbital=EARTH_ORBIT)
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+        config = PhysicsSuiteConfig(radiation=ByrneRadiation(sw_tau_0=0.22), orbital=EARTH_ORBIT)
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
 
     # --- Surface configuration ---
     # Flat continent: 30S-60N, 0-180E (roughly Eurasia-like in extent)
@@ -141,7 +144,7 @@ def run_land_ocean(
     print(f"\n--- Prescribed-SST spinup ({n_pre} days) ---")
     # Use aquaplanet surface for spinup (no land)
     filt = exponential_filter(transform.arrays, dt)
-    spinup_forcing = SimplePhysics(transform, EARTH, levels, config=config)
+    spinup_forcing = PhysicsSuite(transform, EARTH, levels, config=config)
 
     spinup_result = spinup_prescribed_sst(
         state,

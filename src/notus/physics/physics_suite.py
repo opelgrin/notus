@@ -1,14 +1,17 @@
-"""Simple physics forcing following Frierson et al. (2006, 2007).
+"""Composable physics suite for aquaplanet and coupled experiments.
 
-Composes gray longwave radiation, convective adjustment, bulk surface
-fluxes (sensible + latent heat), large-scale condensation, and
-Rayleigh boundary-layer drag into a single ``Forcing`` implementation
-suitable for aquaplanet experiments.
+Composes radiation, convective adjustment, bulk surface fluxes
+(sensible + latent heat), large-scale condensation, and Rayleigh
+boundary-layer drag into a single ``Forcing`` implementation.
+
+Multiple radiation schemes are supported via typed configuration
+objects: :class:`FriersonRadiation`, :class:`ByrneRadiation`, and
+:class:`SpeedyRadiation`.
 
 When the model state includes humidity, the moist physics pathway is
 activated: surface evaporation, large-scale condensation, and
 simplified Betts-Miller convection.  Without humidity, the scheme
-falls back to the dry configuration (Phase 5).
+falls back to the dry configuration.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
-from notus.physics.clouds import CloudConfig, diagnose_clouds
+from notus.physics.clouds import CloudDiagnostic, diagnose_clouds
 from notus.physics.convection import (
     betts_miller_convection,
     dry_convective_adjustment,
@@ -30,12 +33,18 @@ from notus.physics.convection import (
 )
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
+    ByrneRadiation,
+    FriersonRadiation,
+    RadiationConfig,
+    SpeedyRadiation,
     byrne_longwave_optical_depth,
     byrne_shortwave_optical_depth,
     longwave_heating,
     longwave_optical_depth,
+    lw_down_surface,
     shortwave_heating,
     speedy_longwave_heating,
+    speedy_lw_down_surface,
     speedy_shortwave_heating,
 )
 from notus.physics.solar import OrbitalParameters, daily_mean_insolation
@@ -51,66 +60,21 @@ from notus.vertical.sigma import SigmaLevels
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class SimplePhysicsConfig:
-    """Configuration for simple physics (Frierson et al. 2006/2007).
+class PhysicsSuiteConfig:
+    """Configuration for the composable physics suite.
 
     Parameters
     ----------
-    radiation_scheme : str
-        Longwave radiation scheme: ``"frierson"`` (gray, prescribed tau)
-        or ``"byrne"`` (humidity-dependent tau with water vapor feedback).
-    tau_equator : float
-        Equatorial longwave optical depth (Frierson scheme only).
-    tau_pole : float
-        Polar longwave optical depth (Frierson scheme only).
-    linear_fraction : float
-        Fraction of LW optical depth with linear pressure dependence
-        (Frierson scheme only).
-    alpha : float
-        Pressure exponent for the nonlinear part of LW optical depth
-        (Frierson scheme only).
-    byrne_a : float
-        Well-mixed gas LW absorption coefficient (Byrne scheme only).
-    byrne_b : float
-        Water vapor LW absorption coefficient (Byrne scheme only).
-    byrne_sw_a : float
-        Well-mixed gas SW absorption coefficient (Byrne scheme only).
-    byrne_sw_b : float
-        Water vapor SW absorption coefficient (Byrne scheme only).
-    sw_tau_0 : float
-        Shortwave optical depth.  Zero disables atmospheric SW absorption
-        (Frierson convention).
-    sw_exponent : float
-        Shortwave pressure exponent for Beer-Lambert absorption.
-    delta_s : float
-        Insolation meridional distribution parameter.
-    speedy_epslw : float
-        LW PBL emission fraction (SPEEDY scheme only).
-    speedy_surface_emissivity : float
-        Surface LW emissivity (SPEEDY scheme only).
-    speedy_ablwin : float
-        Window-band absorptivity (SPEEDY LW).
-    speedy_ablco2 : float
-        CO₂-band absorptivity (SPEEDY LW).
-    speedy_ablwv1 : float
-        H₂O weak-band absorptivity coefficient (SPEEDY LW).
-    speedy_ablwv2 : float
-        H₂O strong-band absorptivity coefficient (SPEEDY LW).
-    speedy_absdry : float
-        Dry-air absorptivity (SPEEDY SW band 1).
-    speedy_absaer : float
-        Aerosol absorptivity coefficient (SPEEDY SW band 1).
-    speedy_sw_abswv1 : float
-        Water vapor absorptivity, visible band (SPEEDY SW band 1).
-    speedy_sw_abswv2 : float
-        Water vapor absorptivity, near-IR band (SPEEDY SW band 2).
-    speedy_visible_fraction : float
-        Fraction of solar irradiance in the visible band (SPEEDY SW).
+    radiation : RadiationConfig
+        Radiation scheme configuration.  One of :class:`FriersonRadiation`
+        (default), :class:`ByrneRadiation`, or :class:`SpeedyRadiation`.
     orbital : OrbitalParameters or None
         Orbital parameters for seasonal insolation.  When provided
         together with a ``day_of_year`` set on the forcing object,
-        replaces the fixed Frierson insolation with time-varying
+        replaces the fixed insolation profile with time-varying
         daily-mean insolation from solar geometry.
+    delta_s : float
+        Insolation meridional distribution parameter.
     sst_t_min : float
         Minimum SST (temperature floor) [K].
     sst_t_delta : float
@@ -140,34 +104,13 @@ class SimplePhysicsConfig:
         When True, Rayleigh friction and surface fluxes (sensible +
         latent heat) are excluded from the explicit tendencies and
         should instead be applied implicitly via :meth:`apply_implicit`.
+    surface_layer : SurfaceLayerConfig or None
+        Optional Monin-Obukhov stability-dependent transfer coefficients.
     """
 
-    radiation_scheme: str = "frierson"
-    tau_equator: float = 6.0
-    tau_pole: float = 1.5
-    linear_fraction: float = 0.1
-    alpha: float = 4.0
-    byrne_a: float = 0.8678
-    byrne_b: float = 1997.9
-    byrne_sw_a: float = 0.0
-    byrne_sw_b: float = 0.2
-    sw_tau_0: float = 0.0
-    sw_exponent: float = 2.0
-    delta_s: float = 1.4
-    speedy_epslw: float = 0.05
-    speedy_surface_emissivity: float = 0.98
-    speedy_ablwin: float = 0.3
-    speedy_ablco2: float = 6.0
-    speedy_ablwv1: float = 0.7
-    speedy_ablwv2: float = 50.0
-    speedy_absdry: float = 0.033
-    speedy_absaer: float = 0.033
-    speedy_sw_abswv1: float = 0.022
-    speedy_sw_abswv2: float = 15.0
-    speedy_visible_fraction: float = 0.95
-    enable_clouds: bool = False
-    cloud_config: CloudConfig = dataclasses.field(default_factory=CloudConfig)
+    radiation: RadiationConfig = dataclasses.field(default_factory=FriersonRadiation)
     orbital: OrbitalParameters | None = None
+    delta_s: float = 1.4
     sst_t_min: float = 271.0
     sst_t_delta: float = 29.0
     sst_phi_w: float = 26.0 * jnp.pi / 180.0
@@ -185,12 +128,6 @@ class SimplePhysicsConfig:
 
     def __post_init__(self) -> None:
         """Validate parameter ranges."""
-        if self.radiation_scheme not in {"frierson", "byrne", "speedy"}:
-            msg = (
-                f"radiation_scheme must be 'frierson', 'byrne', or 'speedy',"
-                f" got '{self.radiation_scheme}'"
-            )
-            raise ValueError(msg)
         if self.sigma_b >= 1.0:
             msg = f"sigma_b must be < 1.0, got {self.sigma_b}"
             raise ValueError(msg)
@@ -211,12 +148,12 @@ class SimplePhysicsConfig:
             raise ValueError(msg)
 
 
-class SimplePhysics:
-    """Frierson et al. (2006, 2007) simple physics forcing.
+class PhysicsSuite:
+    """Composable physics suite for aquaplanet and coupled experiments.
 
-    Composes gray longwave radiation, convective adjustment, bulk
-    surface fluxes, and Rayleigh boundary-layer drag for an aquaplanet
-    with prescribed SST.
+    Composes radiation, convective adjustment, bulk surface fluxes,
+    and Rayleigh boundary-layer drag.  The radiation scheme is selected
+    via the typed ``radiation`` field on :class:`PhysicsSuiteConfig`.
 
     When the state includes humidity, adds surface evaporation,
     large-scale condensation, and simplified Betts-Miller convection.
@@ -231,7 +168,7 @@ class SimplePhysics:
         Planetary constants.
     levels : SigmaLevels
         Sigma vertical coordinate.
-    config : SimplePhysicsConfig | None
+    config : PhysicsSuiteConfig or None
         Scheme parameters.  Uses Frierson defaults if ``None``.
     """
 
@@ -240,12 +177,12 @@ class SimplePhysics:
         transform: SpectralTransform,
         planet: PlanetaryConstants,
         levels: SigmaLevels,
-        config: SimplePhysicsConfig | None = None,
+        config: PhysicsSuiteConfig | None = None,
     ) -> None:
         self.transform = transform
         self.planet = planet
         self.levels = levels
-        self.config = config if config is not None else SimplePhysicsConfig()
+        self.config = config if config is not None else PhysicsSuiteConfig()
 
         # Day of year for seasonal insolation.
         # Prefer passing ``day_of_year`` as a keyword argument to
@@ -279,7 +216,7 @@ class SimplePhysics:
         """Compute a reference humidity profile for the semi-implicit solver.
 
         Returns an RH-based profile matching the initial condition convention:
-        ~70 % RH tapered to zero above σ = 0.3.  Used by ``build_pe_stepper``
+        ~70 % RH tapered to zero above sigma = 0.3.  Used by ``build_pe_stepper``
         to construct the virtual reference temperature ``T_v_ref``.
 
         Parameters
@@ -311,6 +248,254 @@ class SimplePhysics:
             return sst[:, None]
         return sst
 
+    # ------------------------------------------------------------------
+    # Public surface-flux methods (used by the coupled stepper)
+    # ------------------------------------------------------------------
+
+    def compute_insolation(
+        self,
+        *,
+        day_of_year: jnp.ndarray | None = None,
+    ) -> jnp.ndarray:
+        """Compute TOA insolation [W/m²], shape ``(n_lat,)``.
+
+        Uses daily-mean solar geometry when orbital parameters and
+        ``day_of_year`` are both available; otherwise falls back to the
+        fixed Frierson analytic profile.
+        """
+        sin_lat = self.transform.grid.sin_lat
+        day = day_of_year if day_of_year is not None else self.day_of_year
+        if day is not None and self.config.orbital is not None:
+            return daily_mean_insolation(
+                sin_lat,
+                day,
+                self.planet.solar_constant,
+                self.config.orbital,
+            )
+        delta_s = self.config.delta_s
+        return self.planet.solar_constant / 4.0 * (1.0 + delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
+
+    def compute_clouds(
+        self,
+        state: PrimitiveEquationState,
+        surface_pressure: jnp.ndarray,
+    ) -> CloudDiagnostic | None:
+        """Diagnose clouds for SPEEDY radiation.
+
+        Returns ``None`` when clouds are disabled or the radiation
+        scheme is not :class:`SpeedyRadiation`.
+        """
+        rad = self.config.radiation
+        if not isinstance(rad, SpeedyRadiation) or rad.clouds is None:
+            return None
+        if state.humidity is None:
+            return None
+        levels = self.levels
+        planet = self.planet
+        t_grid = jax.vmap(self.transform.spectral_to_grid)(state.temperature)
+        q_grid = jnp.maximum(
+            jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+            0.0,
+        )
+        pressure = levels.sigma_full[:, None, None] * surface_pressure[None, :, :]
+        q_sat = saturation_specific_humidity(t_grid, pressure, planet.epsilon_moisture)
+        rh = q_grid / jnp.maximum(q_sat, 1e-10)
+        geopotential = planet.gravity * levels.sigma_full[:, None, None] * jnp.ones_like(t_grid)
+        return diagnose_clouds(
+            rh,
+            q_grid,
+            t_grid,
+            geopotential,
+            precipitation_rate=jnp.zeros(surface_pressure.shape),
+            convective_mask=jnp.zeros_like(t_grid, dtype=bool),
+            gravity=planet.gravity,
+            specific_heat_cp=planet.specific_heat_cp,
+            config=rad.clouds,
+        )
+
+    def compute_sw_down_surface(
+        self,
+        state: PrimitiveEquationState,
+        surface_pressure: jnp.ndarray,
+        *,
+        effective_albedo: float | jnp.ndarray,
+        day_of_year: jnp.ndarray | None = None,
+        cloud: CloudDiagnostic | None = None,
+    ) -> jnp.ndarray:
+        """Downward SW flux at the surface [W/m²].
+
+        Dispatches across Frierson / Byrne / SPEEDY radiation schemes.
+
+        Parameters
+        ----------
+        state : PrimitiveEquationState
+            Current atmospheric state (spectral).
+        surface_pressure : jnp.ndarray
+            Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+        effective_albedo : float or jnp.ndarray
+            Surface albedo (scalar or spatially varying).
+        day_of_year : jnp.ndarray or None
+            Day of year for seasonal insolation.
+        cloud : CloudDiagnostic or None
+            Pre-computed cloud diagnostic (SPEEDY only).
+
+        Returns
+        -------
+        jnp.ndarray
+            Downward SW flux at the surface, shape ``(n_lat, n_lon)``.
+        """
+        rad = self.config.radiation
+        levels = self.levels
+        planet = self.planet
+
+        if isinstance(rad, SpeedyRadiation) and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            insolation = self.compute_insolation(day_of_year=day_of_year)
+            _, sw_down_sfc = speedy_shortwave_heating(
+                levels.dsigma,
+                levels.sigma_full,
+                q_grid,
+                surface_pressure,
+                planet.reference_pressure,
+                insolation,
+                planet.gravity,
+                planet.specific_heat_cp,
+                surface_albedo=effective_albedo,
+                absdry=rad.absdry,
+                absaer=rad.absaer,
+                abswv1=rad.sw_abswv1,
+                abswv2=rad.sw_abswv2,
+                visible_fraction=rad.visible_fraction,
+                cloud=cloud,
+            )
+            return sw_down_sfc
+
+        if isinstance(rad, (FriersonRadiation, ByrneRadiation)) and rad.sw_tau_0 > 0.0:
+            insolation = self.compute_insolation(day_of_year=day_of_year)
+            tau_sw: jnp.ndarray | None = None
+            if isinstance(rad, ByrneRadiation) and state.humidity is not None:
+                q_grid = jnp.maximum(
+                    jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+                    0.0,
+                )
+                tau_sw = byrne_shortwave_optical_depth(
+                    levels.dsigma,
+                    q_grid,
+                    surface_pressure,
+                    planet.reference_pressure,
+                    sw_tau_0=rad.sw_tau_0,
+                    byrne_sw_a=rad.sw_a,
+                    byrne_sw_b=rad.sw_b,
+                )
+            _, sw_down_sfc = shortwave_heating(
+                levels.sigma_half,
+                levels.dsigma,
+                self.transform.grid.sin_lat,
+                surface_pressure,
+                planet.solar_constant,
+                planet.gravity,
+                planet.specific_heat_cp,
+                sw_tau_0=rad.sw_tau_0,
+                sw_exponent=rad.sw_exponent,
+                delta_s=self.config.delta_s,
+                insolation=insolation,
+                tau_sw_half=tau_sw,
+                surface_albedo=effective_albedo,
+            )
+            return sw_down_sfc
+
+        n_lat, n_lon = surface_pressure.shape
+        return jnp.zeros((n_lat, n_lon))
+
+    def compute_lw_down_surface(
+        self,
+        state: PrimitiveEquationState,
+        surface_pressure: jnp.ndarray,
+        *,
+        sst: jnp.ndarray | None = None,
+        cloud: CloudDiagnostic | None = None,
+    ) -> jnp.ndarray:
+        """Downward LW flux at the surface [W/m²].
+
+        Dispatches across Frierson / Byrne / SPEEDY radiation schemes.
+
+        Parameters
+        ----------
+        state : PrimitiveEquationState
+            Current atmospheric state (spectral).
+        surface_pressure : jnp.ndarray
+            Surface pressure [Pa], shape ``(n_lat, n_lon)``.
+        sst : jnp.ndarray or None
+            Surface temperature [K].  Required for SPEEDY LW.
+            Defaults to ``self.prescribed_sst``.
+        cloud : CloudDiagnostic or None
+            Pre-computed cloud diagnostic (SPEEDY only).
+
+        Returns
+        -------
+        jnp.ndarray
+            Downward LW flux at the surface, shape ``(n_lat, n_lon)``.
+        """
+        rad = self.config.radiation
+        levels = self.levels
+        planet = self.planet
+        t_grid = jax.vmap(self.transform.spectral_to_grid)(state.temperature)
+
+        if isinstance(rad, SpeedyRadiation) and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            t_sfc = sst if sst is not None else self.prescribed_sst
+            return speedy_lw_down_surface(
+                t_grid,
+                t_sfc,
+                q_grid,
+                levels.dsigma,
+                surface_pressure,
+                planet.reference_pressure,
+                epslw=rad.epslw,
+                surface_emissivity=rad.surface_emissivity,
+                ablwin=rad.ablwin,
+                ablco2=rad.ablco2,
+                ablwv1=rad.ablwv1,
+                ablwv2=rad.ablwv2,
+                cloud=cloud,
+            )
+
+        if isinstance(rad, ByrneRadiation) and state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(self.transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+            tau_half = byrne_longwave_optical_depth(
+                levels.dsigma,
+                q_grid,
+                surface_pressure,
+                planet.reference_pressure,
+                byrne_a=rad.a,
+                byrne_b=rad.b,
+            )
+        else:
+            fri = rad if isinstance(rad, FriersonRadiation) else FriersonRadiation()
+            tau_half = longwave_optical_depth(
+                levels.sigma_half,
+                self.transform.grid.sin_lat,
+                tau_equator=fri.tau_equator,
+                tau_pole=fri.tau_pole,
+                linear_fraction=fri.linear_fraction,
+                alpha=fri.alpha,
+            )
+
+        return lw_down_surface(t_grid, tau_half)
+
+    # ------------------------------------------------------------------
+    # Internal radiation helpers
+    # ------------------------------------------------------------------
+
     def _compute_radiation_heating(
         self,
         t_grid: jnp.ndarray,
@@ -322,13 +507,14 @@ class SimplePhysics:
     ) -> jnp.ndarray:
         """Compute total radiative heating rate [K/s]."""
         cfg = self.config
+        rad = cfg.radiation
         levels = self.levels
         planet = self.planet
         sin_lat = self.transform.grid.sin_lat
         day = day_of_year if day_of_year is not None else self.day_of_year
         sst_val = sst if sst is not None else self.prescribed_sst
 
-        if cfg.radiation_scheme == "speedy":
+        if isinstance(rad, SpeedyRadiation):
             return self._compute_speedy_radiation(
                 t_grid,
                 state,
@@ -338,7 +524,7 @@ class SimplePhysics:
             )
 
         # --- Frierson / Byrne LW ---
-        if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+        if isinstance(rad, ByrneRadiation) and state.humidity is not None:
             q_grid_for_rad = jax.vmap(self.transform.spectral_to_grid)(state.humidity)
             q_grid_for_rad = jnp.maximum(q_grid_for_rad, 0.0)
             tau_half = byrne_longwave_optical_depth(
@@ -346,17 +532,30 @@ class SimplePhysics:
                 q_grid_for_rad,
                 surface_pressure,
                 planet.reference_pressure,
-                byrne_a=cfg.byrne_a,
-                byrne_b=cfg.byrne_b,
+                byrne_a=rad.a,
+                byrne_b=rad.b,
             )
-        else:
+        # For Frierson, or Byrne without humidity, use gray optical depth.
+        # ByrneRadiation doesn't have Frierson LW params, so use Frierson defaults.
+        elif isinstance(rad, FriersonRadiation):
             tau_half = longwave_optical_depth(
                 levels.sigma_half,
                 sin_lat,
-                tau_equator=cfg.tau_equator,
-                tau_pole=cfg.tau_pole,
-                linear_fraction=cfg.linear_fraction,
-                alpha=cfg.alpha,
+                tau_equator=rad.tau_equator,
+                tau_pole=rad.tau_pole,
+                linear_fraction=rad.linear_fraction,
+                alpha=rad.alpha,
+            )
+        else:
+            # Byrne without humidity: fall back to Frierson defaults
+            fri = FriersonRadiation()
+            tau_half = longwave_optical_depth(
+                levels.sigma_half,
+                sin_lat,
+                tau_equator=fri.tau_equator,
+                tau_pole=fri.tau_pole,
+                linear_fraction=fri.linear_fraction,
+                alpha=fri.alpha,
             )
 
         q_lw, _lw_down_sfc = longwave_heating(
@@ -370,7 +569,7 @@ class SimplePhysics:
         )
 
         # --- Frierson / Byrne SW ---
-        if cfg.sw_tau_0 > 0.0:
+        if rad.sw_tau_0 > 0.0:
             sw_insolation = None
             if day is not None and cfg.orbital is not None:
                 sw_insolation = daily_mean_insolation(
@@ -381,7 +580,7 @@ class SimplePhysics:
                 )
 
             tau_sw: jnp.ndarray | None = None
-            if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+            if isinstance(rad, ByrneRadiation) and state.humidity is not None:
                 q_grid_for_rad = jax.vmap(self.transform.spectral_to_grid)(state.humidity)
                 q_grid_for_rad = jnp.maximum(q_grid_for_rad, 0.0)
                 tau_sw = byrne_shortwave_optical_depth(
@@ -389,9 +588,9 @@ class SimplePhysics:
                     q_grid_for_rad,
                     surface_pressure,
                     planet.reference_pressure,
-                    sw_tau_0=cfg.sw_tau_0,
-                    byrne_sw_a=cfg.byrne_sw_a,
-                    byrne_sw_b=cfg.byrne_sw_b,
+                    sw_tau_0=rad.sw_tau_0,
+                    byrne_sw_a=rad.sw_a,
+                    byrne_sw_b=rad.sw_b,
                 )
 
             q_sw, _sw_down_sfc = shortwave_heating(
@@ -402,8 +601,8 @@ class SimplePhysics:
                 planet.solar_constant,
                 planet.gravity,
                 planet.specific_heat_cp,
-                sw_tau_0=cfg.sw_tau_0,
-                sw_exponent=cfg.sw_exponent,
+                sw_tau_0=rad.sw_tau_0,
+                sw_exponent=rad.sw_exponent,
                 delta_s=cfg.delta_s,
                 insolation=sw_insolation,
                 tau_sw_half=tau_sw,
@@ -423,12 +622,16 @@ class SimplePhysics:
     ) -> jnp.ndarray:
         """Compute radiation heating with the SPEEDY multi-band scheme."""
         cfg = self.config
+        rad = cfg.radiation
+        if not isinstance(rad, SpeedyRadiation):  # pragma: no cover
+            msg = "Expected SpeedyRadiation"
+            raise TypeError(msg)
         levels = self.levels
         planet = self.planet
         sin_lat = self.transform.grid.sin_lat
         sst_val = sst if sst is not None else self.prescribed_sst
 
-        # Humidity (required for SPEEDY — always used with moist state)
+        # Humidity (required for SPEEDY -- always used with moist state)
         if state.humidity is None:
             msg = "SPEEDY radiation scheme requires humidity"
             raise ValueError(msg)
@@ -437,7 +640,7 @@ class SimplePhysics:
 
         # Cloud diagnosis (RH-based, no precipitation in explicit path)
         cloud = None
-        if cfg.enable_clouds:
+        if rad.clouds is not None:
             pressure = levels.sigma_full[:, None, None] * surface_pressure[None, :, :]
             q_sat = saturation_specific_humidity(t_grid, pressure, planet.epsilon_moisture)
             rh = q_grid / jnp.maximum(q_sat, 1e-10)
@@ -457,7 +660,7 @@ class SimplePhysics:
                 convective_mask=jnp.zeros_like(t_grid, dtype=bool),
                 gravity=planet.gravity,
                 specific_heat_cp=planet.specific_heat_cp,
-                config=cfg.cloud_config,
+                config=rad.clouds,
             )
 
         # LW heating
@@ -470,12 +673,12 @@ class SimplePhysics:
             planet.reference_pressure,
             planet.gravity,
             planet.specific_heat_cp,
-            epslw=cfg.speedy_epslw,
-            surface_emissivity=cfg.speedy_surface_emissivity,
-            ablwin=cfg.speedy_ablwin,
-            ablco2=cfg.speedy_ablco2,
-            ablwv1=cfg.speedy_ablwv1,
-            ablwv2=cfg.speedy_ablwv2,
+            epslw=rad.epslw,
+            surface_emissivity=rad.surface_emissivity,
+            ablwin=rad.ablwin,
+            ablco2=rad.ablco2,
+            ablwv1=rad.ablwv1,
+            ablwv2=rad.ablwv2,
             cloud=cloud,
         )
 
@@ -503,11 +706,11 @@ class SimplePhysics:
             planet.gravity,
             planet.specific_heat_cp,
             surface_albedo=planet.surface_albedo,
-            absdry=cfg.speedy_absdry,
-            absaer=cfg.speedy_absaer,
-            abswv1=cfg.speedy_sw_abswv1,
-            abswv2=cfg.speedy_sw_abswv2,
-            visible_fraction=cfg.speedy_visible_fraction,
+            absdry=rad.absdry,
+            absaer=rad.absaer,
+            abswv1=rad.sw_abswv1,
+            abswv2=rad.sw_abswv2,
+            visible_fraction=rad.visible_fraction,
             cloud=cloud,
         )
 
@@ -581,17 +784,17 @@ class SimplePhysics:
         day_of_year: jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
     ) -> PrimitiveEquationState:
-        """Compute simple physics tendencies.
+        """Compute physics tendencies.
 
         Parameters
         ----------
         state : PrimitiveEquationState
             Current model state (spectral coefficients).
         surface_pressure : jnp.ndarray
-            Surface pressure field pₛ (grid space), shape ``(n_lat, n_lon)``.
+            Surface pressure field p_s (grid space), shape ``(n_lat, n_lon)``.
         day_of_year : jnp.ndarray or None
             Day of year for seasonal insolation.  When ``None``, uses the
-            value set on ``self.day_of_year`` (or fixed Frierson insolation
+            value set on ``self.day_of_year`` (or fixed insolation
             if that is also ``None``).
         sst : jnp.ndarray or None
             Sea surface temperature override [K].  When ``None``, uses the
@@ -601,7 +804,7 @@ class SimplePhysics:
         Returns
         -------
         PrimitiveEquationState
-            Tendencies due to simple physics forcing (spectral coefficients).
+            Tendencies due to physics forcing (spectral coefficients).
         """
         cfg = self.config
         implicit = cfg.implicit_surface
@@ -668,7 +871,7 @@ class SimplePhysics:
         q_lw: jnp.ndarray,
         q_sfc: jnp.ndarray,
     ) -> jnp.ndarray:
-        """Dry physics pathway (Phase 5 behavior)."""
+        """Dry physics pathway."""
         cfg = self.config
         levels = self.levels
         planet = self.planet
@@ -783,16 +986,9 @@ class SimplePhysics:
         Treats stiff boundary-layer terms with exact exponential decay
         for unconditional stability and zero systematic bias:
 
-        - **Rayleigh friction**: ``ζ_new = ζ · exp(-dt·k_v)``
+        - **Rayleigh friction**: ``zeta_new = zeta * exp(-dt*k_v)``
         - **Sensible heat flux**: decay toward SST at lowest level
         - **Latent heat flux**: decay toward q_sat(SST) at lowest level
-
-        For a relaxation ``dX/dt = (X_ref - X) / τ``, the exact solution is::
-
-            X_new = X_ref + (X - X_ref) · exp(-dt / τ)
-
-        This is unconditionally stable AND unbiased — unlike backward Euler
-        (which undershoots) or forward Euler (which overshoots).
 
         Parameters
         ----------

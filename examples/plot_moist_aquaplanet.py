@@ -32,9 +32,9 @@ jax.config.update("jax_enable_x64", True)
 from notus import (
     EARTH,
     GaussianGrid,
+    PhysicsSuite,
     PrimitiveEquationState,
     SigmaLevels,
-    SimplePhysics,
     SpectralTransform,
     ZonalMeanState,
     build_pe_stepper,
@@ -88,7 +88,7 @@ def run_integration(
         seed=42,
     )
 
-    forcing = SimplePhysics(transform, EARTH, levels)
+    forcing = PhysicsSuite(transform, EARTH, levels)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,

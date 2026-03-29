@@ -33,13 +33,15 @@ from validate_radiation import compute_olr
 
 from notus import (
     EARTH,
+    ByrneRadiation,
     GaussianGrid,
     OceanState,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     PrescribedSST,
-    SimplePhysics,
-    SimplePhysicsConfig,
     SlabOceanConfig,
     SpectralTransform,
+    SpeedyRadiation,
     SurfaceState,
     build_coupled_pe_stepper,
     compute_sst,
@@ -70,7 +72,7 @@ def global_mean(field: jnp.ndarray, grid: GaussianGrid) -> float:
 def diagnose_coupled_budget(
     state,
     transform: SpectralTransform,
-    forcing: SimplePhysics,
+    forcing: PhysicsSuite,
     surface_pressure: jnp.ndarray,
     surface_temperature: jnp.ndarray,
 ) -> dict[str, jnp.ndarray]:
@@ -84,13 +86,17 @@ def diagnose_coupled_budget(
     q_grid = jnp.maximum(jax.vmap(transform.spectral_to_grid)(state.humidity), 0.0)
 
     # LW optical depth (Byrne)
+    rad = cfg.radiation
+    if not isinstance(rad, ByrneRadiation):
+        msg = "Expected ByrneRadiation"
+        raise TypeError(msg)
     tau_lw = byrne_longwave_optical_depth(
         levels.dsigma,
         q_grid,
         surface_pressure,
         planet.reference_pressure,
-        byrne_a=cfg.byrne_a,
-        byrne_b=cfg.byrne_b,
+        byrne_a=rad.a,
+        byrne_b=rad.b,
     )
 
     # OLR
@@ -108,9 +114,9 @@ def diagnose_coupled_budget(
         q_grid,
         surface_pressure,
         planet.reference_pressure,
-        sw_tau_0=cfg.sw_tau_0,
-        byrne_sw_a=cfg.byrne_sw_a,
-        byrne_sw_b=cfg.byrne_sw_b,
+        sw_tau_0=rad.sw_tau_0,
+        byrne_sw_a=rad.sw_a,
+        byrne_sw_b=rad.sw_b,
     )
 
     # SW fluxes
@@ -122,8 +128,8 @@ def diagnose_coupled_budget(
         planet.solar_constant,
         planet.gravity,
         planet.specific_heat_cp,
-        sw_tau_0=cfg.sw_tau_0,
-        sw_exponent=cfg.sw_exponent,
+        sw_tau_0=rad.sw_tau_0,
+        sw_exponent=rad.sw_exponent,
         delta_s=cfg.delta_s,
         tau_sw_half=tau_sw,
         surface_albedo=planet.surface_albedo,
@@ -213,10 +219,14 @@ def run_validation(
     )
 
     if scheme == "speedy":
-        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
+        from notus.physics.clouds import CloudConfig
+
+        config = PhysicsSuiteConfig(
+            radiation=SpeedyRadiation(clouds=CloudConfig() if clouds else None),
+        )
     else:
-        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+        config = PhysicsSuiteConfig(radiation=ByrneRadiation(sw_tau_0=0.22))
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
 
     # ==========================================================

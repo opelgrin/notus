@@ -74,10 +74,10 @@ Run the gray-radiation aquaplanet with surface fluxes (Frierson et al. 2006):
 
 ```bash
 # Quick demo (T21, 300 days)
-uv run python examples/simple_physics_aquaplanet.py
+uv run python examples/dry_aquaplanet.py
 
 # Generate diagnostic plots
-uv run python examples/plot_simple_physics.py
+uv run python examples/plot_dry_aquaplanet.py
 ```
 
 ### Moist aquaplanet
@@ -92,7 +92,7 @@ uv run python examples/moist_aquaplanet.py
 uv run python examples/moist_aquaplanet.py --scheme speedy --clouds
 
 # Byrne two-band radiation
-uv run python examples/byrne_aquaplanet.py --scheme speedy --clouds --days 300
+uv run python examples/moist_aquaplanet.py --scheme byrne --days 300
 
 # Generate diagnostic plots (U, T, q, EKE, spinup, surface pressure)
 uv run python examples/plot_moist_aquaplanet.py
@@ -137,7 +137,7 @@ See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
 - [x] **Phase 8B — Surface type infrastructure**: land-sea masks, per-gridpoint albedo and roughness, flat continent generator
 - [x] **Phase 8C — Bucket land surface**: Frierson/Manabe soil energy balance, bucket hydrology (P-E-R), evaporation resistance, blended ocean-land fluxes
 - [x] **Phase 9 — Radiation upgrade**: SW energy conservation, SPEEDY 4-band LW + 2-band SW, diagnostic clouds, CO₂ knob (TOA imbalance: +109 → -7 W/m²)
-- [ ] **Phase 10 — Topography**: prescribed orography, spectral smoothing, surface pressure initialization
+- [x] **Phase 10 — Topography**: prescribed orography, spectral smoothing, surface pressure initialization
 
 ## Tests
 

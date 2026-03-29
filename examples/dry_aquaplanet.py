@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Frierson et al. (2006) simple physics aquaplanet integration.
+"""Dry Frierson aquaplanet integration.
 
 Runs an aquaplanet with gray longwave radiation, dry convective adjustment,
 bulk surface sensible heat flux, Rayleigh boundary-layer drag, and prescribed
-SST.  No atmospheric shortwave absorption (Frierson convention).  Starts from
-an isothermal rest state at T21 L20.
+SST.  No moisture, no shortwave absorption (Frierson 2006 convention).
+Starts from an isothermal rest state at T21 L20.
 
 After a spinup period, accumulates time-averaged zonal-mean fields and prints
 basic diagnostics.
 
 Usage
 -----
-    uv run python examples/simple_physics_aquaplanet.py
-    uv run python examples/simple_physics_aquaplanet.py --days 300 --spinup 100
-    uv run python examples/simple_physics_aquaplanet.py --truncation 42 --dt 600
+    uv run python examples/dry_aquaplanet.py
+    uv run python examples/dry_aquaplanet.py --days 300 --spinup 100
+    uv run python examples/dry_aquaplanet.py --truncation 42 --dt 600
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ jax.config.update("jax_enable_x64", True)
 from notus import (
     EARTH,
     GaussianGrid,
+    PhysicsSuite,
     PrimitiveEquationState,
-    SimplePhysics,
     SpectralTransform,
     ZonalMeanState,
     build_pe_stepper,
@@ -40,8 +40,8 @@ from notus import (
     exponential_filter,
     grid_surface_pressure,
     grid_winds_at_level,
+    physics_suite_initial_state,
     run_simulation,
-    simple_physics_initial_state,
     uniform_sigma_levels,
 )
 
@@ -66,7 +66,7 @@ def run_aquaplanet(
 
     Returns True if the integration completes without blowup.
     """
-    print(f"Simple physics aquaplanet: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
+    print(f"Dry aquaplanet: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
     print(f"  Spinup: {spinup_days} days, averaging: {n_days - spinup_days} days")
 
     if n_days <= spinup_days:
@@ -78,7 +78,7 @@ def run_aquaplanet(
     transform = SpectralTransform(grid, EARTH.radius)
     levels = uniform_sigma_levels(n_levels)
 
-    state, ref_temps, surface_phi = simple_physics_initial_state(
+    state, ref_temps, surface_phi = physics_suite_initial_state(
         transform,
         EARTH,
         levels,
@@ -86,7 +86,7 @@ def run_aquaplanet(
         seed=42,
     )
 
-    forcing = SimplePhysics(transform, EARTH, levels)
+    forcing = PhysicsSuite(transform, EARTH, levels)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,

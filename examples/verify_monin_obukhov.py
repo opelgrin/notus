@@ -12,10 +12,11 @@ coupled mode. This avoids the violent cold-start transient.
 Usage
 -----
     # Default: automatic spinup + coupled run
-    uv run python examples/verify_mo.py
+    uv run python examples/verify_monin_obukhov.py
 
     # From pre-computed files (faster for repeated runs)
-    uv run python examples/verify_mo.py --restart-file restart.npz --q-flux-file qflux.npz
+    uv run python examples/verify_monin_obukhov.py \
+        --restart-file restart.npz --q-flux-file qflux.npz
 """
 
 from __future__ import annotations
@@ -34,13 +35,15 @@ jax.config.update("jax_enable_x64", True)
 from notus import (
     EARTH,
     EARTH_ORBIT,
+    ByrneRadiation,
     GaussianGrid,
     OceanState,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     PrescribedSST,
-    SimplePhysics,
-    SimplePhysicsConfig,
     SlabOceanConfig,
     SpectralTransform,
+    SpeedyRadiation,
     SurfaceLayerConfig,
     SurfaceState,
     build_coupled_pe_stepper,
@@ -57,7 +60,7 @@ from notus import (
 
 def run_one(
     label: str,
-    config: SimplePhysicsConfig,
+    config: PhysicsSuiteConfig,
     n_days: int,
     warm_state: jnp.ndarray,
     q_flux: jnp.ndarray,
@@ -72,7 +75,7 @@ def run_one(
     transform = SpectralTransform(grid, EARTH.radius)
     levels = standard_sigma_levels(n_levels)
 
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
 
     ocean_config = SlabOceanConfig(mixed_layer_depth=50.0)
     sst_init = compute_sst(
@@ -225,18 +228,18 @@ def main() -> None:
         sd, ad = args.spinup_days, args.averaging_days
         print(f"Running prescribed-SST spinup ({sd}d spinup + {ad}d averaging)...")
         if args.scheme == "speedy":
-            base_config = SimplePhysicsConfig(
-                radiation_scheme="speedy",
+            from notus.physics.clouds import CloudConfig
+
+            base_config = PhysicsSuiteConfig(
+                radiation=SpeedyRadiation(clouds=CloudConfig() if args.clouds else None),
                 orbital=EARTH_ORBIT,
-                enable_clouds=args.clouds,
             )
         else:
-            base_config = SimplePhysicsConfig(
-                radiation_scheme="byrne",
-                sw_tau_0=0.22,
+            base_config = PhysicsSuiteConfig(
+                radiation=ByrneRadiation(sw_tau_0=0.22),
                 orbital=EARTH_ORBIT,
             )
-        spinup_forcing = SimplePhysics(transform, EARTH, levels, config=base_config)
+        spinup_forcing = PhysicsSuite(transform, EARTH, levels, config=base_config)
         result = spinup_prescribed_sst(
             state,
             spinup_forcing,
@@ -258,15 +261,15 @@ def main() -> None:
     # Baseline: constant C_D
     print("--- Baseline (constant C_D=0.0015) ---")
     if args.scheme == "speedy":
-        baseline_cfg = SimplePhysicsConfig(
-            radiation_scheme="speedy",
+        from notus.physics.clouds import CloudConfig
+
+        baseline_cfg = PhysicsSuiteConfig(
+            radiation=SpeedyRadiation(clouds=CloudConfig() if args.clouds else None),
             orbital=EARTH_ORBIT,
-            enable_clouds=args.clouds,
         )
     else:
-        baseline_cfg = SimplePhysicsConfig(
-            radiation_scheme="byrne",
-            sw_tau_0=0.22,
+        baseline_cfg = PhysicsSuiteConfig(
+            radiation=ByrneRadiation(sw_tau_0=0.22),
             orbital=EARTH_ORBIT,
         )
     r_base = run_one("BASE", baseline_cfg, n_days, warm_state, q_flux, ref_temps, surface_phi)
@@ -276,16 +279,14 @@ def main() -> None:
     # MO-enabled
     print("--- Monin-Obukhov (Louis 1979, z0=1e-4) ---")
     if args.scheme == "speedy":
-        mo_cfg = SimplePhysicsConfig(
-            radiation_scheme="speedy",
+        mo_cfg = PhysicsSuiteConfig(
+            radiation=SpeedyRadiation(clouds=CloudConfig() if args.clouds else None),
             orbital=EARTH_ORBIT,
-            enable_clouds=args.clouds,
             surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
         )
     else:
-        mo_cfg = SimplePhysicsConfig(
-            radiation_scheme="byrne",
-            sw_tau_0=0.22,
+        mo_cfg = PhysicsSuiteConfig(
+            radiation=ByrneRadiation(sw_tau_0=0.22),
             orbital=EARTH_ORBIT,
             surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
         )

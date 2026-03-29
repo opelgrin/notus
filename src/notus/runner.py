@@ -58,7 +58,7 @@ from typing import overload
 import jax
 import jax.numpy as jnp
 
-from notus.physics.simple_physics import SimplePhysics
+from notus.physics.physics_suite import PhysicsSuite
 from notus.physics.surface import SurfaceState
 from notus.state import PrimitiveEquationState
 
@@ -114,7 +114,7 @@ class SimulationResult:
 
 def _build_atm_one_day(
     step_fn: _AtmStepFn,
-    forcing: SimplePhysics | None,
+    forcing: PhysicsSuite | None,
     seasonal: bool,
     steps_per_day: int,
 ) -> Callable[[_AtmCarry, jnp.ndarray], tuple[_AtmCarry, None]]:
@@ -138,7 +138,7 @@ def _build_atm_one_day(
 
 def _build_coupled_one_day(
     step_fn: _CoupledStepFn,
-    forcing: SimplePhysics | None,
+    forcing: PhysicsSuite | None,
     seasonal: bool,
     steps_per_day: int,
 ) -> Callable[[_CoupledCarry, jnp.ndarray], tuple[_CoupledCarry, None]]:
@@ -173,7 +173,7 @@ def run_simulation(
     dt: float,
     n_days: int,
     *,
-    forcing: SimplePhysics | None = ...,
+    forcing: PhysicsSuite | None = ...,
     days_per_year: float = ...,
     start_day: int = ...,
     on_day: _AtmCallback | None = ...,
@@ -191,7 +191,7 @@ def run_simulation(
     n_days: int,
     *,
     surface: SurfaceState,
-    forcing: SimplePhysics | None = ...,
+    forcing: PhysicsSuite | None = ...,
     days_per_year: float = ...,
     start_day: int = ...,
     on_day: _CoupledCallback | None = ...,
@@ -208,7 +208,7 @@ def run_simulation(
     n_days: int,
     *,
     surface: SurfaceState | None = None,
-    forcing: SimplePhysics | None = None,
+    forcing: PhysicsSuite | None = None,
     days_per_year: float = 0.0,
     start_day: int = 0,
     on_day: _AtmCallback | _CoupledCallback | None = None,
@@ -237,7 +237,7 @@ def run_simulation(
     surface : SurfaceState or None
         Initial surface state.  Must be provided for coupled runs
         (i.e. when ``step_fn`` expects a surface argument).
-    forcing : SimplePhysics or None
+    forcing : PhysicsSuite or None
         Physics forcing object.  Required when ``days_per_year > 0``
         (seasonal forcing) or when running coupled (to sync SST for
         radiation).
@@ -322,7 +322,7 @@ def _run_atm_only(
     init_fn: _AtmInitFn,
     step_fn: _AtmStepFn,
     initial_state: PrimitiveEquationState,
-    forcing: SimplePhysics | None,
+    forcing: PhysicsSuite | None,
     seasonal: bool,
     days_per_year: float,
     steps_per_day: int,
@@ -368,7 +368,7 @@ def _run_coupled(
     step_fn: _CoupledStepFn,
     initial_state: PrimitiveEquationState,
     surface: SurfaceState,
-    forcing: SimplePhysics | None,
+    forcing: PhysicsSuite | None,
     seasonal: bool,
     days_per_year: float,
     steps_per_day: int,

@@ -30,10 +30,13 @@ jax.config.update("jax_enable_x64", True)
 
 from notus import (
     EARTH,
+    ByrneRadiation,
+    FriersonRadiation,
     GaussianGrid,
-    SimplePhysics,
-    SimplePhysicsConfig,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     SpectralTransform,
+    SpeedyRadiation,
     build_pe_stepper,
     exponential_filter,
     grid_surface_pressure,
@@ -55,7 +58,7 @@ from notus.physics.surface import compute_net_surface_flux
 def diagnose_surface_flux(
     state,
     transform: SpectralTransform,
-    forcing: SimplePhysics,
+    forcing: PhysicsSuite,
     surface_pressure: jnp.ndarray,
 ) -> jnp.ndarray:
     """Compute net downward surface energy flux [W/m²].
@@ -93,10 +96,12 @@ def diagnose_surface_flux(
     sst = forcing.prescribed_sst  # (n_lat,)
 
     # --- SW surface flux (consistent with atmospheric absorption) ---
+    rad = cfg.radiation
     n_lat, n_lon = surface_pressure.shape
-    if cfg.sw_tau_0 > 0.0:
+    sw_tau_0 = rad.sw_tau_0 if isinstance(rad, (FriersonRadiation, ByrneRadiation)) else 0.0
+    if sw_tau_0 > 0.0:
         tau_sw: jnp.ndarray | None = None
-        if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+        if isinstance(rad, ByrneRadiation) and state.humidity is not None:
             q_grid_sw = jnp.maximum(
                 jax.vmap(transform.spectral_to_grid)(state.humidity),
                 0.0,
@@ -106,9 +111,9 @@ def diagnose_surface_flux(
                 q_grid_sw,
                 surface_pressure,
                 planet.reference_pressure,
-                sw_tau_0=cfg.sw_tau_0,
-                byrne_sw_a=cfg.byrne_sw_a,
-                byrne_sw_b=cfg.byrne_sw_b,
+                sw_tau_0=rad.sw_tau_0,
+                byrne_sw_a=rad.sw_a,
+                byrne_sw_b=rad.sw_b,
             )
         _, sw_down_sfc = shortwave_heating(
             levels.sigma_half,
@@ -118,8 +123,8 @@ def diagnose_surface_flux(
             planet.solar_constant,
             planet.gravity,
             planet.specific_heat_cp,
-            sw_tau_0=cfg.sw_tau_0,
-            sw_exponent=cfg.sw_exponent,
+            sw_tau_0=rad.sw_tau_0,
+            sw_exponent=rad.sw_exponent,
             delta_s=cfg.delta_s,
             tau_sw_half=tau_sw,
             surface_albedo=planet.surface_albedo,
@@ -128,7 +133,7 @@ def diagnose_surface_flux(
         sw_down_sfc = jnp.zeros((n_lat, n_lon))
 
     # --- LW down at surface from the two-stream radiation solver ---
-    if cfg.radiation_scheme == "byrne" and state.humidity is not None:
+    if isinstance(rad, ByrneRadiation) and state.humidity is not None:
         q_grid = jnp.maximum(
             jax.vmap(transform.spectral_to_grid)(state.humidity),
             0.0,
@@ -138,17 +143,18 @@ def diagnose_surface_flux(
             q_grid,
             surface_pressure,
             planet.reference_pressure,
-            byrne_a=cfg.byrne_a,
-            byrne_b=cfg.byrne_b,
+            byrne_a=rad.a,
+            byrne_b=rad.b,
         )
     else:
+        fri = rad if isinstance(rad, FriersonRadiation) else FriersonRadiation()
         tau_half = longwave_optical_depth(
             levels.sigma_half,
             sin_lat,
-            tau_equator=cfg.tau_equator,
-            tau_pole=cfg.tau_pole,
-            linear_fraction=cfg.linear_fraction,
-            alpha=cfg.alpha,
+            tau_equator=fri.tau_equator,
+            tau_pole=fri.tau_pole,
+            linear_fraction=fri.linear_fraction,
+            alpha=fri.alpha,
         )
     lw_down = lw_down_surface(t_grid, tau_half)
 
@@ -215,10 +221,14 @@ def run_diagnose_qflux(
     )
 
     if scheme == "speedy":
-        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
+        from notus.physics.clouds import CloudConfig
+
+        config = PhysicsSuiteConfig(
+            radiation=SpeedyRadiation(clouds=CloudConfig() if clouds else None),
+        )
     else:
-        config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+        config = PhysicsSuiteConfig(radiation=ByrneRadiation(sw_tau_0=0.22))
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,

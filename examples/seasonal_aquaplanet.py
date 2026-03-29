@@ -30,10 +30,13 @@ jax.config.update("jax_enable_x64", True)
 from notus import (
     EARTH,
     EARTH_ORBIT,
+    ByrneRadiation,
+    FriersonRadiation,
     GaussianGrid,
-    SimplePhysics,
-    SimplePhysicsConfig,
+    PhysicsSuite,
+    PhysicsSuiteConfig,
     SpectralTransform,
+    SpeedyRadiation,
     build_pe_stepper,
     exponential_filter,
     grid_winds_at_level,
@@ -85,20 +88,20 @@ def run_seasonal_aquaplanet(
     )
 
     if scheme == "speedy":
-        config = SimplePhysicsConfig(
-            radiation_scheme="speedy",
+        from notus.physics.clouds import CloudConfig
+
+        config = PhysicsSuiteConfig(
+            radiation=SpeedyRadiation(clouds=CloudConfig() if clouds else None),
             orbital=EARTH_ORBIT,
-            enable_clouds=clouds,
         )
     elif scheme == "byrne":
-        config = SimplePhysicsConfig(
-            radiation_scheme="byrne",
-            sw_tau_0=0.22,
+        config = PhysicsSuiteConfig(
+            radiation=ByrneRadiation(sw_tau_0=0.22),
             orbital=EARTH_ORBIT,
         )
     else:
-        config = SimplePhysicsConfig(radiation_scheme="frierson", orbital=EARTH_ORBIT)
-    forcing = SimplePhysics(transform, EARTH, levels, config=config)
+        config = PhysicsSuiteConfig(radiation=FriersonRadiation(), orbital=EARTH_ORBIT)
+    forcing = PhysicsSuite(transform, EARTH, levels, config=config)
     filt = exponential_filter(transform.arrays, dt)
 
     init_fn, step_fn = build_pe_stepper(

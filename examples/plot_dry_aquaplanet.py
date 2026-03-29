@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generate Frierson aquaplanet diagnostic visualizations.
+"""Generate dry Frierson aquaplanet diagnostic visualizations.
 
-Runs a simple physics integration and produces diagnostic plots:
+Runs a dry aquaplanet integration and produces diagnostic plots:
 
 1. Zonal-mean zonal wind U(lat, sigma)
 2. Zonal-mean temperature T(lat, sigma)
@@ -11,8 +11,8 @@ Runs a simple physics integration and produces diagnostic plots:
 
 Usage
 -----
-    uv run python examples/plot_simple_physics.py
-    uv run python examples/plot_simple_physics.py --truncation 42 --days 600 --dt 600
+    uv run python examples/plot_dry_aquaplanet.py
+    uv run python examples/plot_dry_aquaplanet.py --truncation 42 --days 600 --dt 600
 """
 
 from __future__ import annotations
@@ -31,17 +31,17 @@ jax.config.update("jax_enable_x64", True)
 from notus import (
     EARTH,
     GaussianGrid,
+    PhysicsSuite,
     PrimitiveEquationState,
     SigmaLevels,
-    SimplePhysics,
     SpectralTransform,
     ZonalMeanState,
     build_pe_stepper,
     compute_zonal_mean_state,
     exponential_filter,
     grid_surface_pressure,
+    physics_suite_initial_state,
     run_simulation,
-    simple_physics_initial_state,
     uniform_sigma_levels,
 )
 
@@ -68,7 +68,7 @@ def run_integration(
     GaussianGrid,
     SigmaLevels,
 ]:
-    """Run a simple physics integration and return diagnostics for plotting."""
+    """Run a physics suite integration and return diagnostics for plotting."""
     print(
         f"Running T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days "
         f"({spinup_days} spinup + {n_days - spinup_days} averaging)"
@@ -78,7 +78,7 @@ def run_integration(
     transform = SpectralTransform(grid, EARTH.radius)
     levels = uniform_sigma_levels(n_levels)
 
-    state, ref_temps, surface_phi = simple_physics_initial_state(
+    state, ref_temps, surface_phi = physics_suite_initial_state(
         transform,
         EARTH,
         levels,
@@ -86,7 +86,7 @@ def run_integration(
         seed=42,
     )
 
-    forcing = SimplePhysics(transform, EARTH, levels)
+    forcing = PhysicsSuite(transform, EARTH, levels)
     filt = exponential_filter(transform.arrays, dt)
     init_fn, step_fn = build_pe_stepper(
         transform=transform,
@@ -288,7 +288,7 @@ def main() -> None:
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=600.0, help="Timestep [s]")
-    parser.add_argument("--output", type=str, default="simple_physics.png", help="Output filename")
+    parser.add_argument("--output", type=str, default="dry_aquaplanet.png", help="Output filename")
     parser.add_argument("--dpi", type=int, default=200, help="Output DPI")
     args = parser.parse_args()
 

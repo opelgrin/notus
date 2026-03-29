@@ -1,4 +1,4 @@
-"""Tests for the simple physics forcing (Frierson et al. 2006).
+"""Tests for the physics suite forcing (Frierson et al. 2006).
 
 Unit tests verify individual components (radiation, convection, SST, surface flux).
 Integration tests verify stability and physical plausibility of short runs.
@@ -13,10 +13,12 @@ import pytest
 
 from notus.constants import EARTH
 from notus.grid import GaussianGrid
-from notus.initial_conditions import simple_physics_initial_state
+from notus.initial_conditions import physics_suite_initial_state
 from notus.operators import exponential_filter
 from notus.physics.convection import dry_convective_adjustment
+from notus.physics.physics_suite import PhysicsSuite, PhysicsSuiteConfig
 from notus.physics.radiation import (
+    FriersonRadiation,
     byrne_longwave_optical_depth,
     byrne_shortwave_optical_depth,
     longwave_heating,
@@ -26,7 +28,6 @@ from notus.physics.radiation import (
     speedy_lw_band_fractions,
     speedy_shortwave_heating,
 )
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.surface import PrescribedSST, compute_sst, surface_sensible_heat_flux
 from notus.state import PrimitiveEquationState
 from notus.timestepping.imex import build_pe_stepper
@@ -66,9 +67,9 @@ def levels_module() -> SigmaLevels:
 def sp_forcing(
     t21_transform: SpectralTransform,
     levels: SigmaLevels,
-) -> SimplePhysics:
-    """Simple physics forcing at T21."""
-    return SimplePhysics(t21_transform, EARTH, levels)
+) -> PhysicsSuite:
+    """Physics suite forcing at T21."""
+    return PhysicsSuite(t21_transform, EARTH, levels)
 
 
 @pytest.fixture
@@ -675,7 +676,7 @@ class TestSurfaceSensibleHeatFlux:
 
     def test_polar_wind_regularization_bounds_flux(self) -> None:
         """Near-polar wind reconstruction should be finite and cap-amplified."""
-        # Mimic recovery of (u, v) from cosine-weighted winds in SimplePhysics.
+        # Mimic recovery of (u, v) from cosine-weighted winds in PhysicsSuite.
         u_cos = jnp.array([[1.0e-3], [1.0e-3]])  # (n_lat=2, n_lon=1)
         v_cos = jnp.zeros_like(u_cos)
         cos_lat = jnp.array([1.0, 1.0e-12])[:, None]
@@ -837,16 +838,16 @@ class TestDryConvectiveAdjustment:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: SimplePhysics forcing
+# Unit tests: PhysicsSuite forcing
 # ---------------------------------------------------------------------------
 
 
-class TestSimplePhysicsForcing:
-    """Verify SimplePhysics satisfies Forcing protocol and basic properties."""
+class TestPhysicsSuiteForcing:
+    """Verify PhysicsSuite satisfies Forcing protocol and basic properties."""
 
     def test_output_shape(
         self,
-        sp_forcing: SimplePhysics,
+        sp_forcing: PhysicsSuite,
         isothermal_state: tuple[PrimitiveEquationState, jnp.ndarray],
     ) -> None:
         """Output should have same shape as input state."""
@@ -859,17 +860,17 @@ class TestSimplePhysicsForcing:
 
     def test_zero_surface_pressure_tendency(
         self,
-        sp_forcing: SimplePhysics,
+        sp_forcing: PhysicsSuite,
         isothermal_state: tuple[PrimitiveEquationState, jnp.ndarray],
     ) -> None:
-        """Simple physics should not produce surface pressure tendencies."""
+        """Physics suite should not produce surface pressure tendencies."""
         state, ps_grid = isothermal_state
         tendencies = sp_forcing(state, ps_grid)
         np.testing.assert_allclose(tendencies.log_surface_pressure, 0.0, atol=1e-30)
 
     def test_rayleigh_drag_only_in_boundary_layer(
         self,
-        sp_forcing: SimplePhysics,
+        sp_forcing: PhysicsSuite,
         isothermal_state: tuple[PrimitiveEquationState, jnp.ndarray],
         levels: SigmaLevels,
     ) -> None:
@@ -892,7 +893,7 @@ class TestSimplePhysicsForcing:
 
     def test_nonzero_temperature_tendency(
         self,
-        sp_forcing: SimplePhysics,
+        sp_forcing: PhysicsSuite,
         isothermal_state: tuple[PrimitiveEquationState, jnp.ndarray],
     ) -> None:
         """An isothermal atmosphere should produce nonzero temperature tendencies."""
@@ -902,10 +903,10 @@ class TestSimplePhysicsForcing:
 
     def test_jit_compatible(
         self,
-        sp_forcing: SimplePhysics,
+        sp_forcing: PhysicsSuite,
         isothermal_state: tuple[PrimitiveEquationState, jnp.ndarray],
     ) -> None:
-        """SimplePhysics should be JIT-compilable."""
+        """PhysicsSuite should be JIT-compilable."""
         state, ps_grid = isothermal_state
         tendencies = jax.jit(sp_forcing)(state, ps_grid)
         assert tendencies.temperature.shape == state.temperature.shape
@@ -917,7 +918,7 @@ class TestSimplePhysicsForcing:
 
 
 @pytest.mark.slow
-class TestSimplePhysicsIntegration:
+class TestPhysicsSuiteIntegration:
     """Short integration to verify stability and physical plausibility."""
 
     @pytest.fixture(scope="module")
@@ -930,7 +931,7 @@ class TestSimplePhysicsIntegration:
         dt = 600.0
         n_steps = int(30 * 86400 / dt)
 
-        state, ref_temps, surface_phi = simple_physics_initial_state(
+        state, ref_temps, surface_phi = physics_suite_initial_state(
             t21_transform_module,
             EARTH,
             levels_module,
@@ -939,7 +940,7 @@ class TestSimplePhysicsIntegration:
             seed=42,
         )
 
-        forcing = SimplePhysics(t21_transform_module, EARTH, levels_module)
+        forcing = PhysicsSuite(t21_transform_module, EARTH, levels_module)
         spectral_filter = exponential_filter(t21_transform_module.arrays, dt)
 
         init_fn, step_fn = build_pe_stepper(
@@ -1211,15 +1212,15 @@ class TestSpeedyShortwaveHeating:
         np.testing.assert_allclose(residual, 0.0, atol=1e-6)
 
 
-class TestSpeedyConfigValidation:
-    """Verify SPEEDY scheme config."""
+class TestRadiationConfigValidation:
+    """Verify radiation config construction."""
 
-    def test_speedy_config_accepted(self) -> None:
-        """'speedy' should be a valid radiation_scheme."""
-        cfg = SimplePhysicsConfig(radiation_scheme="speedy")
-        assert cfg.radiation_scheme == "speedy"
+    def test_frierson_config_accepted(self) -> None:
+        """FriersonRadiation should be a valid radiation config."""
+        cfg = PhysicsSuiteConfig(radiation=FriersonRadiation())
+        assert isinstance(cfg.radiation, FriersonRadiation)
 
-    def test_invalid_scheme_rejected(self) -> None:
-        """Invalid scheme should raise ValueError."""
-        with pytest.raises(ValueError, match="radiation_scheme"):
-            SimplePhysicsConfig(radiation_scheme="invalid")
+    def test_default_config_uses_frierson(self) -> None:
+        """Default PhysicsSuiteConfig should use FriersonRadiation."""
+        cfg = PhysicsSuiteConfig()
+        assert isinstance(cfg.radiation, FriersonRadiation)

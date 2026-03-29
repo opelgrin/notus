@@ -126,8 +126,8 @@ Gray radiation, dry convective adjustment, and bulk surface flux — following F
 - Prescribed SST: Frierson Gaussian profile T_s(phi) = 271 + 29 exp(-0.5(phi/26deg)^2)
 - Rayleigh boundary-layer drag (same formulation as Held-Suarez)
 - No atmospheric shortwave absorption (Frierson convention: SW heats the surface only)
-- `SimplePhysicsConfig` dataclass for all scheme parameters
-- `SimplePhysics` forcing implementing the `Forcing` protocol (drop-in alternative to Held-Suarez)
+- `PhysicsSuiteConfig` dataclass for all scheme parameters
+- `PhysicsSuite` forcing implementing the `Forcing` protocol (drop-in alternative to Held-Suarez)
 - Aquaplanet example script and five-panel diagnostic visualization
 
 **Validation:**
@@ -151,7 +151,7 @@ Add water vapor as a prognostic tracer with moist physics parameterizations.
 - Large-scale condensation: implicit Frierson (2006) eq. 21 scheme, iterative, energy-conserving per level (cp·ΔT + L·Δq = 0)
 - Simplified Betts-Miller convection (Frierson 2007): parcel ascent with level of zero buoyancy (LZB), deep/shallow distinction via Pq/PT integrals, qref formulation for shallow convection, enthalpy-conserving ΔT offset applied only within the convective column
 - Bulk aerodynamic surface latent heat flux (evaporation)
-- `SimplePhysics` extended with automatic moist/dry pathway selection
+- `PhysicsSuite` extended with automatic moist/dry pathway selection
 - `moist_aquaplanet_initial_state` with RH-based humidity profile
 - Grid-space humidity clipping after each time step to prevent accumulation of negative values from spectral Gibbs ringing (see lessons learned)
 - Backward-compatible: dry states (humidity=None) work identically to Phase 5
@@ -188,7 +188,7 @@ Virtual temperature in the semi-implicit solver, plus implicit treatment of stif
 *Implicit surface fluxes:*
 - Surface sensible heat flux, latent heat flux, and Rayleigh friction treated with backward Euler: `X_new = (X + dt/τ · X_ref) / (1 + dt/τ)`
 - Unconditionally stable regardless of wind speed, drag coefficient, or dt
-- Applied after the IMEX step via `SimplePhysics.apply_implicit(state, dt_implicit)`
+- Applied after the IMEX step via `PhysicsSuite.apply_implicit(state, dt_implicit)`
 - `build_pe_stepper` accepts `implicit_physics` callable for operator splitting
 
 *Implicit Betts-Miller convection:*
@@ -197,7 +197,7 @@ Virtual temperature in the semi-implicit solver, plus implicit treatment of stif
 - Unconditionally stable regardless of dt/tau_bm ratio
 - Eliminates the computational mode excitation that previously limited dt
 
-*All implicit physics enabled by default* via `SimplePhysicsConfig(implicit_surface=True)`. Explicit path retained for debugging and comparison.
+*All implicit physics enabled by default* via `PhysicsSuiteConfig(implicit_surface=True)`. Explicit path retained for debugging and comparison.
 
 **What was NOT implemented (and why):**
 - Vorticity correction and moist κ: ~3% combined effect, deferred.
@@ -236,7 +236,7 @@ Stability-dependent surface fluxes replacing the constant drag coefficient, plus
 - Louis (1979) stability functions: bulk Richardson number, analytic correction factors for momentum and heat transfer coefficients
 - Neutral coefficients from log-profile: `C_DN = (k/ln(z/z0))²`, separate z0 for momentum and heat
 - `SurfaceLayerConfig` dataclass: roughness lengths, Louis parameters, Ri clamp
-- Wired into `SimplePhysics` (explicit and implicit paths) and coupled slab ocean stepper
+- Wired into `PhysicsSuite` (explicit and implicit paths) and coupled slab ocean stepper
 
 *Slab ocean coupling improvements:*
 - Real downward LW flux from the two-stream radiation solver (`lw_down_surface()`), replacing crude `σT⁴(1-exp(-0.5))` approximation that underestimated LW_down by 60%
@@ -251,7 +251,7 @@ Stability-dependent surface fluxes replacing the constant drag coefficient, plus
 - 28 unit tests for boundary layer module (362 total, all passing)
 - 100-day slab ocean aquaplanet stable with MO at dt=900 (warm start + diagnosed Q-flux)
 - MO produces physically correct differences from baseline: weaker surface fluxes (C_H≈0.0007 vs 0.0015), warmer equatorial SST, more moisture, stronger jets
-- `verify_mo.py` is fully self-contained: runs spinup + Q-flux diagnosis + baseline + MO comparison with zero external files
+- `verify_monin_obukhov.py` is fully self-contained: runs spinup + Q-flux diagnosis + baseline + MO comparison with zero external files
 
 **Lessons learned:**
 - Cold-starting a coupled slab ocean integration from an isothermal atmosphere creates violent radiative transients (T spike >500 K within days). The proper procedure is `spinup_prescribed_sst()` followed by coupled mode — standard practice in real GCMs but easy to forget in an idealized model.
@@ -305,7 +305,7 @@ Frierson (2006) / Manabe (1969) single-layer soil energy balance with bucket hyd
 **Lessons learned:**
 - The implicit atmospheric decay at the lowest level MUST be applied at land points (decaying toward T_land), not just ocean. Without it, the lowest-level temperature at land points is unconstrained and creates dynamical instability from large air-surface temperature contrasts within 2-3 days.
 - Soil heat capacity of 1×10⁶ J/(m²·K) (thin dry soil) is too low for stability at T21 with dt=900s — the land heats rapidly when the bucket drains and evaporative cooling vanishes. Default of 4×10⁶ (~2 m moist soil) provides stable integration while maintaining realistic diurnal/synoptic response.
-- The explicit LW radiation in `SimplePhysics.__call__` uses `self.sst` as the surface emission boundary. For coupled land runs, this means LW radiation over land uses the ocean SST rather than T_land. The error is modest (~10 W/m² for a 15 K difference) because the land energy balance in the coupled post-step uses the correct T_land. A future improvement would pass the blended surface temperature through `forcing.sst`, but this requires updating it every timestep (not just per-day), which is incompatible with `jax.lax.scan`.
+- The explicit LW radiation in `PhysicsSuite.__call__` uses `self.sst` as the surface emission boundary. For coupled land runs, this means LW radiation over land uses the ocean SST rather than T_land. The error is modest (~10 W/m² for a 15 K difference) because the land energy balance in the coupled post-step uses the correct T_land. A future improvement would pass the blended surface temperature through `forcing.sst`, but this requires updating it every timestep (not just per-day), which is incompatible with `jax.lax.scan`.
 - The bucket drains significantly over 10 days (0.11 → 0.01 m) as evaporation exceeds precipitation during the cold-start transient. In equilibrium, the precipitation-evaporation balance should maintain the bucket near its critical depth.
 
 ## Phase 9 — Radiation Upgrade (complete)
@@ -343,7 +343,7 @@ Replaced the semi-gray Byrne scheme (which had a -145 W/m² global energy imbala
 - `CloudConfig` dataclass with SPEEDY defaults, `enable_clouds=True/False` flag
 
 *Forcing protocol cleanup:*
-- `build_coupled_pe_stepper` and `spinup_prescribed_sst` now take `SimplePhysics` directly instead of the `Forcing` protocol with `hasattr` guards and `Any` casts
+- `build_coupled_pe_stepper` and `spinup_prescribed_sst` now take `PhysicsSuite` directly instead of the `Forcing` protocol with `hasattr` guards and `Any` casts
 - Removed ~30 lines of defensive checks that obscured the actual requirements
 - `build_pe_stepper` retains `Forcing` protocol (genuinely works with HeldSuarez)
 
@@ -366,17 +366,31 @@ Replaced the semi-gray Byrne scheme (which had a -145 W/m² global energy imbala
 - The 4-band LW with temperature-dependent fractions is the key to energy balance. The window band shifts emission toward transparent wavelengths at warm surface temperatures, providing OLR ≈ absorbed SW without fine-tuning. Single-band schemes cannot achieve this because they have no spectral degree of freedom.
 - The SPEEDY near-IR H₂O absorption (`abswv2=15.0`) is 680× stronger than visible (`abswv1=0.022`). Nearly all humidity-dependent SW absorption happens in the near-IR band, which is only 5% of solar irradiance. A single-band SW scheme with `byrne_sw_b=0.2` vastly underestimates this effect.
 - Diagnostic clouds from RH alone (without precipitation) still provide meaningful LW greenhouse effect. SW cloud albedo requires the precipitation contribution for realistic values — this will improve when precipitation is threaded through from the moist physics.
-- The `Forcing` protocol was too narrow for the coupled stepper, which needs radiation config, SST, day_of_year, k_v, and implicit physics. Typing as `SimplePhysics` directly is more honest and eliminates fragile duck-typing.
+- The `Forcing` protocol was too narrow for the coupled stepper, which needs radiation config, SST, day_of_year, k_v, and implicit physics. Typing as `PhysicsSuite` directly is more honest and eliminates fragile duck-typing.
 
-## Phase 10 — Topography
+## Phase 10 — Topography (complete)
 
 Prescribed orography and its dynamical/physical effects.
 
-**Plan:**
-- Prescribed surface geopotential z_s(lat, lon) fed into the divergence tendency (∇²(g·z_s) term already wired in the dynamical core)
-- Spectral representation of orography with appropriate smoothing/filtering
-- Surface pressure initialization consistent with orography
-- Orographic effects on precipitation, flow deflection, rain shadows
+**What was built:**
+- Idealized topography generators in `topography.py`: `gaussian_mountain` (isolated bell), `zonal_ridge` (zonally symmetric), `sinusoidal_mountains` (wavenumber-k chain for stationary Rossby wave tests)
+- Spectral smoothing of orography via `smooth_orography()`: Lanczos σ-factor and exponential taper methods with configurable order, applied once to initial surface geopotential to suppress Gibbs ringing
+- Hydrostatic surface pressure initialization via `orographic_log_surface_pressure()`: computes ln(ps/p₀) = −Φ_s/(R·T_ref) in grid space and transforms to spectral, ensuring pressure field is consistent with terrain
+- All functions return spectral arrays drop-in compatible with `build_pe_stepper`
+
+**Validation:**
+- 25 unit tests: roundtrip height recovery, peak location, zonal symmetry (spectral m=0 check), wavenumber structure via FFT, polar vanishing, global mean, smoothing properties (global mean preservation, high-wavenumber damping, Gibbs reduction, order monotonicity)
+- 8 dry integration tests: 5-day Gaussian and sinusoidal mountain runs with stability, temperature bounds, surface pressure reduction over peaks, mass conservation (<0.01%), energy conservation (<1%)
+- 6 moist integration tests: 10-day moist aquaplanet with mountain, confirming precipitation develops, is non-negative, and is spatially modulated by the mountain (zonal symmetry broken)
+- All 443 non-slow tests pass
+
+**Orographic precipitation — resolved, no parameterization needed:**
+Surveying comparable idealized GCMs (Isca, GFDL idealized moist, PlaSim, SPEEDY/JCM), the standard approach is to rely on resolved dynamics for orographic precipitation. The ∇²(g·z_s) divergence tendency plus sigma-coordinate lifting naturally produces spatially varying precipitation patterns around mountains. SPEEDY's "orographic correction" (lapse-rate T/q adjustment) is SPEEDY-specific tuning, not standard practice. Our moist integration confirms the resolved dynamics are sufficient: precipitation develops with clear spatial modulation by the mountain without explicit orographic physics.
+
+**Lessons learned:**
+- Spectral representation of sharp topography requires explicit smoothing beyond the inherent truncation. The Lanczos σ-factor (sinc taper) is simple, preserves the global mean exactly (σ(n=0)=1), and effectively suppresses Gibbs undershoots.
+- Surface pressure initialization is essential — starting with uniform ps over a 2500 m mountain creates an immediate hydrostatic imbalance that generates spurious gravity waves. The hypsometric adjustment is a simple one-liner but critical for clean integrations.
+- At T21 resolution, a 2500 m Gaussian mountain (half-width 20°) is well-resolved and the model remains stable for 10+ days in both dry and moist configurations with dt=600s.
 
 ## Phase 11+ — Future Wishlist
 

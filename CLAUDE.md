@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Notus?
 
-Notus is a spectral-transform atmospheric General Circulation Model (GCM) written from scratch in Python/JAX. It solves the primitive equations on a rotating sphere using spherical harmonics, targeting standard benchmarks (Held-Suarez, Jablonowski-Williamson) and aquaplanet configurations with moisture, radiation, and slab ocean coupling.
+Notus is a spectral-transform atmospheric General Circulation Model (GCM) written from scratch in Python/JAX. It solves the primitive equations on a rotating sphere using spherical harmonics, targeting standard benchmarks (Held-Suarez, Jablonowski-Williamson) and aquaplanet configurations with moisture, radiation, slab ocean coupling, bucket land surface, and idealized topography.
 
 ## Commands
 
@@ -49,17 +49,21 @@ The model follows a standard spectral-transform GCM pipeline: grid-point physics
 - `PrimitiveEquationState` / `ShallowWaterState` — immutable JAX pytree dataclasses holding spectral coefficients
 - `SigmaLevels` — vertical sigma coordinate definition
 - `PlanetaryConstants` — planet parameters (Earth predefined as `EARTH`)
-- `Forcing` protocol — physics interface; implementations: `HeldSuarez`, `SimplePhysics`
+- `Forcing` protocol — physics interface; implementations: `HeldSuarez`, `PhysicsSuite`
 - `SurfaceState` — wraps `OceanState` (slab ocean SST) + optional `LandState` (soil temperature, bucket depth)
+- `CoupledStepper` — couples atmosphere, slab ocean, and optional bucket land into a single integration
 - `build_pe_stepper()` — factory that wires dynamics + physics + semi-implicit solver into a single `step(state, dt)` callable
-- `build_coupled_pe_stepper()` — extends `build_pe_stepper` with slab ocean and optional bucket land surface
+- `build_coupled_pe_stepper()` — extends `build_pe_stepper` with slab ocean, optional bucket land surface, and surface geopotential for topography
 
 **Module layout under `src/notus/`:**
 - `operators/` — spectral operators (Laplacian, derivatives, filtering, wind reconstruction)
 - `dynamics/` — tendency computations for shallow water and primitive equations
 - `physics/` — parameterizations (radiation [Frierson/Byrne/SPEEDY multi-band], clouds, convection, moisture, boundary layer, surface/slab ocean, bucket land, solar geometry)
-- `timestepping/` — IMEX leapfrog, semi-implicit Helmholtz solvers, spinup utilities
+- `timestepping/` — IMEX leapfrog, semi-implicit Helmholtz solvers, coupled stepper, spinup utilities
 - `vertical/` — sigma coordinate, vertical finite-difference operators
+- `topography.py` — idealized orography generators (Gaussian mountain, zonal ridge, sinusoidal), spectral smoothing (Lanczos/exponential), surface pressure initialization
+- `runner.py` — simulation runner interface (`run_simulation`, `SimulationResult`)
+- `io.py` — restart file save/load utilities
 
 All public API is re-exported from `__init__.py`.
 
