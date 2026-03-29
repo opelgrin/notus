@@ -378,6 +378,6 @@ equilibrium.
   aquaplanet moist GCM. Part I: Static stability and eddy scale. *J. Atmos. Sci.*, 63,
   2548-2566.
 - Molteni, F. (2003). Atmospheric simulations using a GCM with simplified physical
-  parameterizations. I: Model climatology and variability in multi-decadal experiments.
+  parametrizations. I: Model climatology and variability in multi-decadal experiments.
   *Climate Dyn.*, 20, 175-191.
 - Hartmann, D. L. (2016). *Global Physical Climatology*. 2nd ed. Elsevier.

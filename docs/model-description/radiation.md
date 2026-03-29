@@ -243,5 +243,5 @@ where $\epsilon_s = 0.98$ is the surface emissivity and $\sigma_\text{SB} = 5.67
   of climates: Convective quasi-equilibrium theory and idealized simulations. *J. Climate*,
   26, 4000-4016.
 - Molteni, F. (2003). Atmospheric simulations using a GCM with simplified physical
-  parameterizations. I: Model climatology and variability in multi-decadal experiments.
+  parametrizations. I: Model climatology and variability in multi-decadal experiments.
   *Climate Dyn.*, 20, 175-191.

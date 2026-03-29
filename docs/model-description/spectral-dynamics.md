@@ -223,4 +223,4 @@ diffusion ($p = 4$) with a 2-hour $e$-folding time at the truncation wavenumber.
 - Simmons, A. J. and Burridge, D. M. (1981). An energy and angular-momentum conserving
   vertical finite-difference scheme and hybrid vertical coordinates. *Mon. Wea. Rev.*, 109,
   758-766.
-- Durran, D. R. (2010). *Numerical Methods for Fluid Dynamics*. 2nd ed. Springer.
+- Durran, D. R. (2010). *Numerical Methods for Fluid Dynamics: With Applications to Geophysics*. 2nd ed. Springer.
