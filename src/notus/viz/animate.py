@@ -98,14 +98,21 @@ def animate_field(
         msg = f"Unknown plot_fn: {plot_fn!r}. Use 'map' or 'zonal'."
         raise ValueError(msg)
 
+    # Build stable plotting kwargs and only create a single colorbar once.
+    # Repeated colorbar creation on every frame shrinks the main axes.
+    base_plot_kwargs = dict(plot_kwargs)
+    add_colorbar = bool(base_plot_kwargs.get("add_colorbar", True))
+    base_plot_kwargs["add_colorbar"] = add_colorbar
+
     # Create figure from first frame
-    plot_kwargs["add_colorbar"] = plot_kwargs.get("add_colorbar", True)
-    fig, ax = plotter(frame_list[0], **plot_kwargs)
+    fig, ax = plotter(frame_list[0], **base_plot_kwargs)
     _set_frame_title(ax, title_fmt, 0, coord_values[0])
 
     def _update(i: int) -> list[Any]:
         ax.clear()
-        plotter(frame_list[i], ax=ax, **plot_kwargs)
+        frame_plot_kwargs = dict(base_plot_kwargs)
+        frame_plot_kwargs["add_colorbar"] = False
+        plotter(frame_list[i], ax=ax, **frame_plot_kwargs)
         _set_frame_title(ax, title_fmt, i, coord_values[i])
         return []
 
