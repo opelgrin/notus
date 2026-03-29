@@ -318,6 +318,22 @@ class ZonalMeanState:
         return 0.5 * (self.u_prime_sq + self.v_prime_sq)
 
 
+def _zm_flatten(
+    zm: ZonalMeanState,
+) -> tuple[tuple[jnp.ndarray, ...], None]:
+    return (
+        (zm.u, zm.v, zm.temperature, zm.u_prime_sq, zm.v_prime_sq, zm.uv_prime, zm.vt_prime),
+        None,
+    )
+
+
+def _zm_unflatten(_aux: None, children: tuple[jnp.ndarray, ...]) -> ZonalMeanState:
+    return ZonalMeanState(*children)
+
+
+jax.tree_util.register_pytree_node(ZonalMeanState, _zm_flatten, _zm_unflatten)
+
+
 def compute_zonal_mean_state(
     state: PrimitiveEquationState,
     transform: SpectralTransform,
