@@ -123,7 +123,7 @@ def run_integration(
     w_sum = float(np.sum(weights))
     blew_up = False
 
-    def on_day(day: int, curr: PrimitiveEquationState) -> None:
+    def on_day(day: int, curr: PrimitiveEquationState, _diags: object) -> None:
         nonlocal n_samples, accum, blew_up
 
         # Global-mean temperature (all days, for timeseries)

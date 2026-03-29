@@ -50,7 +50,6 @@ Coupled slab-ocean with seasonal cycle::
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -81,7 +80,7 @@ _AtmStepFn = Callable[
     [PrimitiveEquationState, PrimitiveEquationState],
     tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics],
 ]
-_AtmCallback = Callable[..., object]
+_AtmCallback = Callable[[int, PrimitiveEquationState, PhysicsDiagnostics], object]
 
 _CoupledInitFn = Callable[
     [PrimitiveEquationState, SurfaceState],
@@ -91,7 +90,7 @@ _CoupledStepFn = Callable[
     [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
     tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics],
 ]
-_CoupledCallback = Callable[..., object]
+_CoupledCallback = Callable[[int, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics], object]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -274,8 +273,8 @@ def run_simulation(
         - **Atmosphere-only**: ``on_day(day, state, diags)``
         - **Coupled**: ``on_day(day, state, surface, diags)``
 
-        For backward compatibility, callbacks with fewer parameters
-        (omitting ``diags``) are also supported.
+        where ``diags`` is a :class:`~notus.physics.forcing.PhysicsDiagnostics`
+        with radiation fluxes, precipitation, etc.
 
         Return values are collected in ``SimulationResult.diagnostics``.
         Return ``None`` to skip collecting for that day.
@@ -321,7 +320,7 @@ def run_simulation(
             steps_per_day,
             start_day,
             n_days,
-            on_day,
+            on_day,  # type: ignore[arg-type]
             verbose,
             log_interval,
         )
@@ -335,7 +334,7 @@ def run_simulation(
         steps_per_day,
         start_day,
         n_days,
-        on_day,
+        on_day,  # type: ignore[arg-type]
         verbose,
         log_interval,
     )
@@ -432,16 +431,6 @@ def _run_coupled(
     )
 
 
-def _callback_nparams(fn: Callable[..., object]) -> int:
-    """Count the number of positional parameters in a callback."""
-    sig = inspect.signature(fn)
-    return sum(
-        1
-        for p in sig.parameters.values()
-        if p.kind in {p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD} and p.default is p.empty
-    )
-
-
 def _invoke_atm_callback(
     on_day: _AtmCallback | None,
     day: int,
@@ -452,8 +441,7 @@ def _invoke_atm_callback(
     """Invoke atmosphere-only callback and collect non-None results."""
     if on_day is None:
         return
-    n = _callback_nparams(on_day)
-    result = on_day(day, state, diags) if n >= 3 else on_day(day, state)  # noqa: PLR2004
+    result = on_day(day, state, diags)
     if result is not None:
         diagnostics.append(result)
 
@@ -469,10 +457,7 @@ def _invoke_coupled_callback(
     """Invoke coupled callback and collect non-None results."""
     if on_day is None:
         return
-    n = _callback_nparams(on_day)
-    result = (
-        on_day(day, state, surface, diags) if n >= 4 else on_day(day, state, surface)  # noqa: PLR2004
-    )
+    result = on_day(day, state, surface, diags)
     if result is not None:
         diagnostics.append(result)
 

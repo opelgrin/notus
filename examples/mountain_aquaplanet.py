@@ -182,7 +182,7 @@ def run_mountain_aquaplanet(
     accum_precip: np.ndarray | None = None
     blew_up = False
 
-    def on_day(day: int, curr_state: PrimitiveEquationState) -> None:
+    def on_day(day: int, curr_state: PrimitiveEquationState, _diags: object) -> None:
         nonlocal n_averaging_samples, accum_u, accum_t, accum_eke, accum_precip, blew_up
 
         t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr_state.temperature))
