@@ -35,7 +35,7 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.dynamics.primitive_equations import primitive_equation_tendencies
-from notus.physics.forcing import Forcing
+from notus.physics.forcing import Forcing, ImplicitForcing, MoistForcing
 from notus.state import PrimitiveEquationState
 from notus.timestepping.semi_implicit_pe import (
     build_pe_semi_implicit_config,
@@ -212,17 +212,20 @@ def _detect_forcing_capabilities(
     Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None,
     np.ndarray | None,
 ]:
-    """Auto-detect implicit physics and reference humidity from forcing.
+    """Detect implicit physics and reference humidity from forcing.
 
-    If the forcing object exposes ``apply_implicit`` and/or
-    ``compute_reference_humidity``, they are extracted automatically.
+    Uses :class:`~notus.physics.forcing.ImplicitForcing` and
+    :class:`~notus.physics.forcing.MoistForcing` protocols to check
+    for optional capabilities on the forcing object.
     """
     implicit_physics: Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None = (
-        getattr(forcing, "apply_implicit", None)
+        None
     )
+    if isinstance(forcing, ImplicitForcing):
+        implicit_physics = forcing.apply_implicit
 
     reference_humidity: np.ndarray | None = None
-    if forcing is not None and hasattr(forcing, "compute_reference_humidity"):
+    if isinstance(forcing, MoistForcing):
         reference_humidity = forcing.compute_reference_humidity(t_ref)
 
     return implicit_physics, reference_humidity

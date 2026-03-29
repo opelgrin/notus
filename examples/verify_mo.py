@@ -31,25 +31,28 @@ import numpy as np
 
 jax.config.update("jax_enable_x64", True)
 
-from notus.constants import EARTH
-from notus.grid import GaussianGrid
-from notus.initial_conditions import load_restart, moist_aquaplanet_initial_state
-from notus.operators import exponential_filter
-from notus.operators.vector import uv_from_vordiv
-from notus.physics.boundary_layer import SurfaceLayerConfig
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
-from notus.physics.solar import EARTH_ORBIT
-from notus.physics.surface import (
+from notus import (
+    EARTH,
+    EARTH_ORBIT,
+    GaussianGrid,
     OceanState,
     PrescribedSST,
+    SimplePhysics,
+    SimplePhysicsConfig,
     SlabOceanConfig,
+    SpectralTransform,
+    SurfaceLayerConfig,
     SurfaceState,
+    build_coupled_pe_stepper,
     compute_sst,
+    exponential_filter,
+    grid_surface_pressure,
+    grid_winds_at_level,
+    load_restart,
+    moist_aquaplanet_initial_state,
+    spinup_prescribed_sst,
+    standard_sigma_levels,
 )
-from notus.timestepping.coupled import build_coupled_pe_stepper
-from notus.timestepping.spinup import spinup_prescribed_sst
-from notus.transforms import SpectralTransform
-from notus.vertical.sigma import standard_sigma_levels
 
 
 def run_one(
@@ -103,13 +106,13 @@ def run_one(
 
     # Initialize from warm state
     forcing.day_of_year = jnp.float64(0.0)
-    forcing.sst = surface.ocean.surface_temperature
+    forcing.prescribed_sst = surface.ocean.surface_temperature
     prev, curr, surface = init_fn(warm_state, surface)
 
     t_start = time.perf_counter()
     for day in range(1, n_days + 1):
         forcing.day_of_year = jnp.float64(day % days_per_year)
-        forcing.sst = surface.ocean.surface_temperature
+        forcing.prescribed_sst = surface.ocean.surface_temperature
         (prev, curr, surface), _ = jax.lax.scan(
             scan_body,
             (prev, curr, surface),
@@ -146,20 +149,14 @@ def run_one(
     t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
     sst = np.asarray(surface.ocean.surface_temperature)
     q_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.humidity))
-    lat_deg = np.degrees(np.asarray(grid.latitudes))
+    lat_deg = np.asarray(grid.latitudes_deg)
     eq_idx = np.argmin(np.abs(lat_deg))
 
     jet_level = max(0, n_levels // 4)
-    u_spec, _ = uv_from_vordiv(
-        curr.vorticity[jet_level],
-        curr.divergence[jet_level],
-        transform.arrays,
-    )
-    u_grid = np.asarray(transform.spectral_to_grid(u_spec))
-    u_grid = u_grid / np.asarray(grid.cos_lat)[:, None]
+    u_grid, _v = grid_winds_at_level(curr, jet_level, transform)
+    u_grid = np.asarray(u_grid)
 
-    lnps = np.asarray(transform.spectral_to_grid(curr.log_surface_pressure))
-    ps = EARTH.reference_pressure * np.exp(lnps)
+    ps = np.asarray(grid_surface_pressure(curr, transform, EARTH))
 
     return {
         "label": label,

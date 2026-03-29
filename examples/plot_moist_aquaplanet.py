@@ -19,7 +19,7 @@ Usage
 from __future__ import annotations
 
 import argparse
-import time
+import logging
 
 import cartopy.crs as ccrs
 import jax
@@ -29,16 +29,25 @@ import numpy as np
 
 jax.config.update("jax_enable_x64", True)
 
-from notus.constants import EARTH
-from notus.diagnostics import ZonalMeanState, compute_zonal_mean_state
-from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state
-from notus.operators import exponential_filter
-from notus.physics.simple_physics import SimplePhysics
-from notus.state import PrimitiveEquationState
-from notus.timestepping.imex import build_pe_stepper
-from notus.transforms import SpectralTransform
-from notus.vertical.sigma import SigmaLevels, standard_sigma_levels
+from notus import (
+    EARTH,
+    GaussianGrid,
+    PrimitiveEquationState,
+    SigmaLevels,
+    SimplePhysics,
+    SpectralTransform,
+    ZonalMeanState,
+    build_pe_stepper,
+    compute_zonal_mean_state,
+    exponential_filter,
+    grid_surface_pressure,
+    moist_aquaplanet_initial_state,
+    run_simulation,
+    standard_sigma_levels,
+)
+
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 # ---------------------------------------------------------------------------
@@ -92,42 +101,24 @@ def run_integration(
         forcing=forcing,
     )
 
-    steps_per_day = int(86400 / dt)
-
-    def one_day(carry, _):
-        prev, curr = carry
-
-        def step(carry, _):
-            p, c = carry
-            p, c = step_fn(p, c)
-            return (p, c), None
-
-        (prev, curr), _ = jax.lax.scan(step, (prev, curr), None, length=steps_per_day)
-        return (prev, curr), None
-
-    one_day_jit = jax.jit(one_day)
-
-    t0 = time.perf_counter()
-    prev, curr = init_fn(state)
-    (prev, curr), _ = one_day_jit((prev, curr), None)
-    print(f"  Day 1 (JIT compile): {time.perf_counter() - t0:.1f}s")
-
+    # --- Diagnostic callback ---
     n_samples = 0
     accum: ZonalMeanState | None = None
     accum_q: np.ndarray | None = None
     daily_mean_t: list[float] = []
     weights = np.asarray(grid.lat_weights)
     w_sum = float(np.sum(weights))
+    blew_up = False
 
-    t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
-    t_global = float(np.sum(np.mean(t_grid, axis=(0, -1)) * weights) / w_sum)
-    daily_mean_t.append(t_global)
-
-    t_start = time.perf_counter()
-    for day in range(2, n_days + 1):
-        (prev, curr), _ = one_day_jit((prev, curr), None)
+    def on_day(day: int, curr: PrimitiveEquationState) -> None:
+        nonlocal n_samples, accum, accum_q, blew_up
 
         t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
+        if not np.all(np.isfinite(t_grid)):
+            print("ERROR: Integration has blown up!")
+            blew_up = True
+            return
+
         t_global = float(np.sum(np.mean(t_grid, axis=(0, -1)) * weights) / w_sum)
         daily_mean_t.append(t_global)
 
@@ -143,56 +134,44 @@ def run_integration(
                 q_zm = np.zeros_like(np.asarray(zm.u))
 
             if accum is None:
-                accum = ZonalMeanState(
-                    u=np.asarray(zm.u),
-                    v=np.asarray(zm.v),
-                    temperature=np.asarray(zm.temperature),
-                    u_prime_sq=np.asarray(zm.u_prime_sq),
-                    v_prime_sq=np.asarray(zm.v_prime_sq),
-                    uv_prime=np.asarray(zm.uv_prime),
-                    vt_prime=np.asarray(zm.vt_prime),
-                )
+                accum = zm
                 accum_q = q_zm
             else:
-                accum = ZonalMeanState(
-                    u=accum.u + np.asarray(zm.u),
-                    v=accum.v + np.asarray(zm.v),
-                    temperature=accum.temperature + np.asarray(zm.temperature),
-                    u_prime_sq=accum.u_prime_sq + np.asarray(zm.u_prime_sq),
-                    v_prime_sq=accum.v_prime_sq + np.asarray(zm.v_prime_sq),
-                    uv_prime=accum.uv_prime + np.asarray(zm.uv_prime),
-                    vt_prime=accum.vt_prime + np.asarray(zm.vt_prime),
-                )
+                accum = jax.tree.map(np.add, accum, zm)
                 accum_q = accum_q + q_zm
 
         if day <= 10 or day % 50 == 0 or day == n_days:
-            elapsed = time.perf_counter() - t_start
-            speed = (day - 1) / elapsed if elapsed > 0 else 0
             q_info = ""
             if curr.humidity is not None:
                 q_g = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.humidity))
                 q_info = f"  q_mean={float(np.mean(q_g)) * 1000:.2f}g/kg"
-            print(f"  Day {day:5d}: T_mean={t_global:.1f} K{q_info}  [{speed:.1f} days/s]")
+            print(f"  Day {day:5d}: T_mean={t_global:.1f} K{q_info}")
 
-    total = time.perf_counter() - t0
-    print(f"Done in {total:.0f}s. Averaged {n_samples} samples.")
+    # --- Run ---
+    result = run_simulation(
+        init_fn=init_fn,
+        step_fn=step_fn,
+        initial_state=state,
+        dt=dt,
+        n_days=n_days,
+        on_day=on_day,
+        verbose=False,
+    )
+
+    if blew_up:
+        msg = "Integration blew up"
+        raise RuntimeError(msg)
+
+    print(f"Done in {result.wall_time:.0f}s. Averaged {n_samples} samples.")
 
     if accum is None or accum_q is None:
         msg = "No averaging samples collected"
         raise RuntimeError(msg)
 
-    mean_zm = ZonalMeanState(
-        u=accum.u / n_samples,
-        v=accum.v / n_samples,
-        temperature=accum.temperature / n_samples,
-        u_prime_sq=accum.u_prime_sq / n_samples,
-        v_prime_sq=accum.v_prime_sq / n_samples,
-        uv_prime=accum.uv_prime / n_samples,
-        vt_prime=accum.vt_prime / n_samples,
-    )
+    mean_zm = jax.tree.map(lambda x: x / n_samples, accum)
     mean_q_zm = accum_q / n_samples
 
-    return mean_zm, mean_q_zm, curr, daily_mean_t, transform, grid, levels
+    return mean_zm, mean_q_zm, result.state, daily_mean_t, transform, grid, levels
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +186,7 @@ def plot_zonal_mean_u(
     ax: plt.Axes,
 ) -> None:
     """Zonal-mean zonal wind."""
-    lat = np.degrees(np.asarray(grid.latitudes))
+    lat = np.asarray(grid.latitudes_deg)
     sigma = np.asarray(levels.sigma_full)
     u = np.asarray(mean_zm.u)
 
@@ -229,7 +208,7 @@ def plot_zonal_mean_t(
     ax: plt.Axes,
 ) -> None:
     """Zonal-mean temperature."""
-    lat = np.degrees(np.asarray(grid.latitudes))
+    lat = np.asarray(grid.latitudes_deg)
     sigma = np.asarray(levels.sigma_full)
     t = np.asarray(mean_zm.temperature)
 
@@ -251,7 +230,7 @@ def plot_zonal_mean_q(
     ax: plt.Axes,
 ) -> None:
     """Zonal-mean specific humidity."""
-    lat = np.degrees(np.asarray(grid.latitudes))
+    lat = np.asarray(grid.latitudes_deg)
     sigma = np.asarray(levels.sigma_full)
     q_gkg = np.asarray(mean_q_zm) * 1000  # convert to g/kg
 
@@ -273,9 +252,9 @@ def plot_zonal_mean_eke(
     ax: plt.Axes,
 ) -> None:
     """Zonal-mean eddy kinetic energy."""
-    lat = np.degrees(np.asarray(grid.latitudes))
+    lat = np.asarray(grid.latitudes_deg)
     sigma = np.asarray(levels.sigma_full)
-    eke = 0.5 * (np.asarray(mean_zm.u_prime_sq) + np.asarray(mean_zm.v_prime_sq))
+    eke = np.asarray(mean_zm.eke)
 
     clevels = np.arange(0, 175, 25)
     cf = ax.contourf(lat, sigma, eke, levels=clevels, cmap="YlOrRd", extend="max")
@@ -310,11 +289,10 @@ def plot_surface_pressure_snapshot(
     ax: plt.Axes,
 ) -> None:
     """Instantaneous surface pressure on a Mollweide projection."""
-    lnps_grid = np.asarray(transform.spectral_to_grid(state.log_surface_pressure))
-    ps_hpa = EARTH.reference_pressure * np.exp(lnps_grid) / 100.0
+    ps_hpa = np.asarray(grid_surface_pressure(state, transform, EARTH)) / 100.0
 
     lon = np.degrees(np.asarray(grid.longitudes))
-    lat = np.degrees(np.asarray(grid.latitudes))
+    lat = np.asarray(grid.latitudes_deg)
     lon_2d, lat_2d = np.meshgrid(lon, lat)
 
     clevels = np.arange(970, 1035, 5)

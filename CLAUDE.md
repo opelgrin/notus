@@ -69,5 +69,5 @@ All public API is re-exported from `__init__.py`.
 - **Unicode math**: Greek letters (φ, λ, μ, σ, etc.) and math symbols (∂, ∇, ×) are used in variable names and comments to match equations. These are configured as allowed confusables in ruff.
 - **Line length**: 100 characters.
 - **Docstrings**: NumPy convention.
-- **Ruff** handles linting, formatting, and import sorting. Auto-fix is enabled. See `pyproject.toml` for the full rule set and per-file ignores (tests allow assert/magic values/private access; examples allow print/complexity). Do not disable rules without good reason explained in a comment.
+- **Ruff** handles linting, formatting, and import sorting. Auto-fix is enabled. See `pyproject.toml` for the full rule set and per-file ignores (tests allow assert/magic values/private access; examples allow print/complexity). Do not disable rules without good reason explained in a comment. Do not use "#type: ignore" or "#noqa" without a justification in the comment.
 - **JAX idioms**: pure functions, `@jax.jit`, immutable state via frozen dataclasses registered as JAX pytrees. No in-place mutation.

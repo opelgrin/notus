@@ -87,6 +87,7 @@ select = [
     "TID",      # flake8-tidy-imports
     "SLOT",     # flake8-slots
     "LOG",      # flake8-logging
+    "ANN401",   # Any type ban
 ]
 fixable = ["ALL"]
 extend-ignore = [

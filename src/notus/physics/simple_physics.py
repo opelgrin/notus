@@ -247,16 +247,19 @@ class SimplePhysics:
         self.levels = levels
         self.config = config if config is not None else SimplePhysicsConfig()
 
-        # Day of year for seasonal insolation (set by the driver loop)
+        # Day of year for seasonal insolation.
+        # Prefer passing ``day_of_year`` as a keyword argument to
+        # ``__call__`` (and to the simulation runner) rather than
+        # setting this attribute directly.
         self.day_of_year: jnp.ndarray | None = None
 
-        # Pre-compute prescribed SST profile: (n_lat,)
+        # Prescribed SST profile from config: (n_lat,)
         sst_config = PrescribedSST(
             t_min=self.config.sst_t_min,
             t_delta=self.config.sst_t_delta,
             phi_w=self.config.sst_phi_w,
         )
-        self.sst: jnp.ndarray = compute_sst(sst_config, transform.grid.latitudes)
+        self.prescribed_sst: jnp.ndarray = compute_sst(sst_config, transform.grid.latitudes)
 
         # Pre-compute Rayleigh friction coefficient per level
         sigma_full = np.asarray(levels.sigma_full)
@@ -301,30 +304,37 @@ class SimplePhysics:
         )
         return rh_profile * q_sat_ref
 
-    @property
-    def _sst_2d(self) -> jnp.ndarray:
+    def _sst_2d(self, sst: jnp.ndarray | None = None) -> jnp.ndarray:
         """Broadcast SST to 2-D ``(n_lat, n_lon)`` if needed."""
-        if self.sst.ndim == 1:
-            return self.sst[:, None]
-        return self.sst
+        sst = sst if sst is not None else self.prescribed_sst
+        if sst.ndim == 1:
+            return sst[:, None]
+        return sst
 
     def _compute_radiation_heating(
         self,
         t_grid: jnp.ndarray,
         state: PrimitiveEquationState,
         surface_pressure: jnp.ndarray,
+        *,
+        day_of_year: jnp.ndarray | None = None,
+        sst: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
         """Compute total radiative heating rate [K/s]."""
         cfg = self.config
         levels = self.levels
         planet = self.planet
         sin_lat = self.transform.grid.sin_lat
+        day = day_of_year if day_of_year is not None else self.day_of_year
+        sst_val = sst if sst is not None else self.prescribed_sst
 
         if cfg.radiation_scheme == "speedy":
             return self._compute_speedy_radiation(
                 t_grid,
                 state,
                 surface_pressure,
+                day_of_year=day,
+                sst=sst_val,
             )
 
         # --- Frierson / Byrne LW ---
@@ -351,7 +361,7 @@ class SimplePhysics:
 
         q_lw, _lw_down_sfc = longwave_heating(
             t_grid,
-            self.sst,
+            sst_val,
             tau_half,
             levels.dsigma,
             surface_pressure,
@@ -362,10 +372,10 @@ class SimplePhysics:
         # --- Frierson / Byrne SW ---
         if cfg.sw_tau_0 > 0.0:
             sw_insolation = None
-            if self.day_of_year is not None and cfg.orbital is not None:
+            if day is not None and cfg.orbital is not None:
                 sw_insolation = daily_mean_insolation(
                     sin_lat,
-                    self.day_of_year,
+                    day,
                     planet.solar_constant,
                     cfg.orbital,
                 )
@@ -407,12 +417,16 @@ class SimplePhysics:
         t_grid: jnp.ndarray,
         state: PrimitiveEquationState,
         surface_pressure: jnp.ndarray,
+        *,
+        day_of_year: jnp.ndarray | None = None,
+        sst: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
         """Compute radiation heating with the SPEEDY multi-band scheme."""
         cfg = self.config
         levels = self.levels
         planet = self.planet
         sin_lat = self.transform.grid.sin_lat
+        sst_val = sst if sst is not None else self.prescribed_sst
 
         # Humidity (required for SPEEDY — always used with moist state)
         if state.humidity is None:
@@ -449,7 +463,7 @@ class SimplePhysics:
         # LW heating
         q_lw, _lw_down_sfc, _olr = speedy_longwave_heating(
             t_grid,
-            self.sst,
+            sst_val,
             q_grid,
             levels.dsigma,
             surface_pressure,
@@ -467,10 +481,10 @@ class SimplePhysics:
 
         # SW heating (always active for SPEEDY)
         sw_insolation = None
-        if self.day_of_year is not None and cfg.orbital is not None:
+        if day_of_year is not None and cfg.orbital is not None:
             sw_insolation = daily_mean_insolation(
                 sin_lat,
-                self.day_of_year,
+                day_of_year,
                 planet.solar_constant,
                 cfg.orbital,
             )
@@ -504,6 +518,8 @@ class SimplePhysics:
         state: PrimitiveEquationState,
         t_grid: jnp.ndarray,
         surface_pressure: jnp.ndarray,
+        *,
+        sst: jnp.ndarray | None = None,
     ) -> tuple[jnp.ndarray, jnp.ndarray, float | jnp.ndarray]:
         """Compute surface winds, sensible heat flux, and drag coefficient.
 
@@ -514,6 +530,7 @@ class SimplePhysics:
         cfg = self.config
         planet = self.planet
         lowest = self.levels.n_levels - 1
+        sst_val = sst if sst is not None else self.prescribed_sst
 
         u_cos_spec, v_cos_spec = uv_from_vordiv(
             state.vorticity[lowest],
@@ -532,7 +549,7 @@ class SimplePhysics:
         c_h: float | jnp.ndarray
         if cfg.surface_layer is not None:
             _c_d, c_h = compute_transfer_coefficients(
-                self._sst_2d * jnp.ones_like(t_grid[lowest]),
+                self._sst_2d(sst_val) * jnp.ones_like(t_grid[lowest]),
                 t_grid[lowest],
                 wind_speed,
                 self.dsigma_lowest,
@@ -544,7 +561,7 @@ class SimplePhysics:
             c_h = cfg.c_d
 
         q_sfc = surface_sensible_heat_flux(
-            self.sst,
+            sst_val,
             t_grid[lowest],
             wind_speed,
             surface_pressure,
@@ -560,6 +577,9 @@ class SimplePhysics:
         self,
         state: PrimitiveEquationState,
         surface_pressure: jnp.ndarray,
+        *,
+        day_of_year: jnp.ndarray | None = None,
+        sst: jnp.ndarray | None = None,
     ) -> PrimitiveEquationState:
         """Compute simple physics tendencies.
 
@@ -568,7 +588,15 @@ class SimplePhysics:
         state : PrimitiveEquationState
             Current model state (spectral coefficients).
         surface_pressure : jnp.ndarray
-            Surface pressure field ps (grid space), shape ``(n_lat, n_lon)``.
+            Surface pressure field pₛ (grid space), shape ``(n_lat, n_lon)``.
+        day_of_year : jnp.ndarray or None
+            Day of year for seasonal insolation.  When ``None``, uses the
+            value set on ``self.day_of_year`` (or fixed Frierson insolation
+            if that is also ``None``).
+        sst : jnp.ndarray or None
+            Sea surface temperature override [K].  When ``None``, uses the
+            prescribed SST profile from config (``self.prescribed_sst``).
+            Pass the current ocean SST for coupled slab-ocean runs.
 
         Returns
         -------
@@ -591,13 +619,16 @@ class SimplePhysics:
         t_grid = jax.vmap(self.transform.spectral_to_grid)(state.temperature)
 
         # --- Radiation ---
-        q_lw = self._compute_radiation_heating(t_grid, state, surface_pressure)
+        q_lw = self._compute_radiation_heating(
+            t_grid, state, surface_pressure, day_of_year=day_of_year, sst=sst
+        )
 
         # --- Surface exchange ---
         wind_speed, q_sfc, c_h = self._compute_surface_exchange(
             state,
             t_grid,
             surface_pressure,
+            sst=sst,
         )
 
         # --- Moist or dry pathway ---
@@ -610,6 +641,7 @@ class SimplePhysics:
                 q_lw,
                 q_sfc,
                 drag_coefficient=c_h,
+                sst=sst,
             )
         else:
             dt_grid = self._dry_physics(t_grid, q_lw, q_sfc)
@@ -663,6 +695,7 @@ class SimplePhysics:
         q_sfc_sensible: jnp.ndarray,
         *,
         drag_coefficient: float | jnp.ndarray | None = None,
+        sst: jnp.ndarray | None = None,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Moist physics pathway with condensation and convection."""
         cfg = self.config
@@ -670,6 +703,7 @@ class SimplePhysics:
         planet = self.planet
         lowest = levels.n_levels - 1
         c_d = drag_coefficient if drag_coefficient is not None else cfg.c_d
+        sst_val = sst if sst is not None else self.prescribed_sst
 
         # Transform humidity to grid
         q_grid = jax.vmap(self.transform.spectral_to_grid)(
@@ -686,7 +720,7 @@ class SimplePhysics:
             q_evap = jnp.zeros_like(q_grid[lowest])
         else:
             q_evap = surface_latent_heat_flux(
-                self.sst,
+                sst_val,
                 q_grid[lowest],
                 wind_speed,
                 surface_pressure,
@@ -741,6 +775,8 @@ class SimplePhysics:
         self,
         state: PrimitiveEquationState,
         dt_implicit: float,
+        *,
+        sst: jnp.ndarray | None = None,
     ) -> PrimitiveEquationState:
         """Apply implicit physics corrections after the IMEX step.
 
@@ -758,18 +794,15 @@ class SimplePhysics:
         This is unconditionally stable AND unbiased — unlike backward Euler
         (which undershoots) or forward Euler (which overshoots).
 
-        Betts-Miller convection remains in the explicit pathway to avoid
-        operator-splitting errors that alter the equilibrium climate.
-
-        Should be called AFTER the IMEX time step with
-        ``dt_implicit = 2·dt`` for leapfrog or ``dt`` for the Euler init.
-
         Parameters
         ----------
         state : PrimitiveEquationState
             Post-IMEX state (spectral coefficients).
         dt_implicit : float
             Effective implicit timestep [s].
+        sst : jnp.ndarray or None
+            Sea surface temperature override [K].  ``None`` uses
+            ``self.prescribed_sst``.
 
         Returns
         -------
@@ -781,6 +814,7 @@ class SimplePhysics:
         levels = self.levels
         transform = self.transform
         lowest = levels.n_levels - 1
+        sst_2d = self._sst_2d(sst)
 
         # --- Rayleigh friction (spectral, exact exponential decay) ---
         damp = jnp.exp(-dt_implicit * self.k_v[:, None])
@@ -815,7 +849,7 @@ class SimplePhysics:
         c_h: float | jnp.ndarray
         if cfg.surface_layer is not None:
             _c_d, c_h = compute_transfer_coefficients(
-                self._sst_2d * jnp.ones_like(t_lowest_grid),
+                sst_2d * jnp.ones_like(t_lowest_grid),
                 t_lowest_grid,
                 wind_speed,
                 self.dsigma_lowest,
@@ -830,7 +864,7 @@ class SimplePhysics:
 
         # --- Sensible heat flux (exact exponential decay at lowest level) ---
         decay_sfc = jnp.exp(-dt_implicit * k_sfc)
-        t_corrected = self._sst_2d + (t_lowest_grid - self._sst_2d) * decay_sfc
+        t_corrected = sst_2d + (t_lowest_grid - sst_2d) * decay_sfc
         new_temp = state.temperature.at[lowest].set(transform.grid_to_spectral(t_corrected))
 
         # --- Latent heat flux (exact exponential decay at lowest level) ---
@@ -838,7 +872,7 @@ class SimplePhysics:
         if state.humidity is not None:
             q_lowest_grid = transform.spectral_to_grid(state.humidity[lowest])
             q_sat_sfc = saturation_specific_humidity(
-                self._sst_2d,
+                sst_2d,
                 ps_grid,
                 planet.epsilon_moisture,
             )

@@ -21,28 +21,36 @@ Usage
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
-import time
 from dataclasses import dataclass
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 
 jax.config.update("jax_enable_x64", True)
 
-from notus.constants import EARTH
-from notus.diagnostics import ZonalMeanState, compute_zonal_mean_state
-from notus.grid import GaussianGrid
-from notus.initial_conditions import held_suarez_initial_state
-from notus.operators import exponential_filter
-from notus.operators.vector import uv_from_vordiv
-from notus.physics.forcing import HeldSuarez
-from notus.state import PrimitiveEquationState
-from notus.timestepping.imex import build_pe_stepper
-from notus.transforms import SpectralTransform
-from notus.vertical.sigma import SigmaLevels, uniform_sigma_levels
+from notus import (
+    EARTH,
+    GaussianGrid,
+    HeldSuarez,
+    PrimitiveEquationState,
+    SigmaLevels,
+    SpectralTransform,
+    ZonalMeanState,
+    build_pe_stepper,
+    compute_zonal_mean_state,
+    exponential_filter,
+    grid_surface_pressure,
+    grid_winds_at_level,
+    held_suarez_initial_state,
+    run_simulation,
+    uniform_sigma_levels,
+)
+
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 # ---------------------------------------------------------------------------
@@ -87,12 +95,12 @@ def validate_climatology(
         Results for each validation check.
     """
     results: list[ValidationResult] = []
-    lat_deg = np.degrees(np.asarray(grid.latitudes))  # north-to-south
+    lat_deg = np.asarray(grid.latitudes_deg)  # north-to-south
     sigma_full = np.asarray(levels.sigma_full)
 
     u_zm = mean_state.u  # (n_levels, n_lat)
     t_zm = mean_state.temperature
-    eke = 0.5 * (mean_state.u_prime_sq + mean_state.v_prime_sq)
+    eke = mean_state.eke
 
     # ---- 1. Subtropical jet: peak U at upper levels (σ < 0.4) ----
     # H&S Fig. 1: jets at ~30°N/S, 25-35 m/s
@@ -316,103 +324,57 @@ def run_held_suarez(
         forcing=forcing,
     )
 
-    steps_per_day = int(86400 / dt)
-
-    # --- Build a scan function for one day ---
-    def one_day(carry: tuple[jnp.ndarray, ...], _: None) -> tuple[tuple[jnp.ndarray, ...], None]:
-        prev, curr = carry
-
-        def step(carry: tuple[jnp.ndarray, ...], _: None) -> tuple[tuple[jnp.ndarray, ...], None]:
-            p, c = carry
-            p, c = step_fn(p, c)
-            return (p, c), None
-
-        (prev, curr), _ = jax.lax.scan(step, (prev, curr), None, length=steps_per_day)
-        return (prev, curr), None
-
-    one_day_jit = jax.jit(one_day)
-
-    # --- Initialize ---
-    print("Initializing...")
-    t0 = time.perf_counter()
-    prev, curr = init_fn(state)
-
-    # Force compilation on first day
-    (prev, curr), _ = one_day_jit((prev, curr), None)
-    t_compile = time.perf_counter() - t0
-    print(f"Day 1 (incl. JIT compile): {t_compile:.1f}s")
-
-    # --- Accumulator for time-averaged zonal means ---
+    # --- Diagnostic callback ---
     n_averaging_samples = 0
     accum_zm: ZonalMeanState | None = None
+    blew_up = False
 
-    def _accumulate(curr_state: PrimitiveEquationState) -> None:
-        nonlocal n_averaging_samples, accum_zm
-        zm = compute_zonal_mean_state(curr_state, transform)
-        n_averaging_samples += 1
-        if accum_zm is None:
-            accum_zm = zm
-        else:
-            accum_zm = ZonalMeanState(
-                u=accum_zm.u + zm.u,
-                v=accum_zm.v + zm.v,
-                temperature=accum_zm.temperature + zm.temperature,
-                u_prime_sq=accum_zm.u_prime_sq + zm.u_prime_sq,
-                v_prime_sq=accum_zm.v_prime_sq + zm.v_prime_sq,
-                uv_prime=accum_zm.uv_prime + zm.uv_prime,
-                vt_prime=accum_zm.vt_prime + zm.vt_prime,
+    def on_day(day: int, curr_state: PrimitiveEquationState) -> None:
+        nonlocal n_averaging_samples, accum_zm, blew_up
+
+        # Blowup check
+        t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr_state.temperature))
+        if not np.all(np.isfinite(t_grid)):
+            print("ERROR: Integration has blown up!")
+            blew_up = True
+            return
+
+        # Accumulate after spinup
+        if day > spinup_days:
+            zm = compute_zonal_mean_state(curr_state, transform)
+            n_averaging_samples += 1
+            accum_zm = zm if accum_zm is None else jax.tree.map(np.add, accum_zm, zm)
+
+        # Print status at intervals
+        if day <= 10 or day % 50 == 0 or day == n_days:
+            ps_grid = np.asarray(grid_surface_pressure(curr_state, transform, EARTH))
+            jet_level = max(0, n_levels // 4)
+            u_grid, _v = grid_winds_at_level(curr_state, jet_level, transform)
+            u_grid = np.asarray(u_grid)
+            phase = "spinup" if day <= spinup_days else "averaging"
+            print(
+                f"  Day {day:5d} [{phase:>9s}]: "
+                f"ps=[{np.min(ps_grid) / 100:.1f}, {np.max(ps_grid) / 100:.1f}] hPa  "
+                f"T=[{np.min(t_grid):.1f}, {np.max(t_grid):.1f}] K "
+                f"(mean {float(np.mean(t_grid)):.1f})  "
+                f"|U|_max={np.max(np.abs(u_grid)):.1f} m/s"
             )
 
-    def _print_status(day: int, curr_state: PrimitiveEquationState, elapsed: float) -> bool:
-        """Print diagnostics and return False if blowup detected."""
-        lnps_grid = np.asarray(transform.spectral_to_grid(curr_state.log_surface_pressure))
-        ps_grid = EARTH.reference_pressure * np.exp(lnps_grid)
-        t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr_state.temperature))
+    # --- Run ---
+    result = run_simulation(
+        init_fn=init_fn,
+        step_fn=step_fn,
+        initial_state=state,
+        dt=dt,
+        n_days=n_days,
+        on_day=on_day,
+        verbose=False,
+    )
 
-        jet_level = max(0, n_levels // 4)
-        u_spec, _ = uv_from_vordiv(
-            curr_state.vorticity[jet_level],
-            curr_state.divergence[jet_level],
-            transform.arrays,
-        )
-        u_grid = np.asarray(transform.spectral_to_grid(u_spec))
-        cos_lat = np.asarray(grid.cos_lat)
-        u_grid = u_grid / cos_lat[:, None]
+    if blew_up:
+        return False
 
-        t_mean = float(np.mean(t_grid))
-        days_per_sec = (day - 1) / elapsed if elapsed > 0 else 0
-        phase = "spinup" if day <= spinup_days else "averaging"
-
-        print(
-            f"  Day {day:5d} [{phase:>9s}]: "
-            f"ps=[{np.min(ps_grid) / 100:.1f}, {np.max(ps_grid) / 100:.1f}] hPa  "
-            f"T=[{np.min(t_grid):.1f}, {np.max(t_grid):.1f}] K (mean {t_mean:.1f})  "
-            f"|U|_max={np.max(np.abs(u_grid)):.1f} m/s  "
-            f"[{days_per_sec:.1f} days/s]"
-        )
-
-        if not np.isfinite(t_mean):
-            print("ERROR: Integration has blown up!")
-            return False
-        return True
-
-    # --- Main integration loop ---
-    t_start = time.perf_counter()
-    for day in range(2, n_days + 1):
-        (prev, curr), _ = one_day_jit((prev, curr), None)
-
-        # Accumulate zonal-mean statistics after spinup
-        if day > spinup_days:
-            _accumulate(curr)
-
-        # Print diagnostics at intervals
-        if day <= 10 or day % 50 == 0 or day == n_days:
-            elapsed = time.perf_counter() - t_start
-            if not _print_status(day, curr, elapsed):
-                return False
-
-    total_time = time.perf_counter() - t0
-    print(f"\nDone. Total wall time: {total_time:.0f}s ({total_time / 3600:.1f}h)")
+    print(f"\nDone. Total wall time: {result.wall_time:.0f}s ({result.wall_time / 3600:.1f}h)")
     print(f"Averaged over {n_averaging_samples} daily samples (days {spinup_days + 1}-{n_days})")
 
     # --- Compute time-averaged climatology ---
@@ -420,15 +382,7 @@ def run_held_suarez(
         print("ERROR: No averaging samples collected")
         return False
 
-    mean_zm = ZonalMeanState(
-        u=accum_zm.u / n_averaging_samples,
-        v=accum_zm.v / n_averaging_samples,
-        temperature=accum_zm.temperature / n_averaging_samples,
-        u_prime_sq=accum_zm.u_prime_sq / n_averaging_samples,
-        v_prime_sq=accum_zm.v_prime_sq / n_averaging_samples,
-        uv_prime=accum_zm.uv_prime / n_averaging_samples,
-        vt_prime=accum_zm.vt_prime / n_averaging_samples,
-    )
+    mean_zm = jax.tree.map(lambda x: x / n_averaging_samples, accum_zm)
 
     # --- Validate against benchmark ---
     results = validate_climatology(mean_zm, grid, levels)
@@ -450,21 +404,21 @@ def _save_output(
     """Save time-averaged zonal-mean fields to CSV."""
     import csv
 
-    lat_deg = np.degrees(np.asarray(grid.latitudes))
+    lat_deg = np.asarray(grid.latitudes_deg)
     sigma = np.asarray(levels.sigma_full)
+    eke = mean_zm.eke
 
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["sigma", "lat_deg", "U_ms", "T_K", "EKE_m2s2"])
         for k in range(len(sigma)):
             for j in range(len(lat_deg)):
-                eke = 0.5 * (mean_zm.u_prime_sq[k, j] + mean_zm.v_prime_sq[k, j])
                 writer.writerow([
                     f"{sigma[k]:.6f}",
                     f"{lat_deg[j]:.2f}",
                     f"{mean_zm.u[k, j]:.4f}",
                     f"{mean_zm.temperature[k, j]:.4f}",
-                    f"{eke:.4f}",
+                    f"{eke[k, j]:.4f}",
                 ])
     print(f"Zonal-mean climatology saved to {path}")
 

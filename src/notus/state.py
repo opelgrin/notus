@@ -77,6 +77,7 @@ class PrimitiveEquationState:
 
     def replace(self, **kwargs: jnp.ndarray | None) -> PrimitiveEquationState:
         """Return a new state with specified fields replaced."""
+        # mypy cannot narrow **kwargs types through dataclasses.replace
         return dataclasses.replace(self, **kwargs)  # type: ignore[arg-type]
 
 

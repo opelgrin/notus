@@ -106,6 +106,11 @@ class GaussianGrid:
         """Longitude spacing [rad]."""
         return 2.0 * math.pi / self.n_lon
 
+    @property
+    def latitudes_deg(self) -> jnp.ndarray:
+        """Gaussian latitudes in degrees, shape ``(n_lat,)``."""
+        return jnp.degrees(self.latitudes)
+
     def spectral_index(self, m: int, n: int) -> int:
         """Linear index into the lower-triangular spectral array.
 

@@ -28,11 +28,20 @@ import numpy as np
 
 jax.config.update("jax_enable_x64", True)
 
-from notus.constants import EARTH
-from notus.grid import GaussianGrid
-from notus.initial_conditions import moist_aquaplanet_initial_state, save_restart
-from notus.operators import exponential_filter
-from notus.operators.vector import uv_from_vordiv
+from notus import (
+    EARTH,
+    GaussianGrid,
+    SimplePhysics,
+    SimplePhysicsConfig,
+    SpectralTransform,
+    build_pe_stepper,
+    exponential_filter,
+    grid_surface_pressure,
+    moist_aquaplanet_initial_state,
+    save_restart,
+    standard_sigma_levels,
+    uv_from_vordiv,
+)
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
     byrne_shortwave_optical_depth,
@@ -40,11 +49,7 @@ from notus.physics.radiation import (
     lw_down_surface,
     shortwave_heating,
 )
-from notus.physics.simple_physics import SimplePhysics, SimplePhysicsConfig
 from notus.physics.surface import compute_net_surface_flux
-from notus.timestepping.imex import build_pe_stepper
-from notus.transforms import SpectralTransform
-from notus.vertical.sigma import standard_sigma_levels
 
 
 def diagnose_surface_flux(
@@ -85,7 +90,7 @@ def diagnose_surface_flux(
     v_grid = v_cos_grid / cos_lat_safe
     wind_speed = jnp.sqrt(u_grid**2 + v_grid**2)
 
-    sst = forcing.sst  # (n_lat,)
+    sst = forcing.prescribed_sst  # (n_lat,)
 
     # --- SW surface flux (consistent with atmospheric absorption) ---
     n_lat, n_lon = surface_pressure.shape
@@ -267,8 +272,7 @@ def run_diagnose_qflux(
                 print(f"  Saved restart to {restart_path}")
 
             # Compute surface pressure
-            lnps_grid = transform.spectral_to_grid(curr.log_surface_pressure)
-            ps_grid = EARTH.reference_pressure * jnp.exp(lnps_grid)
+            ps_grid = grid_surface_pressure(curr, transform, EARTH)
 
             net_flux_zm = diagnose_jit(curr, ps_grid)
             flux_accum += np.asarray(net_flux_zm)
@@ -289,7 +293,7 @@ def run_diagnose_qflux(
     mean_flux = flux_accum / n_samples
     q_flux = -mean_flux  # Q = -F_net to maintain SST
 
-    lat_deg = np.degrees(np.asarray(grid.latitudes))
+    lat_deg = np.asarray(grid.latitudes_deg)
     sin_lat = np.asarray(grid.sin_lat)
 
     print("\n--- Diagnosed Q-flux ---")
@@ -307,7 +311,7 @@ def run_diagnose_qflux(
     print(f"  Global mean  = {global_mean:+.2f} W/m^2 (should be ~0)")
 
     # --- Save ---
-    sst = np.asarray(forcing.sst)
+    sst = np.asarray(forcing.prescribed_sst)
     np.savez(
         output_path,
         q_flux=q_flux,

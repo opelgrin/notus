@@ -12,7 +12,7 @@ Typical usage
 -------------
     # In-memory (recommended for scripts)
     result = spinup_prescribed_sst(state, forcing, transform, levels, ...)
-    ocean = OceanState(surface_temperature=forcing.sst)
+    ocean = OceanState(surface_temperature=forcing.prescribed_sst)
     init_fn, step_fn = build_coupled_pe_stepper(..., q_flux=result.q_flux)
     prev, curr, ocean = init_fn(result.state, ocean)
 
@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -198,7 +197,7 @@ def _diagnose_surface_flux(
         )
         lw_down = speedy_lw_down_surface(
             t_grid,
-            forcing.sst,
+            forcing.prescribed_sst,
             q_grid_lw,
             levels.dsigma,
             surface_pressure,
@@ -246,7 +245,7 @@ def _diagnose_surface_flux(
 
     # Net flux (same function as coupled stepper)
     net_flux = compute_net_surface_flux(
-        forcing.sst,
+        forcing.prescribed_sst,
         t_lowest,
         q_lowest,
         wind_speed,
@@ -349,10 +348,16 @@ def spinup_prescribed_sst(
     n_days = spinup_days + averaging_days
     n_lat = transform.grid.n_lat
 
-    def one_day(carry: tuple[Any, ...], _: None) -> tuple[tuple[Any, ...], None]:
+    def one_day(
+        carry: tuple[PrimitiveEquationState, PrimitiveEquationState],
+        _: None,
+    ) -> tuple[tuple[PrimitiveEquationState, PrimitiveEquationState], None]:
         prev, curr = carry
 
-        def step(carry: tuple[Any, ...], _: None) -> tuple[tuple[Any, ...], None]:
+        def step(
+            carry: tuple[PrimitiveEquationState, PrimitiveEquationState],
+            _: None,
+        ) -> tuple[tuple[PrimitiveEquationState, PrimitiveEquationState], None]:
             p, c = carry
             p, c = step_fn(p, c)
             return (p, c), None
