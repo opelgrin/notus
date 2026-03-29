@@ -505,14 +505,15 @@ class PhysicsSuite:
         *,
         day_of_year: jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
         """Compute total radiative heating rate and surface fluxes.
 
         Returns
         -------
-        tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]
-            ``(heating_rate, lw_down_surface, sw_down_surface)`` where
-            heating is [K/s] and fluxes are [W/m²].
+        tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]
+            ``(heating_rate, lw_down_surface, sw_down_surface, olr)``
+            where heating is [K/s] and fluxes are [W/m²].  OLR is
+            ``None`` for Frierson/Byrne schemes (not computed).
         """
         cfg = self.config
         rad = cfg.radiation
@@ -621,7 +622,7 @@ class PhysicsSuite:
             )
             q_lw += q_sw
 
-        return q_lw, lw_down_sfc, sw_down_sfc
+        return q_lw, lw_down_sfc, sw_down_sfc, None
 
     def _compute_speedy_radiation(
         self,
@@ -631,10 +632,10 @@ class PhysicsSuite:
         *,
         day_of_year: jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """Compute radiation heating with the SPEEDY multi-band scheme.
 
-        Returns ``(heating_rate, lw_down_surface, sw_down_surface)``.
+        Returns ``(heating_rate, lw_down_surface, sw_down_surface, olr)``.
         """
         cfg = self.config
         rad = cfg.radiation
@@ -679,7 +680,7 @@ class PhysicsSuite:
             )
 
         # LW heating
-        q_lw, lw_down_sfc, _olr = speedy_longwave_heating(
+        q_lw, lw_down_sfc, olr = speedy_longwave_heating(
             t_grid,
             sst_val,
             q_grid,
@@ -729,7 +730,7 @@ class PhysicsSuite:
             cloud=cloud,
         )
 
-        return q_lw + q_sw, lw_down_sfc, sw_down_sfc
+        return q_lw + q_sw, lw_down_sfc, sw_down_sfc, olr
 
     def _compute_surface_exchange(
         self,
@@ -836,8 +837,8 @@ class PhysicsSuite:
         # --- Grid-space temperature ---
         t_grid = jax.vmap(self.transform.spectral_to_grid)(state.temperature)
 
-        # --- Radiation (returns heating + surface fluxes) ---
-        q_lw, lw_down_sfc, sw_down_sfc = self._compute_radiation_heating(
+        # --- Radiation (returns heating + surface fluxes + OLR) ---
+        q_lw, lw_down_sfc, sw_down_sfc, olr = self._compute_radiation_heating(
             t_grid,
             state,
             surface_pressure,
@@ -854,8 +855,10 @@ class PhysicsSuite:
         )
 
         # --- Moist or dry pathway ---
+        precip_rate: jnp.ndarray | None = None
+        q_evap: jnp.ndarray | None = None
         if state.humidity is not None:
-            dt_grid, dq_grid = self._moist_physics(
+            dt_grid, dq_grid, q_evap, precip_rate = self._moist_physics(
                 t_grid,
                 state.humidity,
                 surface_pressure,
@@ -883,9 +886,30 @@ class PhysicsSuite:
             log_surface_pressure=zero_lnps,
             humidity=humidity_tend,
         )
+
+        # --- Convert tendencies to physical fluxes for diagnostics ---
+        # Mass per unit area of the lowest layer: Δσ_lowest · pₛ / g
+        planet = self.planet
+        mass_lowest = self.dsigma_lowest * surface_pressure / planet.gravity
+
+        # Sensible heat flux [W/m²] = cₚ · (mass/area) · q_sfc [K/s]
+        sensible = planet.specific_heat_cp * mass_lowest * q_sfc
+
+        # Evaporation and latent heat (moist only)
+        evap: jnp.ndarray | None = None
+        latent: jnp.ndarray | None = None
+        if q_evap is not None:
+            evap = mass_lowest * q_evap
+            latent = planet.latent_heat_vaporization * evap
+
         diags = PhysicsDiagnostics(
-            lw_down_surface=lw_down_sfc,
+            precipitation=precip_rate,
+            evaporation=evap,
+            olr=olr,
             sw_down_surface=sw_down_sfc,
+            lw_down_surface=lw_down_sfc,
+            sensible_heat_flux=sensible,
+            latent_heat_flux=latent,
         )
         return tendencies, diags
 
@@ -923,8 +947,16 @@ class PhysicsSuite:
         *,
         drag_coefficient: float | jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """Moist physics pathway with condensation and convection."""
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Moist physics pathway with condensation and convection.
+
+        Returns
+        -------
+        tuple[dt_grid, dq_grid, q_evap, precip_rate]
+            Temperature tendency [K/s], humidity tendency [kg/kg/s],
+            surface evaporation tendency [kg/kg/s] at lowest level,
+            and column precipitation rate [kg/m²/s].
+        """
         cfg = self.config
         levels = self.levels
         planet = self.planet
@@ -996,7 +1028,18 @@ class PhysicsSuite:
         dt_grid = dt_grid.at[lowest].add(q_sfc_sensible)
         dq_grid = dq_grid.at[lowest].add(q_evap)
 
-        return dt_grid, dq_grid
+        # Precipitation: column-integrated moisture sink from BM + condensation
+        # dq_bm + dq_cond are [kg/kg/s]; integrate: Σ (-dq) Δσ pₛ / g
+        total_dq_sink = -(dq_bm + dq_cond)  # positive = moisture removed
+        precip_rate = (
+            jnp.sum(
+                total_dq_sink * levels.dsigma[:, None, None] * surface_pressure[None, :, :],
+                axis=0,
+            )
+            / planet.gravity
+        )
+
+        return dt_grid, dq_grid, q_evap, precip_rate
 
     def apply_implicit(
         self,
