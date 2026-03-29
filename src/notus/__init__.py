@@ -49,6 +49,8 @@ from notus.diagnostics import (
     ConservationDiagnostics,
     ZonalMeanState,
     compute_conservation_diagnostics,
+    compute_ke_spectrum,
+    compute_streamfunction,
     compute_zonal_mean_state,
     grid_surface_pressure,
     grid_winds_at_level,
@@ -128,6 +130,21 @@ from notus.vertical import (
     vertical_advection,
 )
 from notus.vertical.sigma import SigmaLevels, standard_sigma_levels, uniform_sigma_levels
+from notus.viz import (
+    animate_field,
+    plot_hovmoller,
+    plot_map,
+    plot_spectrum,
+    plot_zonal_mean,
+    zonal_mean_to_dataset,
+)
+from notus.xarray import (
+    DatasetContents,
+    dataset_to_state,
+    from_regular_latlon,
+    state_to_dataset,
+    to_regular_latlon,
+)
 
 
 __all__ = [
@@ -136,6 +153,7 @@ __all__ = [
     "BucketLandConfig",
     "ByrneRadiation",
     "ConservationDiagnostics",
+    "DatasetContents",
     "Forcing",
     "FriersonRadiation",
     "GaussianGrid",
@@ -165,13 +183,18 @@ __all__ = [
     "SurfaceProperties",
     "SurfaceState",
     "ZonalMeanState",
+    "animate_field",
     "build_coupled_pe_stepper",
     "build_pe_stepper",
     "compute_conservation_diagnostics",
+    "compute_ke_spectrum",
     "compute_sst",
+    "compute_streamfunction",
     "compute_zonal_mean_state",
+    "dataset_to_state",
     "exponential_filter",
     "flat_continent_surface",
+    "from_regular_latlon",
     "gaussian_mountain",
     "geopotential",
     "grid_surface_pressure",
@@ -190,6 +213,10 @@ __all__ = [
     "omega_over_pressure",
     "orographic_log_surface_pressure",
     "physics_suite_initial_state",
+    "plot_hovmoller",
+    "plot_map",
+    "plot_spectrum",
+    "plot_zonal_mean",
     "run_simulation",
     "save_restart",
     "sigma_dot",
@@ -201,10 +228,13 @@ __all__ = [
     "spherical_integral",
     "spinup_prescribed_sst",
     "standard_sigma_levels",
+    "state_to_dataset",
     "surface_pressure_tendency",
+    "to_regular_latlon",
     "uniform_sigma_levels",
     "uv_from_vordiv",
     "vertical_advection",
     "zonal_derivative",
+    "zonal_mean_to_dataset",
     "zonal_ridge",
 ]

@@ -122,6 +122,12 @@ allowed-confusables = [
     "RUF069",  # Floating point equality (exact values in test assertions)
 ]
 
+"src/notus/viz/**" = [
+    "PLC0415", # Lazy imports for optional deps (cartopy, matplotlib.animation)
+    "ANN401",  # Any in **kwargs (matplotlib passthrough) and cartopy projection
+    "RUF069",  # Float equality for unit scale checks
+]
+
 "examples/**" = [
     "T201",    # print() is the primary output mechanism
     "E402",    # Imports after jax.config.update
