@@ -12,6 +12,7 @@ from notus import (
     SpectralTransform,
     gaussian_mountain,
     sinusoidal_mountains,
+    smooth_orography,
     zonal_ridge,
 )
 
@@ -182,3 +183,86 @@ class TestSinusoidalMountains:
         spectrum = np.abs(np.fft.rfft(equatorial_profile))
         dominant_k = np.argmax(spectrum[1:]) + 1
         assert dominant_k == 1
+
+
+class TestSmoothOrography:
+    def test_lanczos_preserves_global_mean(self, t42_transform: SpectralTransform):
+        """Lanczos σ(n=0) = 1, so the global mean is unchanged."""
+        phi_s = gaussian_mountain(t42_transform, EARTH, height=3000.0)
+        arrays = t42_transform.arrays
+        smoothed = smooth_orography(phi_s, arrays, method="lanczos")
+        # (0,0) coefficient = global mean
+        assert jnp.isclose(smoothed[0], phi_s[0], rtol=1e-14)
+
+    def test_lanczos_damps_high_wavenumbers(self, t42_transform: SpectralTransform):
+        """High-n coefficients should be smaller after Lanczos smoothing."""
+        phi_s = gaussian_mountain(t42_transform, EARTH, height=3000.0, half_width=np.pi / 18)
+        arrays = t42_transform.arrays
+        smoothed = smooth_orography(phi_s, arrays, method="lanczos")
+
+        # Energy in the upper half of the spectrum should decrease
+        grid = t42_transform.grid
+        t = grid.truncation
+        high_n_mask = np.asarray(arrays.n_index) > t // 2
+        raw_energy = float(jnp.sum(jnp.abs(phi_s[high_n_mask]) ** 2))
+        smooth_energy = float(jnp.sum(jnp.abs(smoothed[high_n_mask]) ** 2))
+        assert smooth_energy < raw_energy
+
+    def test_lanczos_reduces_gibbs_ringing(self, t21_transform: SpectralTransform):
+        """Smoothing a narrow mountain should reduce negative undershoots."""
+        phi_s = gaussian_mountain(t21_transform, EARTH, height=4000.0, half_width=np.pi / 18)
+        arrays = t21_transform.arrays
+        z_raw = np.asarray(t21_transform.spectral_to_grid(phi_s)) / EARTH.gravity
+        smoothed = smooth_orography(phi_s, arrays, method="lanczos")
+        z_smooth = np.asarray(t21_transform.spectral_to_grid(smoothed)) / EARTH.gravity
+        assert z_smooth.min() > z_raw.min()
+
+    def test_exponential_preserves_global_mean(self, t42_transform: SpectralTransform):
+        """Exponential filter with k=0 → exp(0) = 1, so global mean is unchanged."""
+        phi_s = gaussian_mountain(t42_transform, EARTH, height=3000.0)
+        arrays = t42_transform.arrays
+        smoothed = smooth_orography(phi_s, arrays, method="exponential")
+        assert jnp.isclose(smoothed[0], phi_s[0], rtol=1e-14)
+
+    def test_exponential_damps_high_wavenumbers(self, t42_transform: SpectralTransform):
+        """Exponential filter should damp high-n modes."""
+        phi_s = gaussian_mountain(t42_transform, EARTH, height=3000.0, half_width=np.pi / 18)
+        arrays = t42_transform.arrays
+        smoothed = smooth_orography(phi_s, arrays, method="exponential")
+
+        grid = t42_transform.grid
+        t = grid.truncation
+        high_n_mask = np.asarray(arrays.n_index) > t // 2
+        raw_energy = float(jnp.sum(jnp.abs(phi_s[high_n_mask]) ** 2))
+        smooth_energy = float(jnp.sum(jnp.abs(smoothed[high_n_mask]) ** 2))
+        assert smooth_energy < raw_energy
+
+    def test_higher_order_damps_more(self, t42_transform: SpectralTransform):
+        """Higher order should produce more damping at high wavenumbers."""
+        phi_s = gaussian_mountain(t42_transform, EARTH, height=3000.0, half_width=np.pi / 18)
+        arrays = t42_transform.arrays
+        smooth1 = smooth_orography(phi_s, arrays, method="lanczos", order=1)
+        smooth2 = smooth_orography(phi_s, arrays, method="lanczos", order=2)
+
+        grid = t42_transform.grid
+        t = grid.truncation
+        high_n_mask = np.asarray(arrays.n_index) > t // 2
+        energy1 = float(jnp.sum(jnp.abs(smooth1[high_n_mask]) ** 2))
+        energy2 = float(jnp.sum(jnp.abs(smooth2[high_n_mask]) ** 2))
+        assert energy2 < energy1
+
+    def test_zero_input_gives_zero(self, t21_transform: SpectralTransform):
+        """Smoothing zero topography returns zero."""
+        arrays = t21_transform.arrays
+        n_spec = t21_transform.grid.n_spectral_coeffs
+        phi_s = jnp.zeros(n_spec, dtype=jnp.complex128)
+        smoothed = smooth_orography(phi_s, arrays, method="lanczos")
+        assert jnp.allclose(smoothed, 0.0, atol=1e-30)
+
+    def test_invalid_method_raises(self, t21_transform: SpectralTransform):
+        """Unknown method should raise ValueError."""
+        arrays = t21_transform.arrays
+        n_spec = t21_transform.grid.n_spectral_coeffs
+        phi_s = jnp.zeros(n_spec, dtype=jnp.complex128)
+        with pytest.raises(ValueError, match="Unknown smoothing method"):
+            smooth_orography(phi_s, arrays, method="bogus")

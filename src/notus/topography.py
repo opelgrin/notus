@@ -21,6 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from notus.constants import PlanetaryConstants
+from notus.operators.arrays import OperatorArrays
 from notus.transforms import SpectralTransform
 
 
@@ -144,3 +145,72 @@ def sinusoidal_mountains(
     z = height * cos_lat**2 * np.cos(zonal_wavenumber * lon)
     phi_s = planet.gravity * z
     return transform.grid_to_spectral(jnp.array(phi_s))
+
+
+def _lanczos_sigma(arrays: OperatorArrays) -> jnp.ndarray:
+    """Lanczos σ-factor: sin(π·n/T) / (π·n/T), with σ(0) = 1.
+
+    Suppresses Gibbs ringing by tapering spectral coefficients near
+    the truncation limit.
+
+    Parameters
+    ----------
+    arrays : OperatorArrays
+        Pre-computed operator arrays (provides n_index and truncation).
+
+    Returns
+    -------
+    jnp.ndarray
+        Multiplicative weights, shape ``(n_spectral,)``.
+    """
+    x = jnp.pi * arrays.n_index / (arrays.truncation + 1)
+    # n=0 gives x=0; use safe division and patch with the analytic limit sinc(0)=1
+    safe_x = jnp.where(arrays.n_index > 0, x, 1.0)
+    return jnp.where(arrays.n_index > 0, jnp.sin(safe_x) / safe_x, 1.0)
+
+
+def smooth_orography(
+    surface_geopotential: jnp.ndarray,
+    arrays: OperatorArrays,
+    *,
+    method: str = "lanczos",
+    order: int = 1,
+) -> jnp.ndarray:
+    """Smooth spectral orography to reduce Gibbs ringing.
+
+    Applies a multiplicative spectral taper to surface geopotential
+    coefficients.  This should be called once on the initial
+    ``surface_geopotential`` before passing it to the time stepper.
+
+    Available methods:
+
+    - ``"lanczos"``: σ-factor = sin(π·n/T) / (π·n/T), raised to *order*.
+      Order 1 is the classic Lanczos smoothing; order 2 gives stronger
+      damping near truncation.
+    - ``"exponential"``: exp(−κ·(n/T)²) with κ = 2·order.  Provides
+      Gaussian-like tapering that preserves large scales.
+
+    Parameters
+    ----------
+    surface_geopotential : jnp.ndarray
+        Spectral coefficients of g·z_s, shape ``(n_spectral,)``.
+    arrays : OperatorArrays
+        Pre-computed operator arrays.
+    method : str
+        Smoothing method: ``"lanczos"`` or ``"exponential"``.
+    order : int
+        Controls the strength of damping (higher = more aggressive).
+
+    Returns
+    -------
+    jnp.ndarray
+        Smoothed spectral coefficients, same shape as input.
+    """
+    if method == "lanczos":
+        weights = _lanczos_sigma(arrays) ** order
+    elif method == "exponential":
+        k = arrays.n_index / (arrays.truncation + 1)
+        weights = jnp.exp(-2.0 * order * k**2)
+    else:
+        raise ValueError(f"Unknown smoothing method: {method!r}")
+    return surface_geopotential * weights

@@ -108,7 +108,12 @@ from notus.timestepping import (
     build_pe_stepper,
     spinup_prescribed_sst,
 )
-from notus.topography import gaussian_mountain, sinusoidal_mountains, zonal_ridge
+from notus.topography import (
+    gaussian_mountain,
+    sinusoidal_mountains,
+    smooth_orography,
+    zonal_ridge,
+)
 from notus.transforms import SpectralTransform
 from notus.vertical import (
     geopotential,
@@ -180,6 +185,7 @@ __all__ = [
     "sigma_integral",
     "simple_physics_initial_state",
     "sinusoidal_mountains",
+    "smooth_orography",
     "spectral_curl",
     "spectral_divergence",
     "spherical_integral",
