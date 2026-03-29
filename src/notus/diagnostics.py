@@ -492,7 +492,8 @@ def compute_ke_spectrum(
     """
     arrays = transform.arrays
     trunc = arrays.truncation
-    n_idx = np.asarray(arrays.n_index)
+    n_idx = np.asarray(arrays.n_index, dtype=np.int64)
+    m_idx = np.asarray(arrays.m_index, dtype=np.int64)
     a2 = arrays.radius**2
 
     # Vertical average of |ζ|² and |δ|² per spectral coefficient
@@ -506,8 +507,8 @@ def compute_ke_spectrum(
     # Bin by total wavenumber n
     spectrum = np.zeros(trunc + 1)
     for i in range(len(n_idx)):
-        n = n_idx[i]
-        m = int(np.asarray(arrays.m_index)[i])
+        n = int(n_idx[i])
+        m = int(m_idx[i])
         # Factor of 2 for m > 0 (conjugate pair)
         weight = 2.0 if m > 0 else 1.0
         spectrum[n] += weight * (vort_sq[i] + div_sq[i])

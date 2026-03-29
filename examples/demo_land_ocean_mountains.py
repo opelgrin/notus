@@ -42,6 +42,7 @@ from notus import (
     OceanState,
     PhysicsSuite,
     PhysicsSuiteConfig,
+    PrescribedSST,
     PrimitiveEquationState,
     SlabOceanConfig,
     SpectralTransform,
@@ -170,14 +171,14 @@ def main() -> None:
     print(f"  Q-flux range: [{float(jnp.min(q_flux)):.1f}, {float(jnp.max(q_flux)):.1f}] W/m²")
 
     # --- Initial surface state ---
-    sst = compute_sst(EARTH, transform.grid.sin_lat)
+    land_config = BucketLandConfig()
+    sst = compute_sst(PrescribedSST(), transform.grid.latitudes)
     ocean = OceanState(surface_temperature=sst)
-    land = init_land_state(grid.n_lat, grid.n_lon, initial_temperature=280.0)
+    land = init_land_state(surface_properties.land_fraction, sst, land_config)
     surface = SurfaceState(ocean=ocean, land=land)
 
     # --- Build coupled stepper ---
     ocean_config = SlabOceanConfig()
-    land_config = BucketLandConfig()
     init_fn, step_fn = build_coupled_pe_stepper(
         transform=transform,
         planet=EARTH,

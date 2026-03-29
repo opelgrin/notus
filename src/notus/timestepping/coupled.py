@@ -8,6 +8,7 @@ adds the surface state threading and coupled implicit treatment.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 
 import jax
@@ -568,7 +569,7 @@ class CoupledStepper:
     # Public init / step
     # ------------------------------------------------------------------
 
-    @jax.jit
+    @functools.partial(jax.jit, static_argnums=0)
     def init(
         self,
         state: PrimitiveEquationState,
@@ -579,7 +580,7 @@ class CoupledStepper:
         current, surface = self._coupled_post_step(current, surface, self._dt)
         return previous, current, surface, diags
 
-    @jax.jit
+    @functools.partial(jax.jit, static_argnums=0)
     def step(
         self,
         previous: PrimitiveEquationState,
