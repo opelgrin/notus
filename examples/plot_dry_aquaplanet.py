@@ -39,10 +39,13 @@ from notus import (
     build_pe_stepper,
     compute_zonal_mean_state,
     exponential_filter,
-    grid_surface_pressure,
     physics_suite_initial_state,
+    plot_map,
+    plot_zonal_mean,
     run_simulation,
+    state_to_dataset,
     uniform_sigma_levels,
+    zonal_mean_to_dataset,
 )
 
 
@@ -107,7 +110,7 @@ def run_integration(
     w_sum = float(np.sum(weights))
     blew_up = False
 
-    def on_day(day: int, curr: PrimitiveEquationState) -> None:
+    def on_day(day: int, curr: PrimitiveEquationState, _diags: object) -> None:
         nonlocal n_samples, accum, blew_up
 
         t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
@@ -153,73 +156,8 @@ def run_integration(
 
 
 # ---------------------------------------------------------------------------
-# Plotting functions
+# Plotting helpers (timeseries only — zonal/map plots use notus.viz)
 # ---------------------------------------------------------------------------
-
-
-def plot_zonal_mean_u(
-    mean_zm: ZonalMeanState,
-    grid: GaussianGrid,
-    levels: SigmaLevels,
-    ax: plt.Axes,
-) -> None:
-    """Zonal-mean zonal wind U(lat, sigma)."""
-    lat = np.asarray(grid.latitudes_deg)
-    sigma = np.asarray(levels.sigma_full)
-    u = np.asarray(mean_zm.u)
-
-    clevels = np.arange(-10, 36, 5)
-    cf = ax.contourf(lat, sigma, u, levels=clevels, cmap="RdBu_r", extend="both")
-    ax.contour(lat, sigma, u, levels=clevels, colors="k", linewidths=0.3)
-    ax.contour(lat, sigma, u, levels=[0], colors="k", linewidths=1.0)
-    plt.colorbar(cf, ax=ax, label="m/s")
-    ax.set_ylim(1.0, 0.0)
-    ax.set_xlabel("Latitude [deg]")
-    ax.set_ylabel("Sigma")
-    ax.set_title("Zonal-Mean Zonal Wind")
-
-
-def plot_zonal_mean_t(
-    mean_zm: ZonalMeanState,
-    grid: GaussianGrid,
-    levels: SigmaLevels,
-    ax: plt.Axes,
-) -> None:
-    """Zonal-mean temperature T(lat, sigma)."""
-    lat = np.asarray(grid.latitudes_deg)
-    sigma = np.asarray(levels.sigma_full)
-    t = np.asarray(mean_zm.temperature)
-
-    clevels = np.arange(190, 315, 10)
-    cf = ax.contourf(lat, sigma, t, levels=clevels, cmap="Spectral_r", extend="both")
-    cs = ax.contour(lat, sigma, t, levels=clevels, colors="k", linewidths=0.3)
-    ax.clabel(cs, inline=True, fontsize=7, fmt="%.0f")
-    plt.colorbar(cf, ax=ax, label="K")
-    ax.set_ylim(1.0, 0.0)
-    ax.set_xlabel("Latitude [deg]")
-    ax.set_ylabel("Sigma")
-    ax.set_title("Zonal-Mean Temperature")
-
-
-def plot_zonal_mean_eke(
-    mean_zm: ZonalMeanState,
-    grid: GaussianGrid,
-    levels: SigmaLevels,
-    ax: plt.Axes,
-) -> None:
-    """Zonal-mean eddy kinetic energy EKE(lat, sigma)."""
-    lat = np.asarray(grid.latitudes_deg)
-    sigma = np.asarray(levels.sigma_full)
-    eke = np.asarray(mean_zm.eke)
-
-    clevels = np.arange(0, 175, 25)
-    cf = ax.contourf(lat, sigma, eke, levels=clevels, cmap="YlOrRd", extend="max")
-    ax.contour(lat, sigma, eke, levels=clevels, colors="k", linewidths=0.3)
-    plt.colorbar(cf, ax=ax, label="m$^2$/s$^2$")
-    ax.set_ylim(1.0, 0.0)
-    ax.set_xlabel("Latitude [deg]")
-    ax.set_ylabel("Sigma")
-    ax.set_title("Zonal-Mean Eddy Kinetic Energy")
 
 
 def plot_temperature_timeseries(
@@ -236,44 +174,6 @@ def plot_temperature_timeseries(
     ax.set_title("Spinup: Global-Mean Temperature")
     ax.legend()
     ax.grid(True, alpha=0.3)
-
-
-def plot_surface_pressure_snapshot(
-    state: PrimitiveEquationState,
-    transform: SpectralTransform,
-    grid: GaussianGrid,
-    ax: plt.Axes,
-) -> None:
-    """Instantaneous surface pressure on a Mollweide projection."""
-    ps_hpa = np.asarray(grid_surface_pressure(state, transform, EARTH)) / 100.0
-
-    lon = np.degrees(np.asarray(grid.longitudes))
-    lat = np.asarray(grid.latitudes_deg)
-    lon_2d, lat_2d = np.meshgrid(lon, lat)
-
-    clevels = np.arange(970, 1035, 5)
-    cf = ax.contourf(
-        lon_2d,
-        lat_2d,
-        ps_hpa,
-        levels=clevels,
-        cmap="RdBu_r",
-        extend="both",
-        transform=ccrs.PlateCarree(),
-    )
-    ax.contour(
-        lon_2d,
-        lat_2d,
-        ps_hpa,
-        levels=clevels,
-        colors="k",
-        linewidths=0.3,
-        transform=ccrs.PlateCarree(),
-    )
-    ax.coastlines(linewidth=0.5, color="gray")
-    ax.set_global()
-    plt.colorbar(cf, ax=ax, label="hPa", orientation="horizontal", pad=0.05, shrink=0.8)
-    ax.set_title("Surface Pressure (Snapshot)")
 
 
 # ---------------------------------------------------------------------------
@@ -308,17 +208,23 @@ def main() -> None:
         fontweight="bold",
     )
 
+    # Convert to xarray for viz module
+    lat_deg = np.asarray(grid.latitudes_deg)
+    sigma = np.asarray(levels.sigma_full)
+    zm_ds = zonal_mean_to_dataset(mean_zm, lat_deg, sigma)
+    ds = state_to_dataset(final_state, transform, EARTH, levels)
+
     ax1 = fig.add_subplot(3, 2, 1)
     ax2 = fig.add_subplot(3, 2, 2)
     ax3 = fig.add_subplot(3, 2, 3)
     ax4 = fig.add_subplot(3, 2, 4)
     ax5 = fig.add_subplot(3, 1, 3, projection=ccrs.Mollweide())
 
-    plot_zonal_mean_u(mean_zm, grid, levels, ax1)
-    plot_zonal_mean_t(mean_zm, grid, levels, ax2)
-    plot_zonal_mean_eke(mean_zm, grid, levels, ax3)
+    plot_zonal_mean(zm_ds["u"], ax=ax1)
+    plot_zonal_mean(zm_ds["temperature"], ax=ax2, contour_labels=True)
+    plot_zonal_mean(zm_ds["eke"], ax=ax3)
     plot_temperature_timeseries(daily_mean_t, args.spinup, ax4)
-    plot_surface_pressure_snapshot(final_state, transform, grid, ax5)
+    plot_map(ds["surface_pressure"], ax=ax5)
 
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(args.output, dpi=args.dpi, bbox_inches="tight")

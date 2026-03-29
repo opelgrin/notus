@@ -110,9 +110,9 @@ def _run_steps(
     n_steps: int,
 ) -> PrimitiveEquationState:
     """Run n_steps of IMEX leapfrog and return the final current state."""
-    prev, curr = init_fn(state)
+    prev, curr, _diags = init_fn(state)
     for _ in range(n_steps - 1):
-        prev, curr = step_fn(prev, curr)
+        prev, curr, _diags = step_fn(prev, curr)
     return curr
 
 
@@ -126,7 +126,7 @@ class TestEulerInit:
         """Resting isothermal state should be unchanged after Euler init."""
         init_fn, _, grid, _ = _make_stepper(t_ref_profile="isothermal")
         state = _make_resting_state(grid, 5)
-        _prev, curr = init_fn(state)
+        _prev, curr, _diags = init_fn(state)
 
         for field in ("vorticity", "divergence", "temperature", "log_surface_pressure"):
             np.testing.assert_allclose(
@@ -148,7 +148,7 @@ class TestEulerInit:
             temp = temp.at[k, 0].set(t_ref[k] + 0j)
         state = state.replace(temperature=temp)
 
-        _prev, curr = init_fn(state)
+        _prev, curr, _diags = init_fn(state)
 
         for field in ("vorticity", "divergence", "log_surface_pressure"):
             np.testing.assert_allclose(
@@ -163,7 +163,7 @@ class TestEulerInit:
         init_fn, _, grid, _ = _make_stepper()
         n_levels, n_spec = 5, grid.n_spectral_coeffs
         state = _make_resting_state(grid, n_levels)
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
 
         assert prev.vorticity.shape == (n_levels, n_spec)
         assert curr.vorticity.shape == (n_levels, n_spec)
@@ -174,7 +174,7 @@ class TestEulerInit:
         init_fn, _, grid, _ = _make_stepper()
         state = _make_resting_state(grid, 5)
         jit_init = jax.jit(init_fn)
-        _prev, curr = jit_init(state)
+        _prev, curr, _diags = jit_init(state)
         assert jnp.all(jnp.isfinite(curr.divergence))
 
     def test_vorticity_unaffected_by_implicit(self) -> None:
@@ -223,8 +223,8 @@ class TestIMEXStep:
         """Euler init + one leapfrog step: resting state stays resting."""
         init_fn, step_fn, grid, _ = _make_stepper()
         state = _make_resting_state(grid, 5)
-        prev, curr = init_fn(state)
-        _filt_curr, future = step_fn(prev, curr)
+        prev, curr, _diags = init_fn(state)
+        _filt_curr, future, _diags = step_fn(prev, curr)
 
         for field in ("vorticity", "divergence", "temperature", "log_surface_pressure"):
             np.testing.assert_allclose(
@@ -246,8 +246,8 @@ class TestIMEXStep:
             temperature=temp,
             log_surface_pressure=jnp.zeros(grid.n_spectral_coeffs, dtype=jnp.complex128),
         )
-        prev, curr = init_fn(state)
-        _filt_curr, future = step_fn(prev, curr)
+        prev, curr, _diags = init_fn(state)
+        _filt_curr, future, _diags = step_fn(prev, curr)
 
         for field in ("vorticity", "divergence", "log_surface_pressure"):
             np.testing.assert_allclose(
@@ -261,8 +261,8 @@ class TestIMEXStep:
         init_fn, step_fn, grid, _ = _make_stepper()
         n_levels, n_spec = 5, grid.n_spectral_coeffs
         state = _make_resting_state(grid, n_levels)
-        prev, curr = init_fn(state)
-        filt_curr, future = step_fn(prev, curr)
+        prev, curr, _diags = init_fn(state)
+        filt_curr, future, _diags = step_fn(prev, curr)
 
         assert filt_curr.vorticity.shape == (n_levels, n_spec)
         assert future.divergence.shape == (n_levels, n_spec)
@@ -271,17 +271,17 @@ class TestIMEXStep:
     def test_jit_compatible(self) -> None:
         init_fn, step_fn, grid, _ = _make_stepper()
         state = _make_resting_state(grid, 5)
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         jit_step = jax.jit(step_fn)
-        _filt_curr, future = jit_step(prev, curr)
+        _filt_curr, future, _diags = jit_step(prev, curr)
         assert jnp.all(jnp.isfinite(future.divergence))
 
     def test_robert_coeff_zero_means_no_filtering(self) -> None:
         """With r=0, filtered_current should be exactly current."""
         init_fn, step_fn, grid, _ = _make_stepper(robert_coeff=0.0)
         state = _make_perturbed_state(grid, 5)
-        prev, curr = init_fn(state)
-        filt_curr, _future = step_fn(prev, curr)
+        prev, curr, _diags = init_fn(state)
+        filt_curr, _future, _diags = step_fn(prev, curr)
 
         # filtered_current = (1-0)*current + 0*(previous+future) = current
         np.testing.assert_allclose(filt_curr.vorticity, curr.vorticity, atol=1e-20)
@@ -292,14 +292,14 @@ class TestIMEXStep:
         r = 0.05
         init_fn, step_fn, grid, _ = _make_stepper(robert_coeff=r)
         state = _make_perturbed_state(grid, 5)
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
 
         # Get the future from a step with r=0 (no filtering of current)
         _, step_fn_nofilt, _, _ = _make_stepper(robert_coeff=0.0)
-        _, future_raw = step_fn_nofilt(prev, curr)
+        _, future_raw, _diags = step_fn_nofilt(prev, curr)
 
         # Now get the filtered result from the r=0.05 step
-        filt_curr, _ = step_fn(prev, curr)
+        filt_curr, _, _diags = step_fn(prev, curr)
 
         # The future should be the same (RA only affects filtered_current)
         # Check the RA formula on one field
@@ -460,11 +460,11 @@ class TestSpectralFilter:
         init_nf, step_nf, _, _ = _make_stepper(with_filter=False)
 
         state = _make_perturbed_state(grid, 5)
-        prev, curr = init_fn(state)
-        prev_nf, curr_nf = init_nf(state)
+        prev, curr, _diags = init_fn(state)
+        prev_nf, curr_nf, _diags = init_nf(state)
 
-        filt_curr_f, _ = step_fn(prev, curr)
-        _filt_curr_nf, _ = step_nf(prev_nf, curr_nf)
+        filt_curr_f, _, _diags = step_fn(prev, curr)
+        _filt_curr_nf, _, _diags = step_nf(prev_nf, curr_nf)
 
         # filtered_current comes from RA filter only (not spectral filter)
         # Both should agree since RA doesn't use spectral filter

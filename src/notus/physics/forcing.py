@@ -25,15 +25,75 @@ from notus.transforms import SpectralTransform
 from notus.vertical.sigma import SigmaLevels
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class PhysicsDiagnostics:
+    """Diagnostic fields produced by physics parameterizations.
+
+    All flux fields are grid-space arrays with shape ``(n_lat, n_lon)``,
+    or ``None`` when not available from the forcing scheme.
+
+    Sign convention: positive = downward / into the surface.
+
+    Attributes
+    ----------
+    precipitation : jnp.ndarray or None
+        Surface precipitation rate [kg/m²/s].
+    evaporation : jnp.ndarray or None
+        Surface evaporation rate [kg/m²/s].
+    olr : jnp.ndarray or None
+        Outgoing longwave radiation at TOA [W/m²].
+    sw_down_surface : jnp.ndarray or None
+        Downward shortwave flux at the surface [W/m²].
+    lw_down_surface : jnp.ndarray or None
+        Downward longwave flux at the surface [W/m²].
+    sensible_heat_flux : jnp.ndarray or None
+        Surface sensible heat flux [W/m²].
+    latent_heat_flux : jnp.ndarray or None
+        Surface latent heat flux [W/m²].
+    """
+
+    precipitation: jnp.ndarray | None = None
+    evaporation: jnp.ndarray | None = None
+    olr: jnp.ndarray | None = None
+    sw_down_surface: jnp.ndarray | None = None
+    lw_down_surface: jnp.ndarray | None = None
+    sensible_heat_flux: jnp.ndarray | None = None
+    latent_heat_flux: jnp.ndarray | None = None
+
+
+def _diag_flatten(
+    d: PhysicsDiagnostics,
+) -> tuple[tuple[jnp.ndarray | None, ...], None]:
+    return (
+        (
+            d.precipitation,
+            d.evaporation,
+            d.olr,
+            d.sw_down_surface,
+            d.lw_down_surface,
+            d.sensible_heat_flux,
+            d.latent_heat_flux,
+        ),
+        None,
+    )
+
+
+def _diag_unflatten(
+    _aux: None,
+    children: tuple[jnp.ndarray | None, ...],
+) -> PhysicsDiagnostics:
+    return PhysicsDiagnostics(*children)
+
+
+jax.tree_util.register_pytree_node(PhysicsDiagnostics, _diag_flatten, _diag_unflatten)
+
+
 class Forcing(Protocol):
     """Protocol for physics forcing functions.
 
-    A forcing function receives the current model state and returns a
-    ``PrimitiveEquationState`` containing the tendencies due to physics
-    parameterizations (e.g. radiation, boundary layer drag).
-
-    The tendencies are added to the explicit dynamics tendencies at each
-    time step.
+    A forcing function receives the current model state and returns
+    tendencies and diagnostic fields.  The tendencies are added to the
+    explicit dynamics tendencies at each time step.
 
     See Also
     --------
@@ -45,8 +105,8 @@ class Forcing(Protocol):
         self,
         state: PrimitiveEquationState,
         surface_pressure: jnp.ndarray,
-    ) -> PrimitiveEquationState:
-        """Compute physics tendencies.
+    ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
+        """Compute physics tendencies and diagnostics.
 
         Parameters
         ----------
@@ -57,8 +117,8 @@ class Forcing(Protocol):
 
         Returns
         -------
-        PrimitiveEquationState
-            Tendencies due to physics forcing (spectral coefficients).
+        tuple[PrimitiveEquationState, PhysicsDiagnostics]
+            Tendencies (spectral) and diagnostic fields (grid).
         """
         ...
 
@@ -229,7 +289,7 @@ class HeldSuarez:
         self,
         state: PrimitiveEquationState,
         surface_pressure: jnp.ndarray,
-    ) -> PrimitiveEquationState:
+    ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
         """Compute Held-Suarez tendencies.
 
         Parameters
@@ -241,8 +301,9 @@ class HeldSuarez:
 
         Returns
         -------
-        PrimitiveEquationState
-            Tendencies due to Held-Suarez forcing (spectral coefficients).
+        tuple[PrimitiveEquationState, PhysicsDiagnostics]
+            Tendencies and empty diagnostics (Held-Suarez has no radiation
+            or moisture).
         """
         cfg = self.config
 
@@ -290,10 +351,11 @@ class HeldSuarez:
         if state.humidity is not None:
             humidity_tend = jnp.zeros_like(state.humidity)
 
-        return PrimitiveEquationState(
+        tendencies = PrimitiveEquationState(
             vorticity=dvort_spec,
             divergence=ddiv_spec,
             temperature=dt_spec,
             log_surface_pressure=zero_lnps,
             humidity=humidity_tend,
         )
+        return tendencies, PhysicsDiagnostics()

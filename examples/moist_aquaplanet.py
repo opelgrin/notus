@@ -118,7 +118,7 @@ def run_moist_aquaplanet(
     accum_zm: ZonalMeanState | None = None
     blew_up = False
 
-    def on_day(day: int, curr_state: PrimitiveEquationState) -> None:
+    def on_day(day: int, curr_state: PrimitiveEquationState, _diags: object) -> None:
         nonlocal n_averaging_samples, accum_zm, blew_up
 
         # Blowup check

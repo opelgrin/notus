@@ -342,9 +342,9 @@ class TestStationarity:
         init_vort = np.asarray(state.vorticity)
         init_temp = np.asarray(state.temperature)
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         for _ in range(n_steps):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         # Divergence should remain near zero
         div_max = float(jnp.max(jnp.abs(curr.divergence)))
@@ -424,9 +424,9 @@ class TestBaroclinicWave:
             spectral_filter=filt,
         )
 
-        prev, curr = init_fn(perturbed)
+        prev, curr, _diags = init_fn(perturbed)
         for _ in range(n_steps):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         # The integration should remain stable (no NaN/Inf)
         for field_name in [

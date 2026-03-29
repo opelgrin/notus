@@ -31,6 +31,7 @@ from notus.physics.convection import (
     dry_convective_adjustment,
     large_scale_condensation,
 )
+from notus.physics.forcing import PhysicsDiagnostics
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     ByrneRadiation,
@@ -504,8 +505,16 @@ class PhysicsSuite:
         *,
         day_of_year: jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
-        """Compute total radiative heating rate [K/s]."""
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
+        """Compute total radiative heating rate and surface fluxes.
+
+        Returns
+        -------
+        tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]
+            ``(heating_rate, lw_down_surface, sw_down_surface, olr)``
+            where heating is [K/s] and fluxes are [W/m²].  OLR is
+            ``None`` for Frierson/Byrne schemes (not computed).
+        """
         cfg = self.config
         rad = cfg.radiation
         levels = self.levels
@@ -522,6 +531,10 @@ class PhysicsSuite:
                 day_of_year=day,
                 sst=sst_val,
             )
+
+        # Initialise surface flux accumulators (updated below)
+        lw_down_sfc = jnp.zeros_like(surface_pressure)
+        sw_down_sfc = jnp.zeros_like(surface_pressure)
 
         # --- Frierson / Byrne LW ---
         if isinstance(rad, ByrneRadiation) and state.humidity is not None:
@@ -558,7 +571,7 @@ class PhysicsSuite:
                 alpha=fri.alpha,
             )
 
-        q_lw, _lw_down_sfc = longwave_heating(
+        q_lw, lw_down_sfc = longwave_heating(
             t_grid,
             sst_val,
             tau_half,
@@ -593,7 +606,7 @@ class PhysicsSuite:
                     byrne_sw_b=rad.sw_b,
                 )
 
-            q_sw, _sw_down_sfc = shortwave_heating(
+            q_sw, sw_down_sfc = shortwave_heating(
                 levels.sigma_half,
                 levels.dsigma,
                 sin_lat,
@@ -609,7 +622,7 @@ class PhysicsSuite:
             )
             q_lw += q_sw
 
-        return q_lw
+        return q_lw, lw_down_sfc, sw_down_sfc, None
 
     def _compute_speedy_radiation(
         self,
@@ -619,8 +632,11 @@ class PhysicsSuite:
         *,
         day_of_year: jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
-        """Compute radiation heating with the SPEEDY multi-band scheme."""
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Compute radiation heating with the SPEEDY multi-band scheme.
+
+        Returns ``(heating_rate, lw_down_surface, sw_down_surface, olr)``.
+        """
         cfg = self.config
         rad = cfg.radiation
         if not isinstance(rad, SpeedyRadiation):  # pragma: no cover
@@ -664,7 +680,7 @@ class PhysicsSuite:
             )
 
         # LW heating
-        q_lw, _lw_down_sfc, _olr = speedy_longwave_heating(
+        q_lw, lw_down_sfc, olr = speedy_longwave_heating(
             t_grid,
             sst_val,
             q_grid,
@@ -696,7 +712,7 @@ class PhysicsSuite:
                 planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
             )
 
-        q_sw, _sw_down_sfc = speedy_shortwave_heating(
+        q_sw, sw_down_sfc = speedy_shortwave_heating(
             levels.dsigma,
             levels.sigma_full,
             q_grid,
@@ -714,7 +730,7 @@ class PhysicsSuite:
             cloud=cloud,
         )
 
-        return q_lw + q_sw
+        return q_lw + q_sw, lw_down_sfc, sw_down_sfc, olr
 
     def _compute_surface_exchange(
         self,
@@ -783,8 +799,8 @@ class PhysicsSuite:
         *,
         day_of_year: jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
-    ) -> PrimitiveEquationState:
-        """Compute physics tendencies.
+    ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
+        """Compute physics tendencies and diagnostics.
 
         Parameters
         ----------
@@ -803,8 +819,8 @@ class PhysicsSuite:
 
         Returns
         -------
-        PrimitiveEquationState
-            Tendencies due to physics forcing (spectral coefficients).
+        tuple[PrimitiveEquationState, PhysicsDiagnostics]
+            Tendencies (spectral) and diagnostic fields (grid).
         """
         cfg = self.config
         implicit = cfg.implicit_surface
@@ -821,9 +837,13 @@ class PhysicsSuite:
         # --- Grid-space temperature ---
         t_grid = jax.vmap(self.transform.spectral_to_grid)(state.temperature)
 
-        # --- Radiation ---
-        q_lw = self._compute_radiation_heating(
-            t_grid, state, surface_pressure, day_of_year=day_of_year, sst=sst
+        # --- Radiation (returns heating + surface fluxes + OLR) ---
+        q_lw, lw_down_sfc, sw_down_sfc, olr = self._compute_radiation_heating(
+            t_grid,
+            state,
+            surface_pressure,
+            day_of_year=day_of_year,
+            sst=sst,
         )
 
         # --- Surface exchange ---
@@ -835,8 +855,10 @@ class PhysicsSuite:
         )
 
         # --- Moist or dry pathway ---
+        precip_rate: jnp.ndarray | None = None
+        q_evap: jnp.ndarray | None = None
         if state.humidity is not None:
-            dt_grid, dq_grid = self._moist_physics(
+            dt_grid, dq_grid, q_evap, precip_rate = self._moist_physics(
                 t_grid,
                 state.humidity,
                 surface_pressure,
@@ -857,13 +879,39 @@ class PhysicsSuite:
         if dq_grid is not None:
             humidity_tend = jax.vmap(self.transform.grid_to_spectral)(dq_grid)
 
-        return PrimitiveEquationState(
+        tendencies = PrimitiveEquationState(
             vorticity=dvort_spec,
             divergence=ddiv_spec,
             temperature=dt_spec,
             log_surface_pressure=zero_lnps,
             humidity=humidity_tend,
         )
+
+        # --- Convert tendencies to physical fluxes for diagnostics ---
+        # Mass per unit area of the lowest layer: Δσ_lowest · pₛ / g
+        planet = self.planet
+        mass_lowest = self.dsigma_lowest * surface_pressure / planet.gravity
+
+        # Sensible heat flux [W/m²] = cₚ · (mass/area) · q_sfc [K/s]
+        sensible = planet.specific_heat_cp * mass_lowest * q_sfc
+
+        # Evaporation and latent heat (moist only)
+        evap: jnp.ndarray | None = None
+        latent: jnp.ndarray | None = None
+        if q_evap is not None:
+            evap = mass_lowest * q_evap
+            latent = planet.latent_heat_vaporization * evap
+
+        diags = PhysicsDiagnostics(
+            precipitation=precip_rate,
+            evaporation=evap,
+            olr=olr,
+            sw_down_surface=sw_down_sfc,
+            lw_down_surface=lw_down_sfc,
+            sensible_heat_flux=sensible,
+            latent_heat_flux=latent,
+        )
+        return tendencies, diags
 
     def _dry_physics(
         self,
@@ -899,8 +947,16 @@ class PhysicsSuite:
         *,
         drag_coefficient: float | jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """Moist physics pathway with condensation and convection."""
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Moist physics pathway with condensation and convection.
+
+        Returns
+        -------
+        tuple[dt_grid, dq_grid, q_evap, precip_rate]
+            Temperature tendency [K/s], humidity tendency [kg/kg/s],
+            surface evaporation tendency [kg/kg/s] at lowest level,
+            and column precipitation rate [kg/m²/s].
+        """
         cfg = self.config
         levels = self.levels
         planet = self.planet
@@ -972,7 +1028,18 @@ class PhysicsSuite:
         dt_grid = dt_grid.at[lowest].add(q_sfc_sensible)
         dq_grid = dq_grid.at[lowest].add(q_evap)
 
-        return dt_grid, dq_grid
+        # Precipitation: column-integrated moisture sink from BM + condensation
+        # dq_bm + dq_cond are [kg/kg/s]; integrate: Σ (-dq) Δσ pₛ / g
+        total_dq_sink = -(dq_bm + dq_cond)  # positive = moisture removed
+        precip_rate = (
+            jnp.sum(
+                total_dq_sink * levels.dsigma[:, None, None] * surface_pressure[None, :, :],
+                axis=0,
+            )
+            / planet.gravity
+        )
+
+        return dt_grid, dq_grid, q_evap, precip_rate
 
     def apply_implicit(
         self,

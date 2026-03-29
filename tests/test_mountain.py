@@ -85,13 +85,13 @@ def _run_mountain_integration(
         spectral_filter=filt,
     )
 
-    prev, curr = init_fn(state)
+    prev, curr, _diags = init_fn(state)
     steps_per_day = int(86400 / _DT)
 
     daily_diags = []
     for _day in range(n_days):
         for _ in range(steps_per_day):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         diag = compute_conservation_diagnostics(
             curr, transform, EARTH, levels, surface_geopotential
@@ -226,13 +226,13 @@ def _run_moist_mountain_integration(
         forcing=physics,
     )
 
-    prev, curr = init_fn(state)
+    prev, curr, _diags = init_fn(state)
     steps_per_day = int(86400 / dt)
 
     daily_data: list[dict] = []
     for _day in range(n_days):
         for _ in range(steps_per_day):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         # Diagnose precipitation from the current state
         t_grid = jax.vmap(transform.spectral_to_grid)(curr.temperature)

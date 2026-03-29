@@ -108,7 +108,7 @@ class TestEquilibriumTemperature:
             log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
         )
         ps = jnp.full((grid.n_lat, grid.n_lon), EARTH.reference_pressure)
-        result = hs_forcing(state, ps)
+        result, _diags = hs_forcing(state, ps)
         dt_grid = np.asarray(jax.vmap(t21_transform.spectral_to_grid)(result.temperature))
 
         # Find equator and bottom level
@@ -150,7 +150,7 @@ class TestEquilibriumTemperature:
             log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
         )
         ps = jnp.full((grid.n_lat, grid.n_lon), EARTH.reference_pressure)
-        result = hs_forcing(state, ps)
+        result, _diags = hs_forcing(state, ps)
         dt_grid = np.asarray(jax.vmap(t21_transform.spectral_to_grid)(result.temperature))
 
         # Find nearest pole and bottom level
@@ -177,7 +177,7 @@ class TestEquilibriumTemperature:
         so the tendency should be strictly positive (warming toward T_eq).
         """
         state, ps = isothermal_state
-        result = hs_forcing(state, ps)
+        result, _diags = hs_forcing(state, ps)
         dt_grid = jax.vmap(hs_forcing.transform.spectral_to_grid)(result.temperature)
         assert jnp.all(jnp.isfinite(dt_grid))
         # With T=264K, some levels will have T > T_eq (cooling) and some T < T_eq
@@ -238,7 +238,7 @@ class TestRayleighFriction:
             log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
         )
         ps = jnp.full((grid.n_lat, grid.n_lon), EARTH.reference_pressure)
-        result = hs_forcing(state, ps)
+        result, _diags = hs_forcing(state, ps)
 
         # In boundary layer, vort_tend = -k_v * vort_spec
         k_v = hs_forcing.k_v
@@ -273,7 +273,7 @@ class TestNewtonianRelaxation:
             temperature=t_hot_spec,
             log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
         )
-        hot_result = hs_forcing(hot_state, ps)
+        hot_result, _diags = hs_forcing(hot_state, ps)
         hot_tend_grid = jax.vmap(t21_transform.spectral_to_grid)(hot_result.temperature)
         # Should be cooling (negative tendency) everywhere
         assert jnp.all(hot_tend_grid < 0.0), "Hot atmosphere should cool"
@@ -288,7 +288,7 @@ class TestNewtonianRelaxation:
             temperature=t_cold_spec,
             log_surface_pressure=jnp.zeros(n_spec, dtype=jnp.complex128),
         )
-        cold_result = hs_forcing(cold_state, ps)
+        cold_result, _diags = hs_forcing(cold_state, ps)
         cold_tend_grid = jax.vmap(t21_transform.spectral_to_grid)(cold_result.temperature)
         # Should be warming (positive tendency) everywhere
         assert jnp.all(cold_tend_grid > 0.0), "Cold atmosphere should warm"
@@ -300,7 +300,7 @@ class TestNewtonianRelaxation:
     ) -> None:
         """Held-Suarez forcing has no surface pressure tendency."""
         state, ps = isothermal_state
-        result = hs_forcing(state, ps)
+        result, _diags = hs_forcing(state, ps)
         assert jnp.allclose(result.log_surface_pressure, 0.0)
 
 
@@ -315,7 +315,7 @@ class TestForcingJIT:
         """Forcing should be JIT-compilable and produce finite results."""
         state, ps = isothermal_state
         jit_forcing = jax.jit(hs_forcing)
-        result = jit_forcing(state, ps)
+        result, _diags = jit_forcing(state, ps)
         assert jnp.all(jnp.isfinite(result.vorticity))
         assert jnp.all(jnp.isfinite(result.divergence))
         assert jnp.all(jnp.isfinite(result.temperature))
@@ -366,7 +366,7 @@ def _run_held_suarez(
         forcing=forcing,
     )
 
-    prev, curr = init_fn(state)
+    prev, curr, _diags = init_fn(state)
     steps_per_day = int(86400 / dt)
 
     global_mean_t: list[float] = []
@@ -374,7 +374,7 @@ def _run_held_suarez(
 
     for _day in range(n_days):
         for _ in range(steps_per_day):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         # Temperature diagnostics
         t_grid = np.asarray(jax.vmap(transform.spectral_to_grid)(curr.temperature))
@@ -487,7 +487,7 @@ def _run_held_suarez_climatology(
     steps_per_day = int(86400 / dt)
     total_days = spinup_days + averaging_days
 
-    prev, curr = init_fn(state)
+    prev, curr, _diags = init_fn(state)
 
     # Accumulators
     u_zm_acc = np.zeros((n_levels, grid.n_lat))
@@ -498,7 +498,7 @@ def _run_held_suarez_climatology(
 
     for day in range(1, total_days + 1):
         for _ in range(steps_per_day):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         if day > spinup_days:
             zm = compute_zm(curr, transform)

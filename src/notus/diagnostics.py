@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.grid import GaussianGrid
@@ -317,6 +318,22 @@ class ZonalMeanState:
         return 0.5 * (self.u_prime_sq + self.v_prime_sq)
 
 
+def _zm_flatten(
+    zm: ZonalMeanState,
+) -> tuple[tuple[jnp.ndarray, ...], None]:
+    return (
+        (zm.u, zm.v, zm.temperature, zm.u_prime_sq, zm.v_prime_sq, zm.uv_prime, zm.vt_prime),
+        None,
+    )
+
+
+def _zm_unflatten(_aux: None, children: tuple[jnp.ndarray, ...]) -> ZonalMeanState:
+    return ZonalMeanState(*children)
+
+
+jax.tree_util.register_pytree_node(ZonalMeanState, _zm_flatten, _zm_unflatten)
+
+
 def compute_zonal_mean_state(
     state: PrimitiveEquationState,
     transform: SpectralTransform,
@@ -389,3 +406,118 @@ def compute_zonal_mean_state(
         uv_prime=jnp.mean(u_prime * v_prime, axis=-1),
         vt_prime=jnp.mean(v_prime * t_prime, axis=-1),
     )
+
+
+# =====================================================================
+# Meridional overturning streamfunction
+# =====================================================================
+
+
+def compute_streamfunction(
+    zm_v: jnp.ndarray,
+    cos_lat: jnp.ndarray,
+    levels: SigmaLevels,
+    planet: PlanetaryConstants,
+    mean_ps: float = 1.0e5,
+) -> jnp.ndarray:
+    """Compute the meridional mass streamfunction.
+
+    Ψ(φ, σ) = (2π a cos φ / g) · pₛ · ∫₀^σ [v] dσ'
+
+    where [v] is the zonal-mean meridional wind.
+
+    Parameters
+    ----------
+    zm_v : jnp.ndarray
+        Zonal-mean meridional wind [m/s], shape ``(n_levels, n_lat)``.
+    cos_lat : jnp.ndarray
+        Cosine of latitudes, shape ``(n_lat,)``.
+    levels : SigmaLevels
+        Sigma vertical coordinate.
+    planet : PlanetaryConstants
+        Planetary constants.
+    mean_ps : float
+        Global-mean surface pressure [Pa].  Default 1×10⁵.
+
+    Returns
+    -------
+    jnp.ndarray
+        Streamfunction [kg/s], shape ``(n_levels, n_lat)``.
+        Positive values indicate clockwise circulation (NH Hadley cell).
+    """
+    # Cumulative integral of v from top (σ=0) downward
+    # ∫₀^σₖ v dσ' ≈ Σ_{j=0}^{k-1} v_j Δσ_j  (midpoint rule)
+    v_dsigma = zm_v * levels.dsigma[:, None]
+    cumsum = jnp.cumsum(v_dsigma, axis=0)
+
+    prefactor = 2.0 * jnp.pi * planet.radius * mean_ps / planet.gravity
+    return prefactor * cos_lat[None, :] * cumsum
+
+
+# =====================================================================
+# Kinetic energy spectrum
+# =====================================================================
+
+
+def compute_ke_spectrum(
+    state: PrimitiveEquationState,
+    transform: SpectralTransform,
+    levels: SigmaLevels,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the vertically averaged kinetic energy spectrum.
+
+    For each total wavenumber n, the kinetic energy is:
+
+        E(n) = (1/2) Σₖ Δσₖ · (1/(n(n+1))) · a² ·
+               Σₘ (|ζₙᵐ|² + |δₙᵐ|²)
+
+    using the spectral relationship between KE and vorticity/divergence.
+
+    Parameters
+    ----------
+    state : PrimitiveEquationState
+        Atmospheric state in spectral space.
+    transform : SpectralTransform
+        Spectral transform (provides operator arrays).
+    levels : SigmaLevels
+        Sigma vertical coordinate (for vertical averaging weights).
+
+    Returns
+    -------
+    wavenumber : np.ndarray
+        Total wavenumber n, shape ``(truncation,)``.  Starts from n=1
+        (n=0 has zero KE).
+    spectrum : np.ndarray
+        Kinetic energy per wavenumber [m²/s²], shape ``(truncation,)``.
+    """
+    arrays = transform.arrays
+    trunc = arrays.truncation
+    n_idx = np.asarray(arrays.n_index, dtype=np.int64)
+    m_idx = np.asarray(arrays.m_index, dtype=np.int64)
+    a2 = arrays.radius**2
+
+    # Vertical average of |ζ|² and |δ|² per spectral coefficient
+    vort = np.asarray(state.vorticity)  # (n_levels, n_spectral)
+    div = np.asarray(state.divergence)
+
+    dsigma = np.asarray(levels.dsigma)  # (n_levels,)
+    vort_sq = np.sum(dsigma[:, None] * np.abs(vort) ** 2, axis=0)
+    div_sq = np.sum(dsigma[:, None] * np.abs(div) ** 2, axis=0)
+
+    # Bin by total wavenumber n
+    spectrum = np.zeros(trunc + 1)
+    for i in range(len(n_idx)):
+        n = int(n_idx[i])
+        m = int(m_idx[i])
+        # Factor of 2 for m > 0 (conjugate pair)
+        weight = 2.0 if m > 0 else 1.0
+        spectrum[n] += weight * (vort_sq[i] + div_sq[i])
+
+    # Convert to KE: E(n) = a² / (2·n·(n+1)) · spectrum(n)
+    nn = np.arange(trunc + 1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        factor = np.where(nn > 0, a2 / (2.0 * nn * (nn + 1)), 0.0)
+    spectrum *= factor
+
+    # Return n=1..T (n=0 is always zero)
+    return nn[1:], spectrum[1:]

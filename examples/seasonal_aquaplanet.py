@@ -146,7 +146,7 @@ def run_seasonal_aquaplanet(
         month_days = 0
 
     # --- Callback ---
-    def on_day(day: int, curr: object) -> None:
+    def on_day(day: int, curr: object, _diags: object) -> None:
         nonlocal month_t_sum, month_u_sum, month_days, blew_up
 
         if day > spinup_days:

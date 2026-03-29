@@ -7,6 +7,7 @@ from notus.physics.forcing import (
     HeldSuarezConfig,
     ImplicitForcing,
     MoistForcing,
+    PhysicsDiagnostics,
 )
 from notus.physics.physics_suite import PhysicsSuite, PhysicsSuiteConfig
 from notus.physics.radiation import (
@@ -42,6 +43,7 @@ __all__ = [
     "MoistForcing",
     "OceanState",
     "OrbitalParameters",
+    "PhysicsDiagnostics",
     "PhysicsSuite",
     "PhysicsSuiteConfig",
     "PrescribedSST",

@@ -510,9 +510,9 @@ class TestCombinedPerturbationStability:
             spectral_filter=filt,
         )
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         for _ in range(9):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         for field_name in ("vorticity", "divergence", "temperature", "log_surface_pressure"):
             field = getattr(curr, field_name)
@@ -564,9 +564,9 @@ class TestCombinedPerturbationStability:
             spectral_filter=filt,
         )
 
-        prev, curr = init_fn(state)
+        prev, curr, _diags = init_fn(state)
         for _ in range(9):
-            prev, curr = step_fn(prev, curr)
+            prev, curr, _diags = step_fn(prev, curr)
 
         for field_name in ("vorticity", "divergence", "temperature", "log_surface_pressure"):
             field = getattr(curr, field_name)

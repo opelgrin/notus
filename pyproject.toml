@@ -17,7 +17,6 @@ dev = [
     "cartopy>=0.23",
     "ruff>=0.15.7",
     "mypy>=1.19.1",
-    "jcm>=1.1.1",
 ]
 
 [build-system]
@@ -120,6 +119,12 @@ allowed-confusables = [
     "PLC0415", # Import not at top level
     "E402",    # Module-level import after pytest.importorskip guard
     "RUF069",  # Floating point equality (exact values in test assertions)
+]
+
+"src/notus/viz/**" = [
+    "PLC0415", # Lazy imports for optional deps (cartopy, matplotlib.animation)
+    "ANN401",  # Any in **kwargs (matplotlib passthrough) and cartopy projection
+    "RUF069",  # Float equality for unit scale checks
 ]
 
 "examples/**" = [

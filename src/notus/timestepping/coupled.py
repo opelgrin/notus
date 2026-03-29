@@ -8,6 +8,7 @@ adds the surface state threading and coupled implicit treatment.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 
 import jax
@@ -17,6 +18,7 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
+from notus.physics.forcing import PhysicsDiagnostics
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.physics_suite import PhysicsSuite
 from notus.physics.surface import (
@@ -55,7 +57,7 @@ class _ExplicitOnlyForcing:
         self,
         state: PrimitiveEquationState,
         surface_pressure: jnp.ndarray,
-    ) -> PrimitiveEquationState:
+    ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
         return self._forcing(state, surface_pressure)
 
 
@@ -567,28 +569,28 @@ class CoupledStepper:
     # Public init / step
     # ------------------------------------------------------------------
 
-    @jax.jit
+    @functools.partial(jax.jit, static_argnums=0)
     def init(
         self,
         state: PrimitiveEquationState,
         surface: SurfaceState,
-    ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState]:
+    ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics]:
         """Initialize leapfrog integration with a forward Euler half-step."""
-        previous, current = self._atm_init_fn(state)
+        previous, current, diags = self._atm_init_fn(state)
         current, surface = self._coupled_post_step(current, surface, self._dt)
-        return previous, current, surface
+        return previous, current, surface, diags
 
-    @jax.jit
+    @functools.partial(jax.jit, static_argnums=0)
     def step(
         self,
         previous: PrimitiveEquationState,
         current: PrimitiveEquationState,
         surface: SurfaceState,
-    ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState]:
+    ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics]:
         """Advance one leapfrog timestep with coupled surface update."""
-        filtered_current, future = self._atm_step_fn(previous, current)
+        filtered_current, future, diags = self._atm_step_fn(previous, current)
         future, surface = self._coupled_post_step(future, surface, 2.0 * self._dt)
-        return filtered_current, future, surface
+        return filtered_current, future, surface, diags
 
 
 def build_coupled_pe_stepper(
@@ -611,11 +613,16 @@ def build_coupled_pe_stepper(
 ) -> tuple[
     Callable[
         [PrimitiveEquationState, SurfaceState],
-        tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+        tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics],
     ],
     Callable[
         [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
-        tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+        tuple[
+            PrimitiveEquationState,
+            PrimitiveEquationState,
+            SurfaceState,
+            PhysicsDiagnostics,
+        ],
     ],
 ]:
     """Build init and step functions for coupled atmosphere-surface integration.

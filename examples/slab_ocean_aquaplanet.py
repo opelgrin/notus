@@ -175,7 +175,7 @@ def run_slab_ocean_aquaplanet(
     accum_zm: ZonalMeanState | None = None
     blew_up = False
 
-    def on_day(day: int, curr_state: object, sfc: object) -> None:
+    def on_day(day: int, curr_state: object, sfc: object, _diags: object) -> None:
         nonlocal n_averaging_samples, accum_zm, blew_up
 
         if day > spinup_days:

@@ -20,11 +20,11 @@ from notus.timestepping.spinup import SpinupResult, spinup_prescribed_sst
 
 
 __all__ = [
+    "CoupledStepper",
     "LeapfrogState",
     "PESemiImplicitConfig",
     "SemiImplicitConfig",
     "SpinupResult",
-    "CoupledStepper",
     "build_coupled_pe_stepper",
     "build_pe_semi_implicit_config",
     "build_pe_stepper",

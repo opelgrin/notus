@@ -35,7 +35,7 @@ import numpy as np
 
 from notus.constants import PlanetaryConstants
 from notus.dynamics.primitive_equations import primitive_equation_tendencies
-from notus.physics.forcing import Forcing, ImplicitForcing, MoistForcing
+from notus.physics.forcing import Forcing, ImplicitForcing, MoistForcing, PhysicsDiagnostics
 from notus.state import PrimitiveEquationState
 from notus.timestepping.semi_implicit_pe import (
     build_pe_semi_implicit_config,
@@ -190,17 +190,28 @@ def _compose_dynamics_physics(
     forcing: Forcing | None,
     transform: SpectralTransform,
     planet: PlanetaryConstants,
-) -> Callable[[PrimitiveEquationState], PrimitiveEquationState]:
-    """Compose dynamics and physics forcing into a single explicit tendency."""
-    if forcing is None:
-        return dynamics_fn
+) -> Callable[[PrimitiveEquationState], tuple[PrimitiveEquationState, PhysicsDiagnostics]]:
+    """Compose dynamics and physics into a single explicit tendency.
 
-    def combined(state: PrimitiveEquationState) -> PrimitiveEquationState:
+    Returns a callable that produces ``(combined_tendency, diagnostics)``.
+    """
+    if forcing is None:
+
+        def dynamics_only(
+            state: PrimitiveEquationState,
+        ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
+            return dynamics_fn(state), PhysicsDiagnostics()
+
+        return dynamics_only
+
+    def combined(
+        state: PrimitiveEquationState,
+    ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
         dyn_tend = dynamics_fn(state)
         lnps_grid = transform.spectral_to_grid(state.log_surface_pressure)
         ps_grid = planet.reference_pressure * jnp.exp(lnps_grid)
-        phys_tend = forcing(state, ps_grid)
-        return jax.tree.map(jnp.add, dyn_tend, phys_tend)
+        phys_tend, diags = forcing(state, ps_grid)
+        return jax.tree.map(jnp.add, dyn_tend, phys_tend), diags
 
     return combined
 
@@ -263,10 +274,13 @@ def build_pe_stepper(
     alpha: float = 0.5,
     forcing: Forcing | None = None,
 ) -> tuple[
-    Callable[[PrimitiveEquationState], tuple[PrimitiveEquationState, PrimitiveEquationState]],
+    Callable[
+        [PrimitiveEquationState],
+        tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics],
+    ],
     Callable[
         [PrimitiveEquationState, PrimitiveEquationState],
-        tuple[PrimitiveEquationState, PrimitiveEquationState],
+        tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics],
     ],
 ]:
     """Build init and step functions for PE IMEX time integration.
@@ -314,8 +328,8 @@ def build_pe_stepper(
     Returns
     -------
     tuple[init_fn, step_fn]
-        ``init_fn(state) -> (previous, current)``
-        ``step_fn(previous, current) -> (filtered_current, future)``
+        ``init_fn(state) -> (previous, current, diagnostics)``
+        ``step_fn(previous, current) -> (filtered_current, future, diagnostics)``
     """
     arrays = transform.arrays
     t_ref = np.asarray(reference_temperature)
@@ -327,7 +341,7 @@ def build_pe_stepper(
     epsilon_v, tv_ref = _compute_virtual_reference(t_ref, reference_humidity, planet)
 
     # Build the explicit tendency function (JIT-compiled internally)
-    explicit_fn = primitive_equation_tendencies(
+    dynamics_fn = primitive_equation_tendencies(
         transform,
         planet,
         levels,
@@ -338,9 +352,9 @@ def build_pe_stepper(
         reference_virtual_temperature=tv_ref,
     )
 
-    # Compose dynamics + physics forcing if provided
-    explicit_fn = _compose_dynamics_physics(
-        explicit_fn,
+    # Compose dynamics + physics forcing → returns (tendency, diagnostics)
+    combined_fn = _compose_dynamics_physics(
+        dynamics_fn,
         forcing,
         transform,
         planet,
@@ -393,32 +407,42 @@ def build_pe_stepper(
             state = implicit_physics(state, dt_implicit)
         return state
 
-    # Build init_fn
+    # Build init_fn (inlines euler_init to capture diagnostics)
     @jax.jit
     def init_fn(
         state: PrimitiveEquationState,
-    ) -> tuple[PrimitiveEquationState, PrimitiveEquationState]:
-        previous, current = euler_init(state, explicit_fn, inverse_fn, dt)
+    ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics]:
+        tendency, diags = combined_fn(state)
+        intermediate = jax.tree.map(lambda x, f: x + dt * f, state, tendency)
+        current = inverse_fn(intermediate, dt)
         current = _post_step(current, dt)
-        return previous, current
+        return state, current, diags
 
-    # Build step_fn
+    # Build step_fn (inlines imex_leapfrog_step to capture diagnostics)
+    r = robert_coeff
+
     @jax.jit
     def step_fn(
         previous: PrimitiveEquationState,
         current: PrimitiveEquationState,
-    ) -> tuple[PrimitiveEquationState, PrimitiveEquationState]:
-        filtered_current, future = imex_leapfrog_step(
+    ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics]:
+        explicit_current, diags = combined_fn(current)
+        implicit_previous = implicit_fn(previous)
+        intermediate = jax.tree.map(
+            lambda xp, fe, li: xp + 2.0 * dt * (fe + (1.0 - alpha) * li),
+            previous,
+            explicit_current,
+            implicit_previous,
+        )
+        eta = 2.0 * dt * alpha
+        future = inverse_fn(intermediate, eta)
+        filtered_current = jax.tree.map(
+            lambda p, c, f: (1.0 - 2.0 * r) * c + r * (p + f),
             previous,
             current,
-            explicit_fn,
-            implicit_fn,
-            inverse_fn,
-            dt,
-            alpha=alpha,
-            robert_coeff=robert_coeff,
+            future,
         )
         future = _post_step(future, 2.0 * dt)
-        return filtered_current, future
+        return filtered_current, future, diags
 
     return init_fn, step_fn

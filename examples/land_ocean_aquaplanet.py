@@ -209,7 +209,7 @@ def run_land_ocean(
     jet_level = max(0, n_levels // 4)
     land_mask = land_frac > 0.5
 
-    def on_day(day: int, curr_state: object, sfc: object) -> None:
+    def on_day(day: int, curr_state: object, sfc: object, _diags: object) -> None:
         nonlocal n_avg, accum_zm, blew_up
 
         if day > spinup_days:
