@@ -368,15 +368,29 @@ Replaced the semi-gray Byrne scheme (which had a -145 W/m² global energy imbala
 - Diagnostic clouds from RH alone (without precipitation) still provide meaningful LW greenhouse effect. SW cloud albedo requires the precipitation contribution for realistic values — this will improve when precipitation is threaded through from the moist physics.
 - The `Forcing` protocol was too narrow for the coupled stepper, which needs radiation config, SST, day_of_year, k_v, and implicit physics. Typing as `SimplePhysics` directly is more honest and eliminates fragile duck-typing.
 
-## Phase 10 — Topography
+## Phase 10 — Topography (complete)
 
 Prescribed orography and its dynamical/physical effects.
 
-**Plan:**
-- Prescribed surface geopotential z_s(lat, lon) fed into the divergence tendency (∇²(g·z_s) term already wired in the dynamical core)
-- Spectral representation of orography with appropriate smoothing/filtering
-- Surface pressure initialization consistent with orography
-- Orographic effects on precipitation, flow deflection, rain shadows
+**What was built:**
+- Idealized topography generators in `topography.py`: `gaussian_mountain` (isolated bell), `zonal_ridge` (zonally symmetric), `sinusoidal_mountains` (wavenumber-k chain for stationary Rossby wave tests)
+- Spectral smoothing of orography via `smooth_orography()`: Lanczos σ-factor and exponential taper methods with configurable order, applied once to initial surface geopotential to suppress Gibbs ringing
+- Hydrostatic surface pressure initialization via `orographic_log_surface_pressure()`: computes ln(ps/p₀) = −Φ_s/(R·T_ref) in grid space and transforms to spectral, ensuring pressure field is consistent with terrain
+- All functions return spectral arrays drop-in compatible with `build_pe_stepper`
+
+**Validation:**
+- 25 unit tests: roundtrip height recovery, peak location, zonal symmetry (spectral m=0 check), wavenumber structure via FFT, polar vanishing, global mean, smoothing properties (global mean preservation, high-wavenumber damping, Gibbs reduction, order monotonicity)
+- 8 dry integration tests: 5-day Gaussian and sinusoidal mountain runs with stability, temperature bounds, surface pressure reduction over peaks, mass conservation (<0.01%), energy conservation (<1%)
+- 6 moist integration tests: 10-day moist aquaplanet with mountain, confirming precipitation develops, is non-negative, and is spatially modulated by the mountain (zonal symmetry broken)
+- All 443 non-slow tests pass
+
+**Orographic precipitation — resolved, no parameterization needed:**
+Surveying comparable idealized GCMs (Isca, GFDL idealized moist, PlaSim, SPEEDY/JCM), the standard approach is to rely on resolved dynamics for orographic precipitation. The ∇²(g·z_s) divergence tendency plus sigma-coordinate lifting naturally produces spatially varying precipitation patterns around mountains. SPEEDY's "orographic correction" (lapse-rate T/q adjustment) is SPEEDY-specific tuning, not standard practice. Our moist integration confirms the resolved dynamics are sufficient: precipitation develops with clear spatial modulation by the mountain without explicit orographic physics.
+
+**Lessons learned:**
+- Spectral representation of sharp topography requires explicit smoothing beyond the inherent truncation. The Lanczos σ-factor (sinc taper) is simple, preserves the global mean exactly (σ(n=0)=1), and effectively suppresses Gibbs undershoots.
+- Surface pressure initialization is essential — starting with uniform ps over a 2500 m mountain creates an immediate hydrostatic imbalance that generates spurious gravity waves. The hypsometric adjustment is a simple one-liner but critical for clean integrations.
+- At T21 resolution, a 2500 m Gaussian mountain (half-width 20°) is well-resolved and the model remains stable for 10+ days in both dry and moist configurations with dt=600s.
 
 ## Phase 11+ — Future Wishlist
 
