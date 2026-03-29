@@ -22,6 +22,7 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators.vector import uv_from_vordiv
 from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_coefficients
+from notus.physics.clouds import CloudConfig, diagnose_clouds
 from notus.physics.convection import (
     betts_miller_convection,
     dry_convective_adjustment,
@@ -164,6 +165,8 @@ class SimplePhysicsConfig:
     speedy_sw_abswv1: float = 0.022
     speedy_sw_abswv2: float = 15.0
     speedy_visible_fraction: float = 0.95
+    enable_clouds: bool = False
+    cloud_config: CloudConfig = dataclasses.field(default_factory=CloudConfig)
     orbital: OrbitalParameters | None = None
     sst_t_min: float = 271.0
     sst_t_delta: float = 29.0
@@ -418,6 +421,31 @@ class SimplePhysics:
         q_grid = jax.vmap(self.transform.spectral_to_grid)(state.humidity)
         q_grid = jnp.maximum(q_grid, 0.0)
 
+        # Cloud diagnosis (RH-based, no precipitation in explicit path)
+        cloud = None
+        if cfg.enable_clouds:
+            pressure = levels.sigma_full[:, None, None] * surface_pressure[None, :, :]
+            q_sat = saturation_specific_humidity(t_grid, pressure, planet.epsilon_moisture)
+            rh = q_grid / jnp.maximum(q_sat, 1e-10)
+            geopotential = (
+                planet.gravity
+                * levels.sigma_full[:, None, None]
+                * jnp.ones_like(
+                    t_grid,
+                )
+            )
+            cloud = diagnose_clouds(
+                rh,
+                q_grid,
+                t_grid,
+                geopotential,
+                precipitation_rate=jnp.zeros(surface_pressure.shape),
+                convective_mask=jnp.zeros_like(t_grid, dtype=bool),
+                gravity=planet.gravity,
+                specific_heat_cp=planet.specific_heat_cp,
+                config=cfg.cloud_config,
+            )
+
         # LW heating
         q_lw, _lw_down_sfc, _olr = speedy_longwave_heating(
             t_grid,
@@ -434,6 +462,7 @@ class SimplePhysics:
             ablco2=cfg.speedy_ablco2,
             ablwv1=cfg.speedy_ablwv1,
             ablwv2=cfg.speedy_ablwv2,
+            cloud=cloud,
         )
 
         # SW heating (always active for SPEEDY)
@@ -465,6 +494,7 @@ class SimplePhysics:
             abswv1=cfg.speedy_sw_abswv1,
             abswv2=cfg.speedy_sw_abswv2,
             visible_fraction=cfg.speedy_visible_fraction,
+            cloud=cloud,
         )
 
         return q_lw + q_sw

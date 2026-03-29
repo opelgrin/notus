@@ -184,6 +184,7 @@ def main() -> None:
     parser.add_argument("--spinup-days", type=int, default=100, help="Prescribed-SST spinup days")
     parser.add_argument("--averaging-days", type=int, default=200, help="Q-flux averaging days")
     parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
+    parser.add_argument("--clouds", action="store_true", help="Enable diagnostic clouds (speedy)")
     parser.add_argument(
         "--q-flux-file",
         type=str,
@@ -227,7 +228,11 @@ def main() -> None:
         sd, ad = args.spinup_days, args.averaging_days
         print(f"Running prescribed-SST spinup ({sd}d spinup + {ad}d averaging)...")
         if args.scheme == "speedy":
-            base_config = SimplePhysicsConfig(radiation_scheme="speedy", orbital=EARTH_ORBIT)
+            base_config = SimplePhysicsConfig(
+                radiation_scheme="speedy",
+                orbital=EARTH_ORBIT,
+                enable_clouds=args.clouds,
+            )
         else:
             base_config = SimplePhysicsConfig(
                 radiation_scheme="byrne",
@@ -256,7 +261,11 @@ def main() -> None:
     # Baseline: constant C_D
     print("--- Baseline (constant C_D=0.0015) ---")
     if args.scheme == "speedy":
-        baseline_cfg = SimplePhysicsConfig(radiation_scheme="speedy", orbital=EARTH_ORBIT)
+        baseline_cfg = SimplePhysicsConfig(
+            radiation_scheme="speedy",
+            orbital=EARTH_ORBIT,
+            enable_clouds=args.clouds,
+        )
     else:
         baseline_cfg = SimplePhysicsConfig(
             radiation_scheme="byrne",
@@ -273,6 +282,7 @@ def main() -> None:
         mo_cfg = SimplePhysicsConfig(
             radiation_scheme="speedy",
             orbital=EARTH_ORBIT,
+            enable_clouds=args.clouds,
             surface_layer=SurfaceLayerConfig(z0_momentum=1e-4),
         )
     else:

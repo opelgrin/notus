@@ -343,14 +343,15 @@ def run_validation(
     n_levels: int = 20,
     dt: float = 900.0,
     scheme: str = "byrne",
+    clouds: bool = False,
 ) -> bool:
     """Run moist aquaplanet and validate radiation budget."""
     if scheme == "byrne":
         config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
         scheme_label = "Byrne LW + humidity-dependent SW (tau=0.22)"
     elif scheme == "speedy":
-        config = SimplePhysicsConfig(radiation_scheme="speedy")
-        scheme_label = "SPEEDY 4-band LW + 2-band SW"
+        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
+        scheme_label = "SPEEDY 4-band LW + 2-band SW" + (" + clouds" if clouds else "")
     else:
         print(f"ERROR: unknown scheme '{scheme}'")
         return False
@@ -561,6 +562,7 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=300, help="Total integration days")
     parser.add_argument("--spinup", type=int, default=200, help="Spinup days before averaging")
     parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
+    parser.add_argument("--clouds", action="store_true", help="Enable diagnostic clouds (speedy)")
     parser.add_argument("--truncation", type=int, default=21, help="Spectral truncation")
     parser.add_argument("--levels", type=int, default=20, help="Number of vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
@@ -573,6 +575,7 @@ def main() -> None:
         n_levels=args.levels,
         dt=args.dt,
         scheme=args.scheme,
+        clouds=args.clouds,
     )
 
     sys.exit(0 if passed else 1)

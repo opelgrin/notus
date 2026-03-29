@@ -12,8 +12,14 @@ All functions are JIT-compatible.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import jax
 import jax.numpy as jnp
+
+
+if TYPE_CHECKING:
+    from notus.physics.clouds import CloudDiagnostic
 
 
 STEFAN_BOLTZMANN: float = 5.670374419e-8  # [W/(m² K⁴)]
@@ -642,6 +648,7 @@ def speedy_longwave_heating(
     ablco2: float = 6.0,
     ablwv1: float = 0.7,
     ablwv2: float = 50.0,
+    cloud: CloudDiagnostic | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Compute longwave heating with 4-band SPEEDY scheme.
 
@@ -652,6 +659,10 @@ def speedy_longwave_heating(
         Band 1 (CO₂):       α = ablco2            (well-mixed)
         Band 2 (H₂O weak):  α = ablwv1 · q        (humidity-dependent)
         Band 3 (H₂O strong): α = ablwv2 · q        (humidity-dependent)
+
+    When ``cloud`` is provided, cloud absorptivity is added:
+    below cloud top, ``ablcl1 * cloudc`` to the window band;
+    above cloud top, ``ablcl2 * cloudc`` to window and H₂O bands.
 
     Layer transmissivity: ``τ = exp(-(ps/p₀) · Δσ · α)``
 
@@ -706,16 +717,28 @@ def speedy_longwave_heating(
     dp_factor = dsigma[:, None, None] * ps_ratio
 
     # Per-band absorptivity: (4, n_levels, n_lat, n_lon)
+    n_levels = temperature.shape[0]
     q = jnp.maximum(humidity, 0.0)
-    alpha_bands = jnp.stack(
-        [
-            jnp.broadcast_to(jnp.full_like(dp_factor, ablwin), dp_factor.shape),
-            jnp.broadcast_to(jnp.full_like(dp_factor, ablco2), dp_factor.shape),
-            ablwv1 * q,
-            ablwv2 * q,
-        ],
-        axis=0,
-    )  # (4, n_levels, n_lat, n_lon)
+    a_win = jnp.broadcast_to(jnp.full_like(dp_factor, ablwin), dp_factor.shape)
+    a_co2 = jnp.broadcast_to(jnp.full_like(dp_factor, ablco2), dp_factor.shape)
+    a_wv1 = ablwv1 * q
+    a_wv2 = ablwv2 * q
+
+    # Add cloud absorptivity to LW bands
+    if cloud is not None:
+        level_idx = jnp.arange(n_levels)[:, None, None]
+        below_top = level_idx >= cloud.cloud_top[None, :, :]
+        above_top = level_idx < cloud.cloud_top[None, :, :]
+        cc = cloud.cloud_cover[None, :, :]
+
+        # Below cloud top: thick cloud in window band (ablcl1=12.0)
+        a_win += jnp.where(below_top, 12.0 * cc, 0.0)
+        # Above cloud top: thin cloud in window + H₂O bands (ablcl2=0.6)
+        a_win += jnp.where(above_top, 0.6 * cc, 0.0)
+        a_wv1 = jnp.maximum(a_wv1, jnp.where(above_top, 0.6 * cc, 0.0))
+        a_wv2 = jnp.maximum(a_wv2, jnp.where(above_top, 0.6 * cc, 0.0))
+
+    alpha_bands = jnp.stack([a_win, a_co2, a_wv1, a_wv2], axis=0)
 
     # Transmissivity per band per layer
     tau_bands = dp_factor[None, :, :, :] * alpha_bands
@@ -768,6 +791,7 @@ def speedy_lw_down_surface(
     ablco2: float = 6.0,
     ablwv1: float = 0.7,
     ablwv2: float = 50.0,
+    cloud: CloudDiagnostic | None = None,
 ) -> jnp.ndarray:
     """Compute downward LW flux at surface using 4-band SPEEDY scheme.
 
@@ -789,13 +813,15 @@ def speedy_lw_down_surface(
         Reference pressure p₀ [Pa].
     epslw, surface_emissivity, ablwin, ablco2, ablwv1, ablwv2 : float
         SPEEDY LW parameters (see ``speedy_longwave_heating``).
+    cloud : CloudDiagnostic or None
+        Diagnostic cloud fields for LW cloud absorption.
 
     Returns
     -------
     jnp.ndarray
         Downward LW flux at the surface [W/m²], shape ``(n_lat, n_lon)``.
     """
-    _, n_lat, n_lon = temperature.shape
+    n_levels, n_lat, n_lon = temperature.shape
 
     # Pressure ratio per layer
     ps_ratio = surface_pressure[None, :, :] / reference_pressure
@@ -803,15 +829,22 @@ def speedy_lw_down_surface(
 
     # Per-band absorptivity and transmissivity
     q = jnp.maximum(humidity, 0.0)
-    alpha_bands = jnp.stack(
-        [
-            jnp.broadcast_to(jnp.full_like(dp_factor, ablwin), dp_factor.shape),
-            jnp.broadcast_to(jnp.full_like(dp_factor, ablco2), dp_factor.shape),
-            ablwv1 * q,
-            ablwv2 * q,
-        ],
-        axis=0,
-    )
+    a_win = jnp.broadcast_to(jnp.full_like(dp_factor, ablwin), dp_factor.shape)
+    a_co2 = jnp.broadcast_to(jnp.full_like(dp_factor, ablco2), dp_factor.shape)
+    a_wv1 = ablwv1 * q
+    a_wv2 = ablwv2 * q
+
+    if cloud is not None:
+        level_idx = jnp.arange(n_levels)[:, None, None]
+        below_top = level_idx >= cloud.cloud_top[None, :, :]
+        above_top = level_idx < cloud.cloud_top[None, :, :]
+        cc = cloud.cloud_cover[None, :, :]
+        a_win += jnp.where(below_top, 12.0 * cc, 0.0)
+        a_win += jnp.where(above_top, 0.6 * cc, 0.0)
+        a_wv1 = jnp.maximum(a_wv1, jnp.where(above_top, 0.6 * cc, 0.0))
+        a_wv2 = jnp.maximum(a_wv2, jnp.where(above_top, 0.6 * cc, 0.0))
+
+    alpha_bands = jnp.stack([a_win, a_co2, a_wv1, a_wv2], axis=0)
     trans_bands = jnp.exp(-dp_factor[None] * alpha_bands)
 
     # Band-weighted blackbody at full levels
@@ -859,6 +892,7 @@ def speedy_shortwave_heating(
     abswv1: float = 0.022,
     abswv2: float = 15.0,
     visible_fraction: float = 0.95,
+    cloud: CloudDiagnostic | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Compute shortwave heating with 2-band SPEEDY scheme.
 
@@ -867,6 +901,9 @@ def speedy_shortwave_heating(
     - **Band 1** (visible, ``visible_fraction`` of total): absorbed by
       dry air, aerosols (σ²-weighted), and weak H₂O.
     - **Band 2** (near-IR, remainder): absorbed by strong H₂O only.
+
+    When ``cloud`` is provided, cloud reflection and absorption are
+    added to the visible band.
 
     Downward Beer-Lambert per band, surface albedo reflection, upward
     absorption, then sum across bands.
@@ -901,6 +938,9 @@ def speedy_shortwave_heating(
         Water vapor absorptivity (band 2, strong near-IR).
     visible_fraction : float
         Fraction of solar irradiance in band 1.
+    cloud : CloudDiagnostic or None
+        Diagnostic cloud fields.  When provided, adds cloud reflection
+        at cloud top and cloud absorption in the visible band.
 
     Returns
     -------
@@ -909,7 +949,7 @@ def speedy_shortwave_heating(
         shape ``(n_levels, n_lat, n_lon)`` and total downward SW flux
         at the surface [W/m²] shape ``(n_lat, n_lon)``.
     """
-    _n_levels, n_lat, n_lon = humidity.shape
+    n_levels, n_lat, n_lon = humidity.shape
     q = jnp.maximum(humidity, 0.0)
 
     # Pressure factor per layer: (n_levels, n_lat, n_lon)
@@ -918,7 +958,29 @@ def speedy_shortwave_heating(
 
     # Band 1 (visible): dry air + aerosol(σ²) + weak H₂O
     alpha_vis = absdry + absaer * sigma_full[:, None, None] ** 2 + abswv1 * q
+
+    # Add cloud absorption to visible band in cloudy layers
+    if cloud is not None:
+        level_idx = jnp.arange(n_levels)[:, None, None]
+        in_cloud = level_idx >= cloud.cloud_top[None, :, :]
+        acloud = cloud.cloud_cover * jnp.minimum(
+            cloud.cloud_humidity * abswv1 * 10.0,  # scaled cloud absorptivity
+            0.15,  # abscl2 cap
+        )
+        alpha_vis += jnp.where(in_cloud, acloud[None, :, :], 0.0)
+
     trans_vis = jnp.exp(-dp_factor * alpha_vis)  # (n_levels, n_lat, n_lon)
+
+    # Apply cloud reflection at cloud-top level (visible band only)
+    if cloud is not None:
+        cloud_refl = 1.0 - 0.43 * cloud.cloud_cover  # albcl
+        at_cloud_top = level_idx == cloud.cloud_top[None, :, :]
+        trans_vis *= jnp.where(at_cloud_top, cloud_refl[None, :, :], 1.0)
+
+        # Stratiform reflection at PBL top (lowest level)
+        strat_refl = 1.0 - 0.50 * cloud.stratiform_cover  # albcls
+        at_pbl = level_idx == (n_levels - 1)
+        trans_vis *= jnp.where(at_pbl, strat_refl[None, :, :], 1.0)
 
     # Band 2 (near-IR): strong H₂O only
     alpha_nir = abswv2 * q

@@ -186,6 +186,7 @@ def run_diagnose_qflux(
     output_path: str = "qflux.npz",
     restart_path: str | None = None,
     scheme: str = "byrne",
+    clouds: bool = False,
 ) -> bool:
     """Run prescribed-SST integration and diagnose Q-flux."""
     print(f"Q-flux diagnosis: T{truncation} L{n_levels}, dt={dt:.0f}s, {n_days} days")
@@ -209,7 +210,7 @@ def run_diagnose_qflux(
     )
 
     if scheme == "speedy":
-        config = SimplePhysicsConfig(radiation_scheme="speedy")
+        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
     else:
         config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
@@ -331,6 +332,7 @@ def main() -> None:
     parser.add_argument("--levels", type=int, default=20, help="Vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
+    parser.add_argument("--clouds", action="store_true", help="Enable diagnostic clouds (speedy)")
     parser.add_argument("--output", type=str, default="qflux.npz", help="Output .npz path")
     parser.add_argument(
         "--save-restart",
@@ -349,6 +351,7 @@ def main() -> None:
         output_path=args.output,
         restart_path=args.save_restart,
         scheme=args.scheme,
+        clouds=args.clouds,
     )
 
     sys.exit(0 if passed else 1)

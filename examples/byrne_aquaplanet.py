@@ -51,6 +51,7 @@ def run_byrne_aquaplanet(
     dt: float = 900.0,
     output_path: str | None = None,
     scheme: str = "byrne",
+    clouds: bool = False,
 ) -> bool:
     """Run a moist aquaplanet with Byrne or SPEEDY radiation.
 
@@ -77,7 +78,7 @@ def run_byrne_aquaplanet(
     )
 
     if scheme == "speedy":
-        config = SimplePhysicsConfig(radiation_scheme="speedy")
+        config = SimplePhysicsConfig(radiation_scheme="speedy", enable_clouds=clouds)
     else:
         config = SimplePhysicsConfig(radiation_scheme="byrne", sw_tau_0=0.22)
     forcing = SimplePhysics(transform, EARTH, levels, config=config)
@@ -280,6 +281,7 @@ def main() -> None:
     parser.add_argument("--levels", type=int, default=20, help="Number of vertical levels")
     parser.add_argument("--dt", type=float, default=900.0, help="Timestep [s]")
     parser.add_argument("--scheme", type=str, default="byrne", choices=["byrne", "speedy"])
+    parser.add_argument("--clouds", action="store_true", help="Enable diagnostic clouds (speedy)")
     parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     args = parser.parse_args()
 
@@ -291,6 +293,7 @@ def main() -> None:
         dt=args.dt,
         output_path=args.output,
         scheme=args.scheme,
+        clouds=args.clouds,
     )
 
     sys.exit(0 if passed else 1)

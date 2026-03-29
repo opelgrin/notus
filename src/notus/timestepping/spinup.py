@@ -34,6 +34,8 @@ import numpy as np
 from notus.constants import PlanetaryConstants
 from notus.operators import exponential_filter
 from notus.operators.vector import uv_from_vordiv
+from notus.physics.clouds import diagnose_clouds
+from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.radiation import (
     byrne_longwave_optical_depth,
     byrne_shortwave_optical_depth,
@@ -119,6 +121,24 @@ def _diagnose_surface_flux(
             jax.vmap(transform.spectral_to_grid)(state.humidity),
             0.0,
         )
+        # Cloud diagnosis for SPEEDY
+        sp_cloud = None
+        if cfg.enable_clouds:
+            pressure = levels.sigma_full[:, None, None] * surface_pressure[None, :, :]
+            q_sat_sp = saturation_specific_humidity(t_grid, pressure, planet.epsilon_moisture)
+            rh_sp = q_grid_sp / jnp.maximum(q_sat_sp, 1e-10)
+            geop = planet.gravity * levels.sigma_full[:, None, None] * jnp.ones_like(t_grid)
+            sp_cloud = diagnose_clouds(
+                rh_sp,
+                q_grid_sp,
+                t_grid,
+                geop,
+                precipitation_rate=jnp.zeros((n_lat, n_lon)),
+                convective_mask=jnp.zeros_like(t_grid, dtype=bool),
+                gravity=planet.gravity,
+                specific_heat_cp=planet.specific_heat_cp,
+                config=cfg.cloud_config,
+            )
         insol = planet.solar_constant / 4.0 * (1.0 + cfg.delta_s * (1.0 - 3.0 * sin_lat**2) / 4.0)
         _, sw_down_sfc = speedy_shortwave_heating(
             levels.dsigma,
@@ -135,6 +155,7 @@ def _diagnose_surface_flux(
             abswv1=cfg.speedy_sw_abswv1,
             abswv2=cfg.speedy_sw_abswv2,
             visible_fraction=cfg.speedy_visible_fraction,
+            cloud=sp_cloud,
         )
     elif cfg.sw_tau_0 > 0.0:
         tau_sw: jnp.ndarray | None = None
@@ -188,6 +209,7 @@ def _diagnose_surface_flux(
             ablco2=cfg.speedy_ablco2,
             ablwv1=cfg.speedy_ablwv1,
             ablwv2=cfg.speedy_ablwv2,
+            cloud=sp_cloud,
         )
     elif cfg.radiation_scheme == "byrne" and state.humidity is not None:
         q_grid = jnp.maximum(
