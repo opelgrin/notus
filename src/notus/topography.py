@@ -214,3 +214,38 @@ def smooth_orography(
     else:
         raise ValueError(f"Unknown smoothing method: {method!r}")
     return surface_geopotential * weights
+
+
+def orographic_log_surface_pressure(
+    surface_geopotential: jnp.ndarray,
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+    reference_temperature: float,
+) -> jnp.ndarray:
+    """Compute ln(ps/p₀) consistent with orography via the hypsometric equation.
+
+    ln(ps/p₀) = −Φ_s / (R·T_ref)
+
+    where Φ_s = g·z_s is the surface geopotential.  The nonlinear
+    relationship is evaluated in grid space (to handle spatially varying
+    Φ_s correctly) and then transformed to spectral space.
+
+    Parameters
+    ----------
+    surface_geopotential : jnp.ndarray
+        Spectral coefficients of g·z_s, shape ``(n_spectral,)``.
+    transform : SpectralTransform
+        Pre-computed spectral transform.
+    planet : PlanetaryConstants
+        Planetary constants (provides gas constant).
+    reference_temperature : float
+        Mean reference temperature [K] used for hydrostatic balance.
+
+    Returns
+    -------
+    jnp.ndarray
+        Spectral coefficients of ln(ps/p₀), shape ``(n_spectral,)``.
+    """
+    phi_s_grid = transform.spectral_to_grid(surface_geopotential)
+    ln_ps_grid = -phi_s_grid / (planet.gas_constant * reference_temperature)
+    return transform.grid_to_spectral(ln_ps_grid)

@@ -110,6 +110,7 @@ from notus.timestepping import (
 )
 from notus.topography import (
     gaussian_mountain,
+    orographic_log_surface_pressure,
     sinusoidal_mountains,
     smooth_orography,
     zonal_ridge,
@@ -179,6 +180,7 @@ __all__ = [
     "meridional_derivative",
     "moist_aquaplanet_initial_state",
     "omega_over_pressure",
+    "orographic_log_surface_pressure",
     "run_simulation",
     "save_restart",
     "sigma_dot",

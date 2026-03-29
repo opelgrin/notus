@@ -11,6 +11,7 @@ from notus import (
     EARTH,
     SpectralTransform,
     gaussian_mountain,
+    orographic_log_surface_pressure,
     sinusoidal_mountains,
     smooth_orography,
     zonal_ridge,
@@ -266,3 +267,48 @@ class TestSmoothOrography:
         phi_s = jnp.zeros(n_spec, dtype=jnp.complex128)
         with pytest.raises(ValueError, match="Unknown smoothing method"):
             smooth_orography(phi_s, arrays, method="bogus")
+
+
+class TestOrographicLogSurfacePressure:
+    def test_flat_surface_gives_zero(self, t21_transform: SpectralTransform):
+        """Zero topography should give ln(ps/p0) = 0."""
+        n_spec = t21_transform.grid.n_spectral_coeffs
+        phi_s = jnp.zeros(n_spec, dtype=jnp.complex128)
+        ln_ps = orographic_log_surface_pressure(phi_s, t21_transform, EARTH, 264.0)
+        assert jnp.allclose(ln_ps, 0.0, atol=1e-30)
+
+    def test_mountain_reduces_surface_pressure(self, t42_transform: SpectralTransform):
+        """Over a mountain, ps < p0, so ln(ps/p0) < 0 at the peak."""
+        phi_s = gaussian_mountain(t42_transform, EARTH, height=2000.0)
+        ln_ps = orographic_log_surface_pressure(phi_s, t42_transform, EARTH, 264.0)
+        ln_ps_grid = np.asarray(t42_transform.spectral_to_grid(ln_ps))
+        # ln(ps/p0) should be negative where there's a mountain
+        assert ln_ps_grid.min() < 0.0
+
+    def test_pressure_magnitude(self, t42_transform: SpectralTransform):
+        """Check that the pressure reduction is physically reasonable."""
+        h = 2000.0
+        t_ref = 264.0
+        phi_s = gaussian_mountain(t42_transform, EARTH, height=h, half_width=np.pi / 6)
+        ln_ps = orographic_log_surface_pressure(phi_s, t42_transform, EARTH, t_ref)
+        ln_ps_grid = np.asarray(t42_transform.spectral_to_grid(ln_ps))
+
+        # Analytic: ln(ps/p0) ≈ -g·zs/(R·T_ref)
+        expected_min = -EARTH.gravity * h / (EARTH.gas_constant * t_ref)
+        # Allow 25% tolerance due to spectral truncation smoothing the peak
+        assert ln_ps_grid.min() == pytest.approx(expected_min, rel=0.25)
+
+    def test_spectral_shape(self, t21_transform: SpectralTransform):
+        """Output has the correct spectral shape and dtype."""
+        phi_s = gaussian_mountain(t21_transform, EARTH, height=1000.0)
+        ln_ps = orographic_log_surface_pressure(phi_s, t21_transform, EARTH, 264.0)
+        assert ln_ps.shape == (t21_transform.grid.n_spectral_coeffs,)
+        assert ln_ps.dtype == jnp.complex128
+
+    def test_zonal_ridge_is_zonally_symmetric(self, t42_transform: SpectralTransform):
+        """ln(ps/p0) from a zonal ridge should also be zonally symmetric."""
+        phi_s = zonal_ridge(t42_transform, EARTH, height=1500.0)
+        ln_ps = orographic_log_surface_pressure(phi_s, t42_transform, EARTH, 264.0)
+        ln_ps_grid = np.asarray(t42_transform.spectral_to_grid(ln_ps))
+        zonal_std = np.std(ln_ps_grid, axis=1)
+        assert np.all(zonal_std < 1e-10)
