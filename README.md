@@ -27,8 +27,20 @@ The model is planet-agnostic — it can simulate any rotating planet with an ide
 
 ## Installation
 
+Requires Python 3.13 or newer.
+
+Install from PyPI:
+
 ```bash
-uv sync
+pip install notus-gcm
+```
+
+The PyPI package becomes available after the first tagged release is published.
+
+For local development:
+
+```bash
+uv sync --group dev
 ```
 
 ## Usage
@@ -120,24 +132,6 @@ uv run python examples/validate_radiation.py --scheme speedy --clouds --days 300
 # Coupled slab ocean validation (Q-flux diagnosis + coupled integration)
 uv run python examples/validate_radiation_coupled.py --scheme speedy --clouds
 ```
-
-## Roadmap
-
-See [docs/roadmap.md](docs/roadmap.md) for detailed descriptions of each phase.
-
-- [x] **Phase 1 — Spectral foundations**: Gaussian grid, spherical harmonic transforms, spectral operators
-- [x] **Phase 2 — Shallow water**: 2D shallow water equations on the sphere, Williamson et al. (1992) test case 2 (steady-state 10 days, mass conservation)
-- [x] **Phase 3 — Primitive equations**: 3D hydrostatic dycore on sigma levels, Jablonowski-Williamson (2006) baroclinic wave (10-day integration, ps minimum ~950 hPa, conservation < 0.1%)
-- [x] **Phase 4 — Held-Suarez**: Newtonian relaxation + Rayleigh friction, 1200-day integration at T42 L20, validated climatology (jets, temperature, eddies)
-- [x] **Phase 5 — Simple physics**: gray radiation, dry convective adjustment, bulk surface flux, Frierson (2006) aquaplanet
-- [x] **Phase 6 — Moisture**: specific humidity tracer, large-scale condensation, Betts-Miller convection, surface evaporation
-- [x] **Phase 6b — Virtual temperature + stability**: T_v in SI solver, implicit surface fluxes + BM convection (dt: 580s → 1200s)
-- [x] **Phase 7 — Seasonal cycle + slab ocean**: two-band radiation (H₂O feedback), annual cycle, slab ocean with Q-flux
-- [x] **Phase 8A — Monin-Obukhov surface layer**: Louis (1979) stability functions, implicit slab ocean step, warm-start infrastructure
-- [x] **Phase 8B — Surface type infrastructure**: land-sea masks, per-gridpoint albedo and roughness, flat continent generator
-- [x] **Phase 8C — Bucket land surface**: Frierson/Manabe soil energy balance, bucket hydrology (P-E-R), evaporation resistance, blended ocean-land fluxes
-- [x] **Phase 9 — Radiation upgrade**: SW energy conservation, SPEEDY 4-band LW + 2-band SW, diagnostic clouds, CO₂ knob (TOA imbalance: +109 → -7 W/m²)
-- [x] **Phase 10 — Topography**: prescribed orography, spectral smoothing, surface pressure initialization
 
 ## Tests
 
