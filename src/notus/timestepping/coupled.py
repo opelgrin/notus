@@ -43,9 +43,8 @@ from notus.vertical.sigma import SigmaLevels
 class _ExplicitOnlyForcing:
     """Wrapper that suppresses ``apply_implicit`` from a forcing.
 
-    This is used by ``build_coupled_pe_stepper`` so that the core IMEX
-    stepper does not auto-detect and apply implicit physics — the coupled
-    stepper handles it with the ocean update instead.
+    Used so that the core IMEX stepper does not auto-detect and apply
+    implicit physics — the coupled stepper handles it instead.
     """
 
     def __init__(self, forcing: PhysicsSuite) -> None:
@@ -60,34 +59,8 @@ class _ExplicitOnlyForcing:
         return self._forcing(state, surface_pressure)
 
 
-def build_coupled_pe_stepper(  # noqa: C901, PLR0915
-    transform: SpectralTransform,
-    planet: PlanetaryConstants,
-    levels: SigmaLevels,
-    reference_temperature: np.ndarray,
-    surface_geopotential: jnp.ndarray,
-    dt: float,
-    forcing: PhysicsSuite,
-    ocean_config: SlabOceanConfig,
-    q_flux: jnp.ndarray,
-    surface_properties: SurfaceProperties | None = None,
-    land_config: BucketLandConfig | None = None,
-    spectral_filter: jnp.ndarray | None = None,
-    diffusion_order: int = 4,
-    diffusion_timescale: float = 2.0 * 3600.0,
-    robert_coeff: float = 0.05,
-    alpha: float = 0.5,
-) -> tuple[
-    Callable[
-        [PrimitiveEquationState, SurfaceState],
-        tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
-    ],
-    Callable[
-        [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
-        tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
-    ],
-]:
-    """Build init and step functions for coupled atmosphere-surface integration.
+class CoupledStepper:
+    """Coupled atmosphere-ocean-land time stepper.
 
     Wraps ``build_pe_stepper`` and adds slab ocean thermodynamics and
     optional bucket land surface model.  The atmospheric IMEX step runs
@@ -131,75 +104,106 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         Robert-Asselin filter coefficient.
     alpha : float
         Implicit weighting.
-
-    Returns
-    -------
-    tuple[init_fn, step_fn]
-        ``init_fn(state, surface) -> (previous, current, surface)``
-        ``step_fn(previous, current, surface) -> (filtered_current, future, surface)``
     """
-    # Build atmospheric stepper WITHOUT implicit physics
-    explicit_forcing = _ExplicitOnlyForcing(forcing)
-    atm_init_fn, atm_step_fn = build_pe_stepper(
-        transform=transform,
-        planet=planet,
-        levels=levels,
-        reference_temperature=reference_temperature,
-        surface_geopotential=surface_geopotential,
-        dt=dt,
-        forcing=explicit_forcing,
-        spectral_filter=spectral_filter,
-        diffusion_order=diffusion_order,
-        diffusion_timescale=diffusion_timescale,
-        robert_coeff=robert_coeff,
-        alpha=alpha,
-    )
 
-    # Pre-extract build-time constants
-    lowest = levels.n_levels - 1
-    dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
-    cfg = forcing.config
-    c_d = cfg.c_d
-    surface_layer_cfg: SurfaceLayerConfig | None = cfg.surface_layer
-    ocean_heat_capacity = ocean_config.heat_capacity
-    sigma_lowest_val = 1.0 - 0.5 * dsigma_lowest
+    def __init__(
+        self,
+        transform: SpectralTransform,
+        planet: PlanetaryConstants,
+        levels: SigmaLevels,
+        reference_temperature: np.ndarray,
+        surface_geopotential: jnp.ndarray,
+        dt: float,
+        forcing: PhysicsSuite,
+        ocean_config: SlabOceanConfig,
+        q_flux: jnp.ndarray,
+        surface_properties: SurfaceProperties | None = None,
+        land_config: BucketLandConfig | None = None,
+        spectral_filter: jnp.ndarray | None = None,
+        diffusion_order: int = 4,
+        diffusion_timescale: float = 2.0 * 3600.0,
+        robert_coeff: float = 0.05,
+        alpha: float = 0.5,
+    ) -> None:
+        self._transform = transform
+        self._planet = planet
+        self._levels = levels
+        self._forcing = forcing
+        self._dt = dt
+        self._q_flux = q_flux
 
-    # Surface properties
-    sfc_albedo = (
-        surface_properties.albedo if surface_properties is not None else planet.surface_albedo
-    )
-    has_land = land_config is not None and surface_properties is not None
-    land_frac = surface_properties.land_fraction if surface_properties is not None else None
+        # Build atmospheric stepper WITHOUT implicit physics
+        explicit_forcing = _ExplicitOnlyForcing(forcing)
+        self._atm_init_fn, self._atm_step_fn = build_pe_stepper(
+            transform=transform,
+            planet=planet,
+            levels=levels,
+            reference_temperature=reference_temperature,
+            surface_geopotential=surface_geopotential,
+            dt=dt,
+            forcing=explicit_forcing,
+            spectral_filter=spectral_filter,
+            diffusion_order=diffusion_order,
+            diffusion_timescale=diffusion_timescale,
+            robert_coeff=robert_coeff,
+            alpha=alpha,
+        )
 
-    # Physics config for precipitation diagnostic (land branch only)
-    tau_bm = cfg.tau_bm
-    rh_ref = cfg.rh_ref
-    n_cond_iter = cfg.n_condensation_iterations
-    rh_cond = cfg.rh_condensation
-    tau_adj = cfg.tau_adjustment
+        # Pre-extract build-time constants
+        cfg = forcing.config
+        self._lowest = levels.n_levels - 1
+        self._dsigma_lowest = float(np.asarray(levels.dsigma)[-1])
+        self._c_d = cfg.c_d
+        self._surface_layer_cfg: SurfaceLayerConfig | None = cfg.surface_layer
+        self._ocean_heat_capacity = ocean_config.heat_capacity
+        self._sigma_lowest_val = 1.0 - 0.5 * self._dsigma_lowest
+
+        # Surface properties
+        self._sfc_albedo = (
+            surface_properties.albedo if surface_properties is not None else planet.surface_albedo
+        )
+        self._has_land = land_config is not None and surface_properties is not None
+        self._land_config = land_config
+        self._land_frac = (
+            surface_properties.land_fraction if surface_properties is not None else None
+        )
+        self._surface_properties = surface_properties
+
+        # Physics config for precipitation diagnostic (land branch only)
+        self._tau_bm = cfg.tau_bm
+        self._rh_ref = cfg.rh_ref
+        self._n_cond_iter = cfg.n_condensation_iterations
+        self._rh_cond = cfg.rh_condensation
+        self._tau_adj = cfg.tau_adjustment
 
     # ------------------------------------------------------------------
-    # Helper closures
+    # Helpers
     # ------------------------------------------------------------------
 
     def _apply_rayleigh_friction(
+        self,
         state: PrimitiveEquationState,
         dt_implicit: float,
     ) -> PrimitiveEquationState:
         """Apply Rayleigh friction via exact exponential decay."""
-        damp = jnp.exp(-dt_implicit * forcing.k_v[:, None])
+        damp = jnp.exp(-dt_implicit * self._forcing.k_v[:, None])
         return state.replace(
             vorticity=state.vorticity * damp,
             divergence=state.divergence * damp,
         )
 
     def _surface_state(
+        self,
         state: PrimitiveEquationState,
         surface: SurfaceState,
     ) -> tuple[
         jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, float | jnp.ndarray
     ]:
-        """Extract surface winds, pressure, temperature, humidity, exchange coeff, and drag."""
+        """Extract surface winds, pressure, temperature, humidity, k_sfc, drag."""
+        transform = self._transform
+        planet = self._planet
+        lowest = self._lowest
+
         u_cos_spec, v_cos_spec = uv_from_vordiv(
             state.vorticity[lowest],
             state.divergence[lowest],
@@ -215,35 +219,38 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
         t_lowest_grid = transform.spectral_to_grid(state.temperature[lowest])
 
         t_safe = jnp.maximum(t_lowest_grid, 1.0)
-        dp_safe = jnp.maximum(dsigma_lowest * ps_grid, 1.0)
-        rho_sfc = ps_grid * sigma_lowest_val / (planet.gas_constant * t_safe)
+        dp_safe = jnp.maximum(self._dsigma_lowest * ps_grid, 1.0)
+        rho_sfc = ps_grid * self._sigma_lowest_val / (planet.gas_constant * t_safe)
 
         # Surface temperature for MO: blended if land is present
         sst = surface.ocean.surface_temperature
         sst_bc = sst[:, None] if sst.ndim == 1 else sst
-        if has_land and surface.land is not None and land_frac is not None:
-            t_sfc_2d = (1.0 - land_frac) * sst_bc + land_frac * surface.land.soil_temperature
+        if self._has_land and surface.land is not None and self._land_frac is not None:
+            t_sfc_2d = (
+                1.0 - self._land_frac
+            ) * sst_bc + self._land_frac * surface.land.soil_temperature
         else:
             t_sfc_2d = sst_bc * jnp.ones_like(t_lowest_grid)
 
         # Transfer coefficient: MO stability-dependent or constant
         c_h: float | jnp.ndarray
-        if surface_layer_cfg is not None:
-            z0_m_arr = surface_properties.z0_momentum if surface_properties is not None else None
-            z0_h_arr = surface_properties.z0_heat if surface_properties is not None else None
+        if self._surface_layer_cfg is not None:
+            sfc = self._surface_properties
+            z0_m_arr = sfc.z0_momentum if sfc is not None else None
+            z0_h_arr = sfc.z0_heat if sfc is not None else None
             _c_d_m, c_h = compute_transfer_coefficients(
                 t_sfc_2d,
                 t_lowest_grid,
                 wind_speed,
-                dsigma_lowest,
+                self._dsigma_lowest,
                 planet.gravity,
                 planet.gas_constant,
-                surface_layer_cfg,
+                self._surface_layer_cfg,
                 z0_momentum_override=z0_m_arr,
                 z0_heat_override=z0_h_arr,
             )
         else:
-            c_h = c_d
+            c_h = self._c_d
 
         k_sfc = planet.gravity * rho_sfc * c_h * wind_speed / dp_safe
 
@@ -256,40 +263,45 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
 
         return wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h
 
-    def _compute_effective_albedo(surface: SurfaceState) -> float | jnp.ndarray:
+    def _compute_effective_albedo(self, surface: SurfaceState) -> float | jnp.ndarray:
         """Compute surface albedo (moisture-dependent over land, or constant)."""
+        lc = self._land_config
+        lf = self._land_frac
         if (
-            has_land
-            and land_config is not None
-            and land_config.moisture_dependent_albedo
+            self._has_land
+            and lc is not None
+            and lc.moisture_dependent_albedo
             and surface.land is not None
-            and land_frac is not None
+            and lf is not None
         ):
             ocean_alb = (
-                surface_properties.albedo
-                if surface_properties is not None
-                else planet.surface_albedo
+                self._surface_properties.albedo
+                if self._surface_properties is not None
+                else self._planet.surface_albedo
             )
             return moisture_dependent_albedo(
                 surface.land.bucket_depth,
-                land_config.bucket_capacity,
-                land_config.albedo_dry,
-                land_config.albedo_wet,
-                land_frac,
+                lc.bucket_capacity,
+                lc.albedo_dry,
+                lc.albedo_wet,
+                lf,
                 ocean_alb,
             )
-        return sfc_albedo
+        return self._sfc_albedo
 
     def _apply_implicit_decay(
+        self,
         state: PrimitiveEquationState,
         t_target: jnp.ndarray,
         q_target: jnp.ndarray,
         t_lowest_grid: jnp.ndarray,
-        ps_grid: jnp.ndarray,
         k_sfc: jnp.ndarray,
         dt_implicit: float,
     ) -> PrimitiveEquationState:
         """Implicit atmospheric decay toward surface temperature/humidity targets."""
+        transform = self._transform
+        lowest = self._lowest
+
         decay_sfc = jnp.exp(-dt_implicit * k_sfc)
         t_corrected = t_target + (t_lowest_grid - t_target) * decay_sfc
         new_temp = state.temperature.at[lowest].set(
@@ -312,27 +324,135 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             humidity=new_humidity,
         )
 
+    def _update_land(
+        self,
+        state: PrimitiveEquationState,
+        surface: SurfaceState,
+        t_lowest_grid: jnp.ndarray,
+        q_lowest: jnp.ndarray,
+        wind_speed: jnp.ndarray,
+        ps_grid: jnp.ndarray,
+        sw_down_sfc: jnp.ndarray,
+        lw_down: jnp.ndarray,
+        c_h: float | jnp.ndarray,
+        effective_albedo: float | jnp.ndarray,
+        dt_implicit: float,
+    ) -> SurfaceState:
+        """Update land surface: soil temperature, bucket hydrology."""
+        lc = self._land_config
+        lf = self._land_frac
+        land = surface.land
+        if lc is None or lf is None or land is None:
+            msg = "land_config, land_frac, and surface.land must be non-None"
+            raise RuntimeError(msg)
+
+        planet = self._planet
+        levels = self._levels
+        transform = self._transform
+        beta = beta_function(land.bucket_depth, lc.w_crit)
+
+        land_net_flux, land_evap = compute_net_land_flux(
+            land.soil_temperature,
+            t_lowest_grid,
+            q_lowest,
+            wind_speed,
+            ps_grid,
+            sw_down_sfc,
+            lw_down,
+            beta,
+            gravity=planet.gravity,
+            gas_constant=planet.gas_constant,
+            specific_heat_cp=planet.specific_heat_cp,
+            epsilon=planet.epsilon_moisture,
+            latent_heat=planet.latent_heat_vaporization,
+            drag_coefficient=c_h,
+            surface_albedo=effective_albedo,
+        )
+        land_dflux = land_flux_derivative(
+            land.soil_temperature,
+            wind_speed,
+            ps_grid,
+            beta,
+            gas_constant=planet.gas_constant,
+            specific_heat_cp=planet.specific_heat_cp,
+            epsilon=planet.epsilon_moisture,
+            latent_heat=planet.latent_heat_vaporization,
+            drag_coefficient=c_h,
+        )
+        land = step_land_implicit(
+            land,
+            land_net_flux,
+            land_dflux,
+            lc.soil_heat_capacity,
+            dt_implicit,
+        )
+
+        # Precipitation diagnostic for bucket hydrology
+        t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
+        q_grid: jnp.ndarray | None = None
+        if state.humidity is not None:
+            q_grid = jnp.maximum(
+                jax.vmap(transform.spectral_to_grid)(state.humidity),
+                0.0,
+            )
+        if q_grid is not None:
+            sigma = levels.sigma_full[:, None, None]
+            pressure = sigma * ps_grid[None, :, :]
+            precip = diagnose_precipitation(
+                t_grid,
+                q_grid,
+                pressure,
+                levels.dsigma,
+                ps_grid,
+                gravity=planet.gravity,
+                epsilon=planet.epsilon_moisture,
+                latent_heat=planet.latent_heat_vaporization,
+                specific_heat_cp=planet.specific_heat_cp,
+                gas_constant=planet.gas_constant,
+                tau_bm=self._tau_bm,
+                rh_ref=self._rh_ref,
+                n_condensation_iterations=self._n_cond_iter,
+                rh_condensation=self._rh_cond,
+                tau_adjustment=self._tau_adj,
+            )
+        else:
+            precip = jnp.zeros_like(land.soil_temperature)
+
+        land = step_bucket_hydrology(
+            land,
+            precip,
+            land_evap,
+            lc.bucket_capacity,
+            dt_implicit,
+        )
+
+        return surface.replace(land=land)
+
     # ------------------------------------------------------------------
-    # Unified coupled post-step
+    # Coupled post-step
     # ------------------------------------------------------------------
 
     def _coupled_post_step(
+        self,
         state: PrimitiveEquationState,
         surface: SurfaceState,
         dt_implicit: float,
     ) -> tuple[PrimitiveEquationState, SurfaceState]:
         """Post-step: update surface + implicit atmospheric decay."""
+        planet = self._planet
+        forcing = self._forcing
+
         # Rayleigh friction
-        state = _apply_rayleigh_friction(state, dt_implicit)
+        state = self._apply_rayleigh_friction(state, dt_implicit)
 
         # Surface state extraction
-        wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = _surface_state(
+        wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h = self._surface_state(
             state,
             surface,
         )
 
         # Radiation surface fluxes (delegated to PhysicsSuite)
-        effective_albedo = _compute_effective_albedo(surface)
+        effective_albedo = self._compute_effective_albedo(surface)
         cloud = forcing.compute_clouds(state, ps_grid)
         sw_down_sfc = forcing.compute_sw_down_surface(
             state,
@@ -380,99 +500,36 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
             ocean,
             jnp.mean(ocean_net_flux, axis=-1),
             jnp.mean(ocean_dflux, axis=-1),
-            q_flux,
-            ocean_heat_capacity,
+            self._q_flux,
+            self._ocean_heat_capacity,
             dt_implicit,
         )
+        surface = surface.replace(ocean=ocean)
 
         # --- Land update (conditional) ---
-        land = surface.land
-        if has_land and land_config is not None and land is not None and land_frac is not None:
-            lc = land_config
-            lf = land_frac
-            beta = beta_function(land.bucket_depth, lc.w_crit)
-
-            land_net_flux, land_evap = compute_net_land_flux(
-                land.soil_temperature,
+        if self._has_land:
+            surface = self._update_land(
+                state,
+                surface,
                 t_lowest_grid,
                 q_lowest,
                 wind_speed,
                 ps_grid,
                 sw_down_sfc,
                 lw_down,
-                beta,
-                gravity=planet.gravity,
-                gas_constant=planet.gas_constant,
-                specific_heat_cp=planet.specific_heat_cp,
-                epsilon=planet.epsilon_moisture,
-                latent_heat=planet.latent_heat_vaporization,
-                drag_coefficient=c_h,
-                surface_albedo=effective_albedo,
-            )
-            land_dflux = land_flux_derivative(
-                land.soil_temperature,
-                wind_speed,
-                ps_grid,
-                beta,
-                gas_constant=planet.gas_constant,
-                specific_heat_cp=planet.specific_heat_cp,
-                epsilon=planet.epsilon_moisture,
-                latent_heat=planet.latent_heat_vaporization,
-                drag_coefficient=c_h,
-            )
-            land = step_land_implicit(
-                land,
-                land_net_flux,
-                land_dflux,
-                lc.soil_heat_capacity,
-                dt_implicit,
-            )
-
-            # Precipitation diagnostic for bucket hydrology
-            t_grid = jax.vmap(transform.spectral_to_grid)(state.temperature)
-            q_grid: jnp.ndarray | None = None
-            if state.humidity is not None:
-                q_grid = jnp.maximum(
-                    jax.vmap(transform.spectral_to_grid)(state.humidity),
-                    0.0,
-                )
-            if q_grid is not None:
-                sigma = levels.sigma_full[:, None, None]
-                pressure = sigma * ps_grid[None, :, :]
-                precip = diagnose_precipitation(
-                    t_grid,
-                    q_grid,
-                    pressure,
-                    levels.dsigma,
-                    ps_grid,
-                    gravity=planet.gravity,
-                    epsilon=planet.epsilon_moisture,
-                    latent_heat=planet.latent_heat_vaporization,
-                    specific_heat_cp=planet.specific_heat_cp,
-                    gas_constant=planet.gas_constant,
-                    tau_bm=tau_bm,
-                    rh_ref=rh_ref,
-                    n_condensation_iterations=n_cond_iter,
-                    rh_condensation=rh_cond,
-                    tau_adjustment=tau_adj,
-                )
-            else:
-                precip = jnp.zeros_like(land.soil_temperature)
-
-            land = step_bucket_hydrology(
-                land,
-                precip,
-                land_evap,
-                lc.bucket_capacity,
+                c_h,
+                effective_albedo,
                 dt_implicit,
             )
 
         # --- Implicit atmospheric decay ---
         new_sst = ocean.surface_temperature
         sst_bc = new_sst[:, None] if new_sst.ndim == 1 else new_sst
+        land = surface.land
+        lc = self._land_config
+        lf = self._land_frac
 
-        if has_land and land is not None and land_config is not None and land_frac is not None:
-            lf = land_frac
+        if self._has_land and land is not None and lc is not None and lf is not None:
             t_land = land.soil_temperature
             t_target = (1.0 - lf) * sst_bc + lf * t_land
             q_sat_ocean = saturation_specific_humidity(
@@ -480,7 +537,7 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
                 ps_grid,
                 planet.epsilon_moisture,
             )
-            beta_new = beta_function(land.bucket_depth, land_config.w_crit)
+            beta_new = beta_function(land.bucket_depth, lc.w_crit)
             q_sat_land = saturation_specific_humidity(
                 t_land,
                 ps_grid,
@@ -495,39 +552,95 @@ def build_coupled_pe_stepper(  # noqa: C901, PLR0915
                 planet.epsilon_moisture,
             )
 
-        state = _apply_implicit_decay(
+        state = self._apply_implicit_decay(
             state,
             t_target,
             q_target,
             t_lowest_grid,
-            ps_grid,
             k_sfc,
             dt_implicit,
         )
 
-        return state, SurfaceState(ocean=ocean, land=land)
+        return state, surface
 
     # ------------------------------------------------------------------
-    # Public init / step functions
+    # Public init / step
     # ------------------------------------------------------------------
 
     @jax.jit
-    def init_fn(
+    def init(
+        self,
         state: PrimitiveEquationState,
         surface: SurfaceState,
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState]:
-        previous, current = atm_init_fn(state)
-        current, surface = _coupled_post_step(current, surface, dt)
+        """Initialize leapfrog integration with a forward Euler half-step."""
+        previous, current = self._atm_init_fn(state)
+        current, surface = self._coupled_post_step(current, surface, self._dt)
         return previous, current, surface
 
     @jax.jit
-    def step_fn(
+    def step(
+        self,
         previous: PrimitiveEquationState,
         current: PrimitiveEquationState,
         surface: SurfaceState,
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState]:
-        filtered_current, future = atm_step_fn(previous, current)
-        future, surface = _coupled_post_step(future, surface, 2.0 * dt)
+        """Advance one leapfrog timestep with coupled surface update."""
+        filtered_current, future = self._atm_step_fn(previous, current)
+        future, surface = self._coupled_post_step(future, surface, 2.0 * self._dt)
         return filtered_current, future, surface
 
-    return init_fn, step_fn
+
+def build_coupled_pe_stepper(
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+    levels: SigmaLevels,
+    reference_temperature: np.ndarray,
+    surface_geopotential: jnp.ndarray,
+    dt: float,
+    forcing: PhysicsSuite,
+    ocean_config: SlabOceanConfig,
+    q_flux: jnp.ndarray,
+    surface_properties: SurfaceProperties | None = None,
+    land_config: BucketLandConfig | None = None,
+    spectral_filter: jnp.ndarray | None = None,
+    diffusion_order: int = 4,
+    diffusion_timescale: float = 2.0 * 3600.0,
+    robert_coeff: float = 0.05,
+    alpha: float = 0.5,
+) -> tuple[
+    Callable[
+        [PrimitiveEquationState, SurfaceState],
+        tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+    ],
+    Callable[
+        [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+        tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+    ],
+]:
+    """Build init and step functions for coupled atmosphere-surface integration.
+
+    Convenience wrapper around :class:`CoupledStepper` — constructs the
+    stepper and returns ``(stepper.init, stepper.step)``.
+
+    See :class:`CoupledStepper` for parameter documentation.
+    """
+    stepper = CoupledStepper(
+        transform=transform,
+        planet=planet,
+        levels=levels,
+        reference_temperature=reference_temperature,
+        surface_geopotential=surface_geopotential,
+        dt=dt,
+        forcing=forcing,
+        ocean_config=ocean_config,
+        q_flux=q_flux,
+        surface_properties=surface_properties,
+        land_config=land_config,
+        spectral_filter=spectral_filter,
+        diffusion_order=diffusion_order,
+        diffusion_timescale=diffusion_timescale,
+        robert_coeff=robert_coeff,
+        alpha=alpha,
+    )
+    return stepper.init, stepper.step
