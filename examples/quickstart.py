@@ -46,7 +46,7 @@ state, ref_temps, _ = moist_aquaplanet_initial_state(transform, EARTH, levels)
 ln_ps = orographic_log_surface_pressure(surface_phi, transform, EARTH, 264.0)
 state = state.replace(log_surface_pressure=ln_ps)
 
-# Physics (SPEEDY multi-band radiation, convection, condensation, surface fluxes)
+# Physics (gray radiation, convection, condensation, surface fluxes)
 physics = SimplePhysics(transform, EARTH, levels)
 dt = 900.0
 
