@@ -392,14 +392,43 @@ Surveying comparable idealized GCMs (Isca, GFDL idealized moist, PlaSim, SPEEDY/
 - Surface pressure initialization is essential — starting with uniform ps over a 2500 m mountain creates an immediate hydrostatic imbalance that generates spurious gravity waves. The hypsometric adjustment is a simple one-liner but critical for clean integrations.
 - At T21 resolution, a 2500 m Gaussian mountain (half-width 20°) is well-resolved and the model remains stable for 10+ days in both dry and moist configurations with dt=600s.
 
-## Phase 11+ — Future Wishlist
+## Phase 11A — Sea Ice Thermodynamics
+
+Ice fraction, ice temperature, albedo feedback, and freezing/melting coupled to the slab ocean.
+
+**Planned:**
+- Zero-layer or single-layer Semtner thermodynamic ice model
+- Ice fraction as a prognostic variable per grid point
+- Freezing criterion: ocean temperature reaches freezing point (−1.8 °C for seawater)
+- Ice growth/melt from surface energy balance and ocean heat flux
+- Ice albedo feedback: high albedo over ice (∼0.65), blended with ocean albedo by ice fraction
+- Ice insulation: suppresses turbulent fluxes between ocean and atmosphere
+- Ice thickness evolution with conductive heat flux through ice
+- Lead fraction (open water within ice): controls ocean–atmosphere exchange in partially ice-covered cells
+- Implicit ice temperature stepping (consistent with existing slab ocean scheme)
+- Integration into `CoupledStepper` ocean path and `SurfaceState`
+
+## Phase 11B — Snow Cover
+
+Snow accumulation and melt on land (and optionally sea ice), with albedo feedback and insulation.
+
+**Planned:**
+- Snow depth as a prognostic variable on land surface (extension to `LandState`)
+- Snow accumulation from precipitation when surface temperature < 0 °C
+- Snowmelt from surface energy balance, meltwater feeds bucket hydrology
+- Snow albedo feedback: high albedo over snow-covered land (∼0.8), blended by snow fraction
+- Snow insulation: reduces soil heat loss, decouples soil temperature from atmosphere
+- Snow fraction parameterization (e.g., from snow depth / critical depth)
+- Interaction with bucket hydrology (melt → soil moisture, sublimation)
+- Optional snow on sea ice (builds on Phase 11A)
+
+## Phase 12+ — Future Wishlist
 
 Optional extensions for further realism.
 
 **Candidates:**
 - RRTMGP (aspirational): correlated-k method via pyrrtmgp or a JAX port for state-of-the-art accuracy
 - Diurnal cycle (instantaneous solar zenith angle, time-of-day dependent insolation)
-- Sea ice thermodynamics (ice fraction, ice temperature, albedo feedback, freezing/melting)
-- Snow cover (albedo feedback, insulation, melt hydrology)
 - Vegetation / land surface complexity (canopy, root zone, stomatal resistance)
 - Multi-layer soil model
+- Semi-Lagrangian moisture advection (removes CFL timestep constraint, enables shape-preserving transport without spectral Gibbs ringing)
