@@ -133,9 +133,9 @@ The four longwave bands target distinct absorption features:
 | Band | Absorber | Absorptivity | Description |
 |------|----------|-------------|-------------|
 | 0 | Dry air | $\alpha_\text{win} = 0.3$ | Atmospheric window |
-| 1 | CO$_2$ | $\alpha_\text{CO_2} = 6.0$ | Well-mixed greenhouse gas |
-| 2 | H$_2$O (weak) | $\alpha_\text{wv1} = 0.7$ | Humidity-dependent |
-| 3 | H$_2$O (strong) | $\alpha_\text{wv2} = 50.0$ | Humidity-dependent |
+| 1 | CO₂ | $\alpha_{\text{CO}_2} = 6.0$ | Well-mixed greenhouse gas |
+| 2 | H₂O (weak) | $\alpha_\text{wv1} = 0.7$ | Humidity-dependent |
+| 3 | H₂O (strong) | $\alpha_\text{wv2} = 50.0$ | Humidity-dependent |
 
 The fraction of blackbody emission in each band depends on temperature:
 
