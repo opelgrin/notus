@@ -123,16 +123,12 @@ class SimulationResult:
 
 def _build_atm_one_day(
     step_fn: _AtmStepFn,
-    forcing: PhysicsSuite | None,
-    seasonal: bool,
     steps_per_day: int,
 ) -> Callable[[_AtmCarry, jnp.ndarray], tuple[_AtmCarry, None]]:
     """Build JIT-compiled one-day function for atmosphere-only runs."""
 
     def one_day(carry: _AtmCarry, day_of_year: jnp.ndarray) -> tuple[_AtmCarry, None]:
         prev, curr, prev_diags = carry
-        if forcing is not None and seasonal:
-            forcing.day_of_year = day_of_year
 
         def step(carry: _AtmCarry, _: None) -> tuple[_AtmCarry, None]:
             p, c, pd = carry
@@ -152,18 +148,12 @@ def _build_atm_one_day(
 
 def _build_coupled_one_day(
     step_fn: _CoupledStepFn,
-    forcing: PhysicsSuite | None,
-    seasonal: bool,
     steps_per_day: int,
 ) -> Callable[[_CoupledCarry, jnp.ndarray], tuple[_CoupledCarry, None]]:
     """Build JIT-compiled one-day function for coupled runs."""
 
     def one_day(carry: _CoupledCarry, day_of_year: jnp.ndarray) -> tuple[_CoupledCarry, None]:
         prev, curr, sfc, prev_diags = carry
-        if forcing is not None:
-            if seasonal:
-                forcing.day_of_year = day_of_year
-            forcing.prescribed_sst = sfc.ocean.surface_temperature
 
         def step(carry: _CoupledCarry, _: None) -> tuple[_CoupledCarry, None]:
             p, c, s, pd = carry
@@ -355,12 +345,14 @@ def _run_atm_only(
     log_interval: int,
 ) -> SimulationResult:
     """Run atmosphere-only integration."""
-    one_day_jit = _build_atm_one_day(step_fn, forcing, seasonal, steps_per_day)
+    one_day_jit = _build_atm_one_day(step_fn, steps_per_day)
     diagnostics: list[object] = []
 
     t0 = time.perf_counter()
     prev, curr, diags = init_fn(initial_state)
     day_val = jnp.float64(start_day % days_per_year if seasonal else 0.0)
+    if forcing is not None and seasonal:
+        forcing.day_of_year = day_val
     (prev, curr, diags), _ = one_day_jit((prev, curr, diags), day_val)
     if verbose:
         logger.info("Day 1 (incl. JIT compile): %.1fs", time.perf_counter() - t0)
@@ -371,6 +363,8 @@ def _run_atm_only(
     for day_idx in range(2, n_days + 1):
         day = start_day + day_idx
         day_val = jnp.float64(day % days_per_year if seasonal else 0.0)
+        if forcing is not None and seasonal:
+            forcing.day_of_year = day_val
         (prev, curr, diags), _ = one_day_jit((prev, curr, diags), day_val)
         _invoke_atm_callback(on_day, day, curr, diags, diagnostics)
         _log_progress(verbose, day_idx, day, n_days, log_interval, t_start)
@@ -401,12 +395,16 @@ def _run_coupled(
     log_interval: int,
 ) -> SimulationResult:
     """Run coupled atmosphere-surface integration."""
-    one_day_jit = _build_coupled_one_day(step_fn, forcing, seasonal, steps_per_day)
+    one_day_jit = _build_coupled_one_day(step_fn, steps_per_day)
     diagnostics: list[object] = []
 
     t0 = time.perf_counter()
     prev, curr, surface, diags = init_fn(initial_state, surface)
     day_val = jnp.float64(start_day % days_per_year if seasonal else 0.0)
+    if forcing is not None:
+        if seasonal:
+            forcing.day_of_year = day_val
+        forcing.prescribed_sst = surface.ocean.surface_temperature
     (prev, curr, surface, diags), _ = one_day_jit((prev, curr, surface, diags), day_val)
     if verbose:
         logger.info("Day 1 (incl. JIT compile): %.1fs", time.perf_counter() - t0)
@@ -417,6 +415,10 @@ def _run_coupled(
     for day_idx in range(2, n_days + 1):
         day = start_day + day_idx
         day_val = jnp.float64(day % days_per_year if seasonal else 0.0)
+        if forcing is not None:
+            if seasonal:
+                forcing.day_of_year = day_val
+            forcing.prescribed_sst = surface.ocean.surface_temperature
         (prev, curr, surface, diags), _ = one_day_jit((prev, curr, surface, diags), day_val)
         _invoke_coupled_callback(on_day, day, curr, surface, diags, diagnostics)
         _log_progress(verbose, day_idx, day, n_days, log_interval, t_start)
