@@ -57,14 +57,54 @@ from typing import overload
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
+from notus.constants import PlanetaryConstants
+from notus.operators import exponential_filter
 from notus.physics.forcing import PhysicsDiagnostics
 from notus.physics.physics_suite import PhysicsSuite
-from notus.physics.surface import SurfaceState
+from notus.physics.surface import (
+    BucketLandConfig,
+    OceanState,
+    SlabOceanConfig,
+    SurfaceState,
+    init_land_state,
+)
+from notus.physics.surface_types import SurfaceProperties
 from notus.state import PrimitiveEquationState
+from notus.timestepping.coupled import build_coupled_pe_stepper
+from notus.timestepping.spinup import spinup_prescribed_sst
+from notus.transforms import SpectralTransform
+from notus.vertical.sigma import SigmaLevels
 
 
 logger = logging.getLogger(__name__)
+
+
+class NaNError(RuntimeError):
+    """Raised when NaN is detected in atmospheric state during integration."""
+
+
+def _check_nan(state: PrimitiveEquationState, context: str) -> None:
+    """Check for NaN in prognostic fields and raise if found.
+
+    Parameters
+    ----------
+    state : PrimitiveEquationState
+        Atmospheric state to check.
+    context : str
+        Human-readable description of when the check was performed
+        (e.g. "after init" or "after day 42").
+    """
+    has_nan = jnp.any(jnp.isnan(state.temperature)) | jnp.any(jnp.isnan(state.log_surface_pressure))
+    if state.humidity is not None:
+        has_nan |= jnp.any(jnp.isnan(state.humidity))
+    if has_nan:
+        raise NaNError(
+            f"NaN detected in atmospheric state {context}. "
+            "This usually indicates numerical instability — try reducing dt."
+        )
+
 
 # Type aliases for the two modes
 _AtmCarry = tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics]
@@ -350,10 +390,12 @@ def _run_atm_only(
 
     t0 = time.perf_counter()
     prev, curr, diags = init_fn(initial_state)
+    _check_nan(curr, "after init")
     day_val = jnp.float64(start_day % days_per_year if seasonal else 0.0)
     if forcing is not None and seasonal:
         forcing.day_of_year = day_val
     (prev, curr, diags), _ = one_day_jit((prev, curr, diags), day_val)
+    _check_nan(curr, f"after day {start_day + 1}")
     if verbose:
         logger.info("Day 1 (incl. JIT compile): %.1fs", time.perf_counter() - t0)
 
@@ -366,6 +408,7 @@ def _run_atm_only(
         if forcing is not None and seasonal:
             forcing.day_of_year = day_val
         (prev, curr, diags), _ = one_day_jit((prev, curr, diags), day_val)
+        _check_nan(curr, f"after day {day}")
         _invoke_atm_callback(on_day, day, curr, diags, diagnostics)
         _log_progress(verbose, day_idx, day, n_days, log_interval, t_start)
 
@@ -400,12 +443,14 @@ def _run_coupled(
 
     t0 = time.perf_counter()
     prev, curr, surface, diags = init_fn(initial_state, surface)
+    _check_nan(curr, "after init")
     day_val = jnp.float64(start_day % days_per_year if seasonal else 0.0)
     if forcing is not None:
         if seasonal:
             forcing.day_of_year = day_val
         forcing.prescribed_sst = surface.ocean.surface_temperature
     (prev, curr, surface, diags), _ = one_day_jit((prev, curr, surface, diags), day_val)
+    _check_nan(curr, f"after day {start_day + 1}")
     if verbose:
         logger.info("Day 1 (incl. JIT compile): %.1fs", time.perf_counter() - t0)
 
@@ -420,6 +465,7 @@ def _run_coupled(
                 forcing.day_of_year = day_val
             forcing.prescribed_sst = surface.ocean.surface_temperature
         (prev, curr, surface, diags), _ = one_day_jit((prev, curr, surface, diags), day_val)
+        _check_nan(curr, f"after day {day}")
         _invoke_coupled_callback(on_day, day, curr, surface, diags, diagnostics)
         _log_progress(verbose, day_idx, day, n_days, log_interval, t_start)
 
@@ -479,3 +525,174 @@ def _log_progress(
         elapsed = time.perf_counter() - t_start
         rate = (day_idx - 1) / elapsed if elapsed > 0 else 0
         logger.info("  Day %5d: %.1f sim-days/s", day, rate)
+
+
+# ---------------------------------------------------------------------------
+# Coupled convenience runner
+# ---------------------------------------------------------------------------
+
+
+def run_coupled_simulation(
+    initial_state: PrimitiveEquationState,
+    forcing: PhysicsSuite,
+    transform: SpectralTransform,
+    planet: PlanetaryConstants,
+    levels: SigmaLevels,
+    reference_temperature: np.ndarray,
+    surface_geopotential: jnp.ndarray,
+    dt: float,
+    n_days: int,
+    *,
+    ocean_config: SlabOceanConfig | None = None,
+    surface_properties: SurfaceProperties | None = None,
+    land_config: BucketLandConfig | None = None,
+    spinup_days: int = 100,
+    averaging_days: int = 100,
+    spectral_filter: jnp.ndarray | None = None,
+    surface_albedo: float | None = None,
+    days_per_year: float = 365.25,
+    on_day: _CoupledCallback | None = None,
+    verbose: bool = True,
+    log_interval: int = 50,
+) -> SimulationResult:
+    """Run a coupled atmosphere-ocean(-land) simulation with automatic Q-flux spinup.
+
+    This is a convenience wrapper that handles the full coupled simulation
+    workflow:
+
+    1. Prescribed-SST spinup to diagnose the ocean Q-flux
+    2. Surface state initialization (ocean + optional land)
+    3. Coupled time stepping with slab ocean (and optional bucket land)
+
+    Skipping the prescribed-SST spinup is a common source of instability
+    when running coupled simulations.  This function ensures the spinup
+    always runs before the coupled integration begins.
+
+    Parameters
+    ----------
+    initial_state : PrimitiveEquationState
+        Initial atmospheric state (can be a cold isothermal start).
+    forcing : PhysicsSuite
+        Physics forcing (radiation, surface fluxes, etc.).
+    transform : SpectralTransform
+        Spectral transform.
+    planet : PlanetaryConstants
+        Planetary constants.
+    levels : SigmaLevels
+        Sigma vertical coordinate.
+    reference_temperature : np.ndarray
+        Reference temperature profile for the semi-implicit solver,
+        shape ``(n_levels,)``.
+    surface_geopotential : jnp.ndarray
+        Surface geopotential in spectral space.
+    dt : float
+        Timestep [s].
+    n_days : int
+        Number of coupled simulation days.
+    ocean_config : SlabOceanConfig or None
+        Slab ocean parameters.  Defaults to ``SlabOceanConfig()``.
+    surface_properties : SurfaceProperties or None
+        Spatially varying surface albedo, roughness, and land fraction.
+        Required when ``land_config`` is provided.
+    land_config : BucketLandConfig or None
+        Bucket land model parameters.  When provided together with
+        ``surface_properties``, enables the land surface model.
+    spinup_days : int
+        Days to discard during the prescribed-SST spinup phase.
+    averaging_days : int
+        Days to average for Q-flux diagnosis.
+    spectral_filter : jnp.ndarray or None
+        Spectral filter array.  Built automatically when ``None``.
+    surface_albedo : float or None
+        Surface albedo for the prescribed-SST spinup.  When ``None``,
+        uses ``planet.surface_albedo``.  Set this to match the albedo
+        used in the coupled phase for self-consistent Q-flux diagnosis.
+    days_per_year : float
+        Length of year in days for seasonal forcing.
+    on_day : callable or None
+        Callback invoked after each coupled simulation day:
+        ``on_day(day, state, surface, diags)``.
+    verbose : bool
+        Print progress messages.
+    log_interval : int
+        Print status every ``log_interval`` days.
+
+    Returns
+    -------
+    SimulationResult
+        Final state, surface state, wall time, and collected diagnostics.
+    """
+    if ocean_config is None:
+        ocean_config = SlabOceanConfig()
+
+    if spectral_filter is None:
+        spectral_filter = exponential_filter(transform.arrays, dt)
+
+    # --- Phase 1: Prescribed-SST spinup for Q-flux diagnosis ---
+    if verbose:
+        total_spinup = spinup_days + averaging_days
+        logger.info(
+            "Prescribed-SST spinup: %d days (%d spinup + %d averaging)",
+            total_spinup,
+            spinup_days,
+            averaging_days,
+        )
+
+    spinup_result = spinup_prescribed_sst(
+        initial_state,
+        forcing,
+        transform,
+        planet,
+        levels,
+        reference_temperature,
+        surface_geopotential,
+        dt,
+        spinup_days=spinup_days,
+        averaging_days=averaging_days,
+        spectral_filter=spectral_filter,
+        surface_albedo=surface_albedo,
+        verbose=verbose,
+    )
+
+    # --- Phase 2: Initialize surface state ---
+    sst = forcing.prescribed_sst
+    ocean = OceanState(surface_temperature=sst)
+
+    land = None
+    if land_config is not None and surface_properties is not None:
+        land = init_land_state(surface_properties.land_fraction, sst, land_config)
+
+    surface = SurfaceState(ocean=ocean, land=land)
+
+    # --- Phase 3: Build coupled stepper and run ---
+    init_fn, step_fn = build_coupled_pe_stepper(
+        transform=transform,
+        planet=planet,
+        levels=levels,
+        reference_temperature=reference_temperature,
+        surface_geopotential=surface_geopotential,
+        dt=dt,
+        forcing=forcing,
+        ocean_config=ocean_config,
+        q_flux=spinup_result.q_flux,
+        surface_properties=surface_properties,
+        land_config=land_config,
+        spectral_filter=spectral_filter,
+    )
+
+    if verbose:
+        logger.info("Starting coupled integration: %d days", n_days)
+
+    return run_simulation(
+        init_fn=init_fn,
+        step_fn=step_fn,
+        initial_state=spinup_result.state,
+        dt=dt,
+        n_days=n_days,
+        surface=surface,
+        forcing=forcing,
+        days_per_year=days_per_year,
+        on_day=on_day,
+        verbose=verbose,
+        log_interval=log_interval,
+    )

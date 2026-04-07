@@ -109,7 +109,7 @@ from notus.physics import (
     flat_continent_surface,
     init_land_state,
 )
-from notus.runner import SimulationResult, run_simulation
+from notus.runner import SimulationResult, run_coupled_simulation, run_simulation
 from notus.state import PrimitiveEquationState, ShallowWaterState
 from notus.timestepping import (
     SpinupResult,
@@ -208,6 +208,7 @@ __all__ = [
     "omega_over_pressure",
     "orographic_log_surface_pressure",
     "physics_suite_initial_state",
+    "run_coupled_simulation",
     "run_simulation",
     "save_restart",
     "sigma_dot",

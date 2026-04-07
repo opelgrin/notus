@@ -577,7 +577,7 @@ class CoupledStepper:
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics]:
         """Initialize leapfrog integration with a forward Euler half-step."""
         previous, current, diags = self._atm_init_fn(state)
-        current, surface = self._coupled_post_step(current, surface, self._dt)
+        current, surface = self._coupled_post_step(current, surface, self._dt / 2.0)
         return previous, current, surface, diags
 
     @functools.partial(jax.jit, static_argnums=0)

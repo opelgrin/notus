@@ -328,3 +328,98 @@ class TestMoistMountainIntegration:
         # Zonal standard deviation should be nonzero
         zonal_std = np.std(precip_band, axis=1)
         assert zonal_std.max() > 0.0, "Precipitation is zonally uniform despite mountain"
+
+
+# ---------------------------------------------------------------------------
+# Sharp terrain stability tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+class TestSharpTerrainStability:
+    """Stability tests with steep, narrow mountains.
+
+    Sharp topography stresses the spectral representation through Gibbs
+    ringing and large pressure-gradient forcing.  These tests verify
+    that the model stays stable with physically extreme but resolvable
+    terrain, and that spectral smoothing is sufficient to tame Gibbs
+    artefacts.
+    """
+
+    @pytest.fixture(scope="class")
+    def steep_mountain_smoothed(self):
+        """4 km peak with half-width ~5° — steep but smoothed."""
+        grid = GaussianGrid(truncation=_TRUNCATION)
+        transform = SpectralTransform(grid, EARTH.radius)
+        phi_s = gaussian_mountain(transform, EARTH, height=4000.0, half_width=np.pi / 36)
+        phi_s = smooth_orography(phi_s, transform.arrays, method="lanczos", order=2)
+        return _run_mountain_integration(phi_s, n_days=5)
+
+    @pytest.fixture(scope="class")
+    def steep_mountain_unsmoothed(self):
+        """4 km peak with half-width ~5° — no spectral smoothing."""
+        grid = GaussianGrid(truncation=_TRUNCATION)
+        transform = SpectralTransform(grid, EARTH.radius)
+        phi_s = gaussian_mountain(transform, EARTH, height=4000.0, half_width=np.pi / 36)
+        return _run_mountain_integration(phi_s, n_days=5)
+
+    # -- smoothed steep mountain ------------------------------------------------
+
+    def test_smoothed_stable_5_days(self, steep_mountain_smoothed):
+        """Smoothed steep mountain should remain stable for 5 days."""
+        for day, d in enumerate(steep_mountain_smoothed):
+            assert np.isfinite(d["t_min"]), f"Day {day + 1}: T_min not finite"
+            assert np.isfinite(d["t_max"]), f"Day {day + 1}: T_max not finite"
+            assert np.isfinite(d["mass"]), f"Day {day + 1}: mass not finite"
+
+    def test_smoothed_temperatures_bounded(self, steep_mountain_smoothed):
+        """Temperatures should stay within plausible bounds."""
+        for day, d in enumerate(steep_mountain_smoothed):
+            assert d["t_min"] > 150.0, f"Day {day + 1}: T_min={d['t_min']:.1f} K too cold"
+            assert d["t_max"] < 350.0, f"Day {day + 1}: T_max={d['t_max']:.1f} K too hot"
+
+    def test_smoothed_mass_conservation(self, steep_mountain_smoothed):
+        """Mass should be conserved to within 0.01% even with steep terrain."""
+        m0 = steep_mountain_smoothed[0]["mass"]
+        for day, d in enumerate(steep_mountain_smoothed):
+            rel_change = abs(d["mass"] - m0) / m0
+            assert rel_change < 1e-4, f"Day {day + 1}: mass drift {rel_change:.2e} exceeds 0.01%"
+
+    def test_smoothed_energy_bounded(self, steep_mountain_smoothed):
+        """Total energy should not drift more than 2% over steep terrain.
+
+        Steep terrain generates stronger gravity waves that can amplify
+        energy drift, so we allow a slightly larger tolerance than the
+        moderate-mountain tests.
+        """
+        e0 = steep_mountain_smoothed[0]["total_energy"]
+        for day, d in enumerate(steep_mountain_smoothed):
+            rel_change = abs(d["total_energy"] - e0) / abs(e0)
+            assert rel_change < 0.02, f"Day {day + 1}: energy drift {rel_change:.2e} exceeds 2%"
+
+    # -- unsmoothed steep mountain (Gibbs ringing stress test) ------------------
+
+    def test_unsmoothed_stable_5_days(self, steep_mountain_unsmoothed):
+        """Unsmoothed steep mountain: check whether Gibbs ringing causes blow-up.
+
+        Without spectral smoothing, sharp orography produces ringing that
+        can seed growing oscillations.  This test documents whether the
+        model survives — a failure here indicates that smoothing is
+        essential for sharp terrain and should not be silently omitted.
+        """
+        for day, d in enumerate(steep_mountain_unsmoothed):
+            assert np.isfinite(d["t_min"]), f"Day {day + 1}: T_min not finite"
+            assert np.isfinite(d["t_max"]), f"Day {day + 1}: T_max not finite"
+            assert np.isfinite(d["mass"]), f"Day {day + 1}: mass not finite"
+
+    def test_unsmoothed_temperatures_bounded(self, steep_mountain_unsmoothed):
+        """Unsmoothed steep terrain should still have bounded temperatures."""
+        for day, d in enumerate(steep_mountain_unsmoothed):
+            assert d["t_min"] > 100.0, (
+                f"Day {day + 1}: T_min={d['t_min']:.1f} K — "
+                "extreme cold suggests Gibbs-driven instability"
+            )
+            assert d["t_max"] < 400.0, (
+                f"Day {day + 1}: T_max={d['t_max']:.1f} K — "
+                "extreme heat suggests Gibbs-driven instability"
+            )

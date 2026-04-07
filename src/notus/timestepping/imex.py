@@ -408,14 +408,18 @@ def build_pe_stepper(
         return state
 
     # Build init_fn (inlines euler_init to capture diagnostics)
+    # Uses dt/2 for the forward Euler bootstrap step to avoid overshoot
+    # from large initial physics tendencies (follows SPEEDY convention).
+    dt_init = dt / 2.0
+
     @jax.jit
     def init_fn(
         state: PrimitiveEquationState,
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, PhysicsDiagnostics]:
         tendency, diags = combined_fn(state)
-        intermediate = jax.tree.map(lambda x, f: x + dt * f, state, tendency)
-        current = inverse_fn(intermediate, dt)
-        current = _post_step(current, dt)
+        intermediate = jax.tree.map(lambda x, f: x + dt_init * f, state, tendency)
+        current = inverse_fn(intermediate, dt_init)
+        current = _post_step(current, dt_init)
         return state, current, diags
 
     # Build step_fn (inlines imex_leapfrog_step to capture diagnostics)
