@@ -268,6 +268,83 @@ jax.tree_util.register_pytree_node(OceanState, _ocean_flatten, _ocean_unflatten)
 
 
 # ---------------------------------------------------------------------------
+# Sea ice thermodynamics (zero-layer Semtner model)
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SeaIceConfig:
+    """Configuration for the zero-layer Semtner sea ice model.
+
+    Parameters
+    ----------
+    t_freeze : float
+        Seawater freezing temperature [K] (−1.8 °C).
+    rho_ice : float
+        Ice density [kg/m³].
+    l_fusion : float
+        Latent heat of fusion [J/kg].
+    k_ice : float
+        Ice thermal conductivity [W/(m·K)].
+    albedo_ice : float
+        Bare ice albedo.
+    h_min : float
+        Minimum resolved ice thickness [m].
+    h_crit : float
+        Thickness for full ice coverage [m] (ice fraction ramp).
+    """
+
+    t_freeze: float = 271.35
+    rho_ice: float = 917.0
+    l_fusion: float = 3.34e5
+    k_ice: float = 2.0
+    albedo_ice: float = 0.65
+    h_min: float = 0.01
+    h_crit: float = 1.0
+
+    @property
+    def energy_per_meter(self) -> float:
+        """Energy to freeze/melt 1 m of ice per unit area [J/m² per m]."""
+        return self.rho_ice * self.l_fusion
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SeaIceState:
+    """State for the zero-layer Semtner sea ice model.
+
+    Attributes
+    ----------
+    ice_thickness : jnp.ndarray
+        Ice thickness [m], shape ``(n_lat,)``.
+    ice_fraction : jnp.ndarray
+        Ice fraction [0, 1], shape ``(n_lat,)``.
+    """
+
+    ice_thickness: jnp.ndarray
+    ice_fraction: jnp.ndarray
+
+    def replace(self, **kwargs: jnp.ndarray) -> SeaIceState:
+        """Return a new state with specified fields replaced."""
+        return dataclasses.replace(self, **kwargs)
+
+
+def _seaice_flatten(
+    state: SeaIceState,
+) -> tuple[tuple[jnp.ndarray, ...], None]:
+    return (state.ice_thickness, state.ice_fraction), None
+
+
+def _seaice_unflatten(
+    _aux: None,
+    children: tuple[jnp.ndarray, ...],
+) -> SeaIceState:
+    return SeaIceState(ice_thickness=children[0], ice_fraction=children[1])
+
+
+jax.tree_util.register_pytree_node(SeaIceState, _seaice_flatten, _seaice_unflatten)
+
+
+# ---------------------------------------------------------------------------
 # Bucket land surface
 # ---------------------------------------------------------------------------
 
@@ -345,10 +422,11 @@ jax.tree_util.register_pytree_node(LandState, _land_flatten, _land_unflatten)
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class SurfaceState:
-    """Combined ocean + land surface state.
+    """Combined ocean + land + ice surface state.
 
-    Wraps :class:`OceanState` and an optional :class:`LandState` so that
-    the coupled stepper signature stays at three arguments.
+    Wraps :class:`OceanState`, an optional :class:`LandState`, and an
+    optional :class:`SeaIceState` so that the coupled stepper signature
+    stays compact.
 
     Attributes
     ----------
@@ -356,39 +434,44 @@ class SurfaceState:
         Slab ocean state (always present).
     land : LandState or None
         Bucket land state, or ``None`` for pure aquaplanet.
+    ice : SeaIceState or None
+        Sea ice state, or ``None`` when sea ice is disabled.
     """
 
     ocean: OceanState
     land: LandState | None = None
+    ice: SeaIceState | None = None
 
     def replace(
         self,
         *,
         ocean: OceanState | None = None,
         land: LandState | None = None,
+        ice: SeaIceState | None = None,
     ) -> SurfaceState:
         """Return a new state with specified fields replaced.
 
-        Only non-None arguments are applied.  To set ``land`` to ``None``,
-        construct a new ``SurfaceState`` directly.
+        Only non-None arguments are applied.  To set ``land`` or ``ice``
+        to ``None``, construct a new ``SurfaceState`` directly.
         """
         return SurfaceState(
             ocean=ocean if ocean is not None else self.ocean,
             land=land if land is not None else self.land,
+            ice=ice if ice is not None else self.ice,
         )
 
 
 def _surface_state_flatten(
     state: SurfaceState,
-) -> tuple[tuple[OceanState, LandState | None], None]:
-    return (state.ocean, state.land), None
+) -> tuple[tuple[OceanState, LandState | None, SeaIceState | None], None]:
+    return (state.ocean, state.land, state.ice), None
 
 
 def _surface_state_unflatten(
     _aux: None,
-    children: tuple[OceanState, LandState | None],
+    children: tuple[OceanState, LandState | None, SeaIceState | None],
 ) -> SurfaceState:
-    return SurfaceState(ocean=children[0], land=children[1])
+    return SurfaceState(ocean=children[0], land=children[1], ice=children[2])
 
 
 jax.tree_util.register_pytree_node(
@@ -426,6 +509,33 @@ def init_land_state(
         soil_temperature=sst_2d,
         bucket_depth=jnp.full_like(land_fraction, 0.75 * land_config.bucket_capacity),
     )
+
+
+def init_sea_ice_state(
+    initial_sst: jnp.ndarray,
+    ice_config: SeaIceConfig,
+) -> SeaIceState:
+    """Create initial sea ice state from SST.
+
+    Ice is placed where SST ≤ T_freeze, with initial thickness set to
+    ``h_crit`` (fully ice-covered).
+
+    Parameters
+    ----------
+    initial_sst : jnp.ndarray
+        Initial SST [K], shape ``(n_lat,)``.
+    ice_config : SeaIceConfig
+        Sea ice configuration.
+
+    Returns
+    -------
+    SeaIceState
+        Initial ice state.
+    """
+    is_frozen = initial_sst <= ice_config.t_freeze
+    thickness = jnp.where(is_frozen, ice_config.h_crit, 0.0)
+    fraction = ice_fraction_from_thickness(thickness, ice_config.h_crit)
+    return SeaIceState(ice_thickness=thickness, ice_fraction=fraction)
 
 
 def compute_net_surface_flux(
@@ -995,3 +1105,344 @@ def diagnose_precipitation(
     dp = dsigma[:, None, None] * surface_pressure[None, :, :]
     precip = -jnp.sum(jnp.minimum(dq_total, 0.0) * dp, axis=0) / gravity
     return jnp.maximum(precip, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Sea ice physics (zero-layer Semtner model)
+# ---------------------------------------------------------------------------
+
+
+def conductive_flux(
+    ice_thickness: jnp.ndarray,
+    t_surface_ice: jnp.ndarray,
+    t_freeze: float,
+    k_ice: float,
+) -> jnp.ndarray:
+    r"""Conductive heat flux through ice [W/m²].
+
+    .. math::
+        F_{\mathrm{cond}} = k_{\mathrm{ice}} \,
+            \frac{T_{\mathrm{freeze}} - T_s}{H}
+
+    Positive = upward (heat flowing from ocean base to cold surface).
+
+    Parameters
+    ----------
+    ice_thickness : jnp.ndarray
+        Ice thickness [m].
+    t_surface_ice : jnp.ndarray
+        Ice surface temperature [K].
+    t_freeze : float
+        Freezing temperature [K].
+    k_ice : float
+        Ice thermal conductivity [W/(m·K)].
+
+    Returns
+    -------
+    jnp.ndarray
+        Conductive flux [W/m²].
+    """
+    h_safe = jnp.maximum(ice_thickness, 0.01)
+    return k_ice * (t_freeze - t_surface_ice) / h_safe
+
+
+def diagnose_ice_surface_temperature(
+    ice_thickness: jnp.ndarray,
+    atm_flux_at_freeze: jnp.ndarray,
+    dflux_dt: jnp.ndarray,
+    k_ice: float,
+    t_freeze: float,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    r"""Diagnose ice surface temperature from linearized flux balance.
+
+    The zero-layer model has no thermal inertia.  The surface temperature
+    is found by balancing atmospheric heating with conduction::
+
+        F_atm(T_s) = F_cond(T_s)
+        F0 + dF/dT · (T_s - T_f) = k · (T_s - T_f) / H
+
+    giving::
+
+        T_s = T_f + F0 / (k/H - dF/dT)
+
+    where ``dF/dT < 0`` and ``k/H > 0``, so the denominator is always
+    positive.  ``T_s`` is capped at ``T_freeze`` (ice cannot warm above
+    melting).  When capped, the excess atmospheric flux drives surface melt.
+
+    Parameters
+    ----------
+    ice_thickness : jnp.ndarray
+        Ice thickness [m].
+    atm_flux_at_freeze : jnp.ndarray
+        Net atmospheric flux evaluated at T_freeze [W/m²].
+    dflux_dt : jnp.ndarray
+        Derivative of atmospheric flux w.r.t. surface T [W/(m²·K)].
+    k_ice : float
+        Ice thermal conductivity [W/(m·K)].
+    t_freeze : float
+        Freezing temperature [K].
+
+    Returns
+    -------
+    t_surface : jnp.ndarray
+        Ice surface temperature [K], ≤ T_freeze.
+    melt_flux : jnp.ndarray
+        Excess atmospheric flux available for surface melt [W/m²], ≥ 0.
+    """
+    h_safe = jnp.maximum(ice_thickness, 0.01)
+    k_over_h = k_ice / h_safe
+
+    # Uncapped solution
+    t_s_uncapped = t_freeze + atm_flux_at_freeze / (k_over_h - dflux_dt)
+
+    # Cap at T_freeze
+    t_s = jnp.minimum(t_s_uncapped, t_freeze)
+
+    # Melt flux: when T_s is capped, excess atmospheric flux drives melting.
+    # At T_s = T_freeze, F_cond = 0, so melt_flux = F_atm(T_freeze) = F0.
+    melt_flux = jnp.maximum(atm_flux_at_freeze, 0.0)
+    # Only apply melt when T_s was actually capped
+    was_capped = t_s_uncapped > t_freeze
+    melt_flux = jnp.where(was_capped, melt_flux, 0.0)
+
+    return t_s, melt_flux
+
+
+def ice_growth_rate(
+    conductive_flux: jnp.ndarray,
+    oceanic_heat_flux: jnp.ndarray,
+    rho_ice: float,
+    l_fusion: float,
+) -> jnp.ndarray:
+    r"""Rate of ice thickness change [m/s].
+
+    .. math::
+        \frac{dH}{dt} = \frac{F_{\mathrm{cond}} - F_{\mathrm{ocean}}}
+                             {\rho_{\mathrm{ice}} \, L_{\mathrm{fusion}}}
+
+    Positive = ice growth (conduction extracts more heat than ocean
+    supplies).  Negative = bottom melt.
+
+    Parameters
+    ----------
+    conductive_flux : jnp.ndarray
+        Conductive flux through ice [W/m²].
+    oceanic_heat_flux : jnp.ndarray
+        Ocean-to-ice heat flux [W/m²].
+    rho_ice : float
+        Ice density [kg/m³].
+    l_fusion : float
+        Latent heat of fusion [J/kg].
+
+    Returns
+    -------
+    jnp.ndarray
+        Growth rate [m/s].
+    """
+    return (conductive_flux - oceanic_heat_flux) / (rho_ice * l_fusion)
+
+
+def ice_fraction_from_thickness(
+    ice_thickness: jnp.ndarray,
+    h_crit: float,
+) -> jnp.ndarray:
+    """Ice fraction from thickness using a linear ramp.
+
+    ``f = min(1, H / H_crit)``
+
+    Parameters
+    ----------
+    ice_thickness : jnp.ndarray
+        Ice thickness [m].
+    h_crit : float
+        Thickness for full coverage [m].
+
+    Returns
+    -------
+    jnp.ndarray
+        Ice fraction [0, 1].
+    """
+    return jnp.clip(ice_thickness / h_crit, 0.0, 1.0)
+
+
+def ice_modified_albedo(
+    ice_fraction: jnp.ndarray,
+    albedo_ice: float,
+    albedo_ocean: float,
+) -> jnp.ndarray:
+    """Blend ice and ocean albedo by ice fraction.
+
+    ``α = f · α_ice + (1 − f) · α_ocean``
+
+    Parameters
+    ----------
+    ice_fraction : jnp.ndarray
+        Ice fraction [0, 1].
+    albedo_ice : float
+        Bare ice albedo.
+    albedo_ocean : float
+        Open ocean albedo.
+
+    Returns
+    -------
+    jnp.ndarray
+        Blended albedo.
+    """
+    return ice_fraction * albedo_ice + (1.0 - ice_fraction) * albedo_ocean
+
+
+def ice_weighted_surface_temperature(
+    ice_fraction: jnp.ndarray,
+    t_ice_surface: jnp.ndarray,
+    sst: jnp.ndarray,
+) -> jnp.ndarray:
+    """Effective surface temperature seen by the atmosphere.
+
+    ``T_eff = f · T_ice + (1 − f) · SST``
+
+    Parameters
+    ----------
+    ice_fraction : jnp.ndarray
+        Ice fraction [0, 1].
+    t_ice_surface : jnp.ndarray
+        Ice surface temperature [K].
+    sst : jnp.ndarray
+        Sea surface temperature [K].
+
+    Returns
+    -------
+    jnp.ndarray
+        Effective surface temperature [K].
+    """
+    return ice_fraction * t_ice_surface + (1.0 - ice_fraction) * sst
+
+
+def compute_ice_weighted_flux(
+    ice_fraction: jnp.ndarray,
+    flux_over_ice: jnp.ndarray,
+    flux_over_ocean: jnp.ndarray,
+) -> jnp.ndarray:
+    """Area-weighted average of ice and ocean fluxes.
+
+    ``F = f · F_ice + (1 − f) · F_ocean``
+
+    Parameters
+    ----------
+    ice_fraction : jnp.ndarray
+        Ice fraction [0, 1].
+    flux_over_ice : jnp.ndarray
+        Flux over ice [W/m²].
+    flux_over_ocean : jnp.ndarray
+        Flux over open ocean [W/m²].
+
+    Returns
+    -------
+    jnp.ndarray
+        Area-weighted flux [W/m²].
+    """
+    return ice_fraction * flux_over_ice + (1.0 - ice_fraction) * flux_over_ocean
+
+
+def step_sea_ice(
+    ice: SeaIceState,
+    ocean: OceanState,
+    atm_flux_at_freeze: jnp.ndarray,
+    dflux_dt: jnp.ndarray,
+    oceanic_heat_flux: jnp.ndarray,
+    config: SeaIceConfig,
+    dt: float,
+) -> tuple[SeaIceState, OceanState]:
+    r"""Advance sea ice by one timestep.
+
+    Handles ice growth, top melt, bottom melt, ice formation from
+    supercooled ocean, and ice disappearance with excess heat returned
+    to the ocean.
+
+    Parameters
+    ----------
+    ice : SeaIceState
+        Current ice state.
+    ocean : OceanState
+        Current ocean state.
+    atm_flux_at_freeze : jnp.ndarray
+        Net atmospheric flux evaluated at T_freeze [W/m²].
+    dflux_dt : jnp.ndarray
+        Derivative of atmospheric flux w.r.t. surface T [W/(m²·K)].
+    oceanic_heat_flux : jnp.ndarray
+        Ocean-to-ice heat flux [W/m²] (prescribed or from slab ocean).
+    config : SeaIceConfig
+        Sea ice configuration.
+    dt : float
+        Timestep [s].
+
+    Returns
+    -------
+    ice_new : SeaIceState
+        Updated ice state.
+    ocean_new : OceanState
+        Updated ocean state (SST clamped at T_freeze where ice exists).
+    """
+    sst = ocean.surface_temperature
+    h = ice.ice_thickness
+    t_f = config.t_freeze
+    rho_l = config.rho_ice * config.l_fusion
+
+    # --- Handle ice formation from supercooled ocean ---
+    # If SST < T_freeze, convert excess cooling to ice.
+    supercool = jnp.maximum(t_f - sst, 0.0)
+    # Use a nominal ocean heat capacity to convert temperature to energy.
+    # C_ocean ~ 2e8 J/(m²·K) for a 50m mixed layer; we use rho_w * cp_w * 50m.
+    c_ocean_nominal = 1025.0 * 3994.0 * 50.0
+    h_from_supercool = supercool * c_ocean_nominal / rho_l
+    h += h_from_supercool
+    sst = jnp.maximum(sst, t_f)
+
+    # --- Ice formation from atmospheric cooling at T_freeze ---
+    # When SST is at freezing and no ice exists, negative atmospheric
+    # flux forms ice rather than cooling the ocean below T_freeze.
+    no_ice_at_freeze = (h <= 0.0) & (sst <= t_f)
+    cooling_flux = jnp.maximum(-atm_flux_at_freeze, 0.0)
+    h_from_cooling = jnp.where(no_ice_at_freeze, cooling_flux * dt / rho_l, 0.0)
+    h += h_from_cooling
+
+    # --- Diagnose ice surface temperature ---
+    t_s, melt_flux_top = diagnose_ice_surface_temperature(
+        h,
+        atm_flux_at_freeze,
+        dflux_dt,
+        config.k_ice,
+        t_f,
+    )
+
+    # --- Conductive and growth fluxes ---
+    f_cond = conductive_flux(h, t_s, t_f, config.k_ice)
+    dh_dt_bottom = ice_growth_rate(f_cond, oceanic_heat_flux, config.rho_ice, config.l_fusion)
+
+    # Top melt rate (negative = thinning)
+    dh_dt_top = -melt_flux_top / rho_l
+
+    # Total thickness change (only for pre-existing ice, not just-formed)
+    dh = (dh_dt_bottom + dh_dt_top) * dt
+    had_ice = ice.ice_thickness > 0.0
+    h_new = jnp.where(had_ice, h + dh, h)
+
+    # --- Handle ice disappearance ---
+    # When h_new < 0, ice has fully melted. Return excess energy to ocean.
+    excess_ice = jnp.minimum(h_new, 0.0)  # negative = over-melted
+    excess_energy = -excess_ice * rho_l  # positive energy [J/m²]
+    h_new = jnp.maximum(h_new, 0.0)
+
+    # Warm ocean with excess energy (using nominal heat capacity)
+    sst += excess_energy / c_ocean_nominal
+
+    # --- Clamp SST at T_freeze where ice is present ---
+    still_has_ice = h_new > 0.0
+    sst = jnp.where(still_has_ice, t_f, sst)
+
+    # --- Update ice fraction ---
+    f_new = ice_fraction_from_thickness(h_new, config.h_crit)
+
+    return (
+        SeaIceState(ice_thickness=h_new, ice_fraction=f_new),
+        OceanState(surface_temperature=sst),
+    )

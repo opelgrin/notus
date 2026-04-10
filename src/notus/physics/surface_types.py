@@ -30,6 +30,11 @@ LAND_Z0_MOMENTUM: float = 0.05  # [m] (grassland/shrub)
 LAND_Z0_HEAT: float = 0.005  # [m]
 LAND_ALBEDO: float = 0.25
 
+# Sea ice: intermediate roughness, high albedo
+ICE_Z0_MOMENTUM: float = 5.0e-4  # [m]
+ICE_Z0_HEAT: float = 5.0e-5  # [m]
+ICE_ALBEDO: float = 0.65
+
 
 # ---------------------------------------------------------------------------
 # SurfaceProperties

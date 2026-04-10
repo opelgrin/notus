@@ -23,15 +23,19 @@ from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.physics_suite import PhysicsSuite
 from notus.physics.surface import (
     BucketLandConfig,
+    SeaIceConfig,
     SlabOceanConfig,
     SurfaceState,
     beta_function,
     compute_net_land_flux,
     compute_net_surface_flux,
     diagnose_precipitation,
+    ice_modified_albedo,
+    ice_weighted_surface_temperature,
     land_flux_derivative,
     step_bucket_hydrology,
     step_land_implicit,
+    step_sea_ice,
     step_slab_ocean_implicit,
     surface_flux_derivative,
 )
@@ -96,6 +100,8 @@ class CoupledStepper:
         ``land_config`` is not None.
     land_config : BucketLandConfig or None
         Bucket land model parameters.  If ``None``, pure ocean mode.
+    ice_config : SeaIceConfig or None
+        Sea ice model parameters.  If ``None``, sea ice is disabled.
     spectral_filter : jnp.ndarray or None
         Spectral filter array.
     diffusion_order : int
@@ -121,6 +127,7 @@ class CoupledStepper:
         q_flux: jnp.ndarray,
         surface_properties: SurfaceProperties | None = None,
         land_config: BucketLandConfig | None = None,
+        ice_config: SeaIceConfig | None = None,
         spectral_filter: jnp.ndarray | None = None,
         diffusion_order: int = 4,
         diffusion_timescale: float = 2.0 * 3600.0,
@@ -170,6 +177,10 @@ class CoupledStepper:
             surface_properties.land_fraction if surface_properties is not None else None
         )
         self._surface_properties = surface_properties
+
+        # Sea ice
+        self._has_ice = ice_config is not None
+        self._ice_config = ice_config
 
         # Physics config for precipitation diagnostic (land branch only)
         self._tau_bm = cfg.tau_bm
@@ -266,7 +277,21 @@ class CoupledStepper:
         return wind_speed, ps_grid, t_lowest_grid, q_lowest, k_sfc, c_h
 
     def _compute_effective_albedo(self, surface: SurfaceState) -> float | jnp.ndarray:
-        """Compute surface albedo (moisture-dependent over land, or constant)."""
+        """Compute surface albedo (moisture-dependent over land, or constant).
+
+        When sea ice is enabled, the ocean albedo is first blended with
+        ice albedo by ice fraction before combining with land albedo.
+        """
+        # Base ocean albedo, potentially modified by ice
+        ocean_alb: float | jnp.ndarray
+        if self._has_ice and self._ice_config is not None and surface.ice is not None:
+            ice_frac = surface.ice.ice_fraction
+            ocean_alb = ice_modified_albedo(
+                ice_frac, self._ice_config.albedo_ice, self._planet.surface_albedo
+            )
+        else:
+            ocean_alb = self._planet.surface_albedo
+
         lc = self._land_config
         lf = self._land_frac
         if (
@@ -276,10 +301,11 @@ class CoupledStepper:
             and surface.land is not None
             and lf is not None
         ):
-            ocean_alb = (
-                self._surface_properties.albedo
-                if self._surface_properties is not None
-                else self._planet.surface_albedo
+            # ocean_alb may be 1D (n_lat,); broadcast to 2D for blending
+            ocean_alb_2d = (
+                ocean_alb[:, None]
+                if isinstance(ocean_alb, jnp.ndarray) and ocean_alb.ndim == 1
+                else ocean_alb
             )
             return moisture_dependent_albedo(
                 surface.land.bucket_depth,
@@ -287,8 +313,12 @@ class CoupledStepper:
                 lc.albedo_dry,
                 lc.albedo_wet,
                 lf,
-                ocean_alb,
+                ocean_alb_2d,
             )
+
+        # No land: return ocean albedo (with ice blending if applicable)
+        if isinstance(ocean_alb, jnp.ndarray):
+            return ocean_alb[:, None] if ocean_alb.ndim == 1 else ocean_alb
         return self._sfc_albedo
 
     def _apply_implicit_decay(
@@ -508,6 +538,24 @@ class CoupledStepper:
         )
         surface = surface.replace(ocean=ocean)
 
+        # --- Sea ice update (conditional) ---
+        if self._has_ice and self._ice_config is not None and surface.ice is not None:
+            # Use zonally-averaged atmospheric flux at T_freeze and its
+            # derivative (same zonal averaging as the slab ocean path).
+            atm_flux_mean = jnp.mean(ocean_net_flux, axis=-1)
+            dflux_mean = jnp.mean(ocean_dflux, axis=-1)
+            ice_new, ocean_new = step_sea_ice(
+                ice=surface.ice,
+                ocean=ocean,
+                atm_flux_at_freeze=atm_flux_mean,
+                dflux_dt=dflux_mean,
+                oceanic_heat_flux=self._q_flux,
+                config=self._ice_config,
+                dt=dt_implicit,
+            )
+            surface = surface.replace(ice=ice_new, ocean=ocean_new)
+            ocean = ocean_new
+
         # --- Land update (conditional) ---
         if self._has_land:
             surface = self._update_land(
@@ -527,15 +575,27 @@ class CoupledStepper:
         # --- Implicit atmospheric decay ---
         new_sst = ocean.surface_temperature
         sst_bc = new_sst[:, None] if new_sst.ndim == 1 else new_sst
+
+        # When ice is present, the atmosphere sees an ice-weighted
+        # surface temperature over the ocean fraction.
+        if self._has_ice and self._ice_config is not None and surface.ice is not None:
+            ice_frac_bc = surface.ice.ice_fraction[:, None]
+            # Diagnose ice surface temperature for the decay target.
+            # Use T_freeze as a conservative estimate (ice surface ≤ T_freeze).
+            t_ice_sfc = self._ice_config.t_freeze * jnp.ones_like(sst_bc)
+            ocean_t_eff = ice_weighted_surface_temperature(ice_frac_bc, t_ice_sfc, sst_bc)
+        else:
+            ocean_t_eff = sst_bc
+
         land = surface.land
         lc = self._land_config
         lf = self._land_frac
 
         if self._has_land and land is not None and lc is not None and lf is not None:
             t_land = land.soil_temperature
-            t_target = (1.0 - lf) * sst_bc + lf * t_land
+            t_target = (1.0 - lf) * ocean_t_eff + lf * t_land
             q_sat_ocean = saturation_specific_humidity(
-                sst_bc,
+                ocean_t_eff,
                 ps_grid,
                 planet.epsilon_moisture,
             )
@@ -547,9 +607,9 @@ class CoupledStepper:
             )
             q_target = (1.0 - lf) * q_sat_ocean + lf * beta_new * q_sat_land
         else:
-            t_target = sst_bc * jnp.ones_like(t_lowest_grid)
+            t_target = ocean_t_eff * jnp.ones_like(t_lowest_grid)
             q_target = saturation_specific_humidity(
-                sst_bc,
+                ocean_t_eff,
                 ps_grid,
                 planet.epsilon_moisture,
             )
@@ -605,6 +665,7 @@ def build_coupled_pe_stepper(
     q_flux: jnp.ndarray,
     surface_properties: SurfaceProperties | None = None,
     land_config: BucketLandConfig | None = None,
+    ice_config: SeaIceConfig | None = None,
     spectral_filter: jnp.ndarray | None = None,
     diffusion_order: int = 4,
     diffusion_timescale: float = 2.0 * 3600.0,
@@ -644,6 +705,7 @@ def build_coupled_pe_stepper(
         q_flux=q_flux,
         surface_properties=surface_properties,
         land_config=land_config,
+        ice_config=ice_config,
         spectral_filter=spectral_filter,
         diffusion_order=diffusion_order,
         diffusion_timescale=diffusion_timescale,
