@@ -412,7 +412,7 @@ Ice fraction, ice temperature, albedo feedback, and freezing/melting coupled to 
 - Dedicated sea-ice unit + integration tests in `tests/test_sea_ice.py`
 - Coupled 10-day sea-ice-ocean runs remain stable with finite SST / ice thickness / ice fraction
 - SST remains clamped near freezing where ice is present and equatorial band stays ice-free
-- API + xarray I/O surface model wiring updated to carry sea-ice state in `SurfaceState` and dataset conversion
+- API + xarray/restart I/O surface model wiring updated to carry sea-ice state in `SurfaceState` and persistence paths
 
 ## Phase 11B — Snow Cover
 
