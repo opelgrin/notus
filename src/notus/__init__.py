@@ -100,6 +100,8 @@ from notus.physics import (
     PhysicsSuiteConfig,
     PrescribedSST,
     RadiationConfig,
+    SeaIceConfig,
+    SeaIceState,
     SlabOceanConfig,
     SpeedyRadiation,
     SurfaceLayerConfig,
@@ -108,6 +110,7 @@ from notus.physics import (
     compute_sst,
     flat_continent_surface,
     init_land_state,
+    init_sea_ice_state,
 )
 from notus.runner import SimulationResult, run_coupled_simulation, run_simulation
 from notus.state import PrimitiveEquationState, ShallowWaterState
@@ -168,6 +171,8 @@ __all__ = [
     "PrescribedSST",
     "PrimitiveEquationState",
     "RadiationConfig",
+    "SeaIceConfig",
+    "SeaIceState",
     "ShallowWaterState",
     "SigmaLevels",
     "SimulationResult",
@@ -198,6 +203,7 @@ __all__ = [
     "hyperdiffusion",
     "hyperdiffusion_scaling",
     "init_land_state",
+    "init_sea_ice_state",
     "inverse_laplacian",
     "jablonowski_williamson_perturbation",
     "jablonowski_williamson_steady_state",

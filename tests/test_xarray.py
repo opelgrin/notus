@@ -19,7 +19,7 @@ import xarray as xr
 from notus.constants import EARTH
 from notus.grid import GaussianGrid
 from notus.initial_conditions import held_suarez_initial_state
-from notus.physics.surface import LandState, OceanState, SurfaceState
+from notus.physics.surface import LandState, OceanState, SeaIceState, SurfaceState
 from notus.physics.surface_types import SurfaceProperties
 from notus.topography import gaussian_mountain
 from notus.transforms import SpectralTransform
@@ -111,6 +111,20 @@ class TestStateToDataset:
         assert "soil_temperature" in ds
         assert "bucket_depth" in ds
 
+    def test_with_sea_ice_state(self) -> None:
+        transform, grid, levels, state, _, _ = _setup()
+        ocean = OceanState(surface_temperature=jnp.full(grid.n_lat, 271.35))
+        ice = SeaIceState(
+            ice_thickness=jnp.full(grid.n_lat, 0.8),
+            ice_fraction=jnp.full(grid.n_lat, 0.8),
+        )
+        surface = SurfaceState(ocean=ocean, ice=ice)
+        ds = state_to_dataset(state, transform, EARTH, levels, surface=surface)
+        assert "ice_thickness" in ds
+        assert "ice_fraction" in ds
+        np.testing.assert_allclose(ds["ice_thickness"].values, 0.8)
+        np.testing.assert_allclose(ds["ice_fraction"].values, 0.8)
+
     def test_dataset_attributes(self) -> None:
         transform, _, levels, state, _, _ = _setup()
         ds = state_to_dataset(state, transform, EARTH, levels)
@@ -186,6 +200,28 @@ class TestGaussianRoundTrip:
         np.testing.assert_allclose(
             np.asarray(contents.surface.land.soil_temperature),
             np.asarray(surface.land.soil_temperature),
+        )
+
+    def test_surface_state_roundtrip_with_ice(self) -> None:
+        transform, grid, levels, state, _, _ = _setup()
+        ocean = OceanState(surface_temperature=jnp.full(grid.n_lat, 271.35))
+        ice = SeaIceState(
+            ice_thickness=jnp.full(grid.n_lat, 1.2),
+            ice_fraction=jnp.full(grid.n_lat, 1.0),
+        )
+        surface = SurfaceState(ocean=ocean, ice=ice)
+        ds = state_to_dataset(state, transform, EARTH, levels, surface=surface)
+        contents = dataset_to_state(ds, transform, EARTH)
+
+        assert contents.surface is not None
+        assert contents.surface.ice is not None
+        np.testing.assert_allclose(
+            np.asarray(contents.surface.ice.ice_thickness),
+            np.asarray(surface.ice.ice_thickness),
+        )
+        np.testing.assert_allclose(
+            np.asarray(contents.surface.ice.ice_fraction),
+            np.asarray(surface.ice.ice_fraction),
         )
 
     def test_returns_dataset_contents(self) -> None:

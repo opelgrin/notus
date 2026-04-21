@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from notus.physics.forcing import PhysicsDiagnostics
-from notus.physics.surface import OceanState, SurfaceState
+from notus.physics.surface import OceanState, SeaIceConfig, SurfaceState
 from notus.runner import _build_coupled_one_day, run_simulation
 from notus.state import PrimitiveEquationState
 
@@ -105,3 +108,77 @@ def test_run_simulation_coupled_does_not_mutate_forcing_day_of_year() -> None:
     )
 
     assert samples == [(1, 0.0), (2, 2.0), (3, 3.0)]
+
+
+def test_run_coupled_simulation_wires_sea_ice(monkeypatch: pytest.MonkeyPatch) -> None:
+    import notus.runner as runner_mod
+
+    initial_state = _state(0.0)
+    forcing = SimpleNamespace(prescribed_sst=jnp.array([270.0, 275.0]))
+    captured: dict[str, object] = {}
+
+    def fake_spinup_prescribed_sst(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(state=initial_state, q_flux=jnp.zeros_like(forcing.prescribed_sst))
+
+    def fake_build_coupled_pe_stepper(*args: object, **kwargs: object) -> tuple[object, object]:
+        captured["ice_config"] = kwargs.get("ice_config")
+
+        def init_fn(
+            state: PrimitiveEquationState,
+            surface: SurfaceState,
+            _day_of_year: jnp.ndarray,
+        ) -> tuple[
+            PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics
+        ]:
+            return state, state, surface, PhysicsDiagnostics()
+
+        def step_fn(
+            previous: PrimitiveEquationState,
+            current: PrimitiveEquationState,
+            surface: SurfaceState,
+            _day_of_year: jnp.ndarray,
+        ) -> tuple[
+            PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics
+        ]:
+            return previous, current, surface, PhysicsDiagnostics()
+
+        return init_fn, step_fn
+
+    def fake_run_simulation(*args: object, **kwargs: object) -> runner_mod.SimulationResult:
+        surface = kwargs["surface"]
+        captured["surface"] = surface
+        return runner_mod.SimulationResult(
+            state=initial_state,
+            previous=initial_state,
+            surface=surface,
+            n_days=1,
+            wall_time=0.0,
+            diagnostics=[],
+        )
+
+    monkeypatch.setattr(runner_mod, "spinup_prescribed_sst", fake_spinup_prescribed_sst)
+    monkeypatch.setattr(runner_mod, "build_coupled_pe_stepper", fake_build_coupled_pe_stepper)
+    monkeypatch.setattr(runner_mod, "run_simulation", fake_run_simulation)
+
+    ice_cfg = SeaIceConfig()
+    _ = runner_mod.run_coupled_simulation(
+        initial_state=initial_state,
+        forcing=forcing,  # type: ignore[arg-type]
+        transform=SimpleNamespace(arrays=None),  # type: ignore[arg-type]
+        planet=SimpleNamespace(surface_albedo=0.06),  # type: ignore[arg-type]
+        levels=SimpleNamespace(),  # type: ignore[arg-type]
+        reference_temperature=np.array([250.0]),
+        surface_geopotential=jnp.zeros((1,)),
+        dt=86400.0,
+        n_days=1,
+        spectral_filter=jnp.array([1.0]),
+        ice_config=ice_cfg,
+        verbose=False,
+    )
+
+    assert captured["ice_config"] is ice_cfg
+    surface = captured["surface"]
+    assert isinstance(surface, SurfaceState)
+    assert surface.ice is not None
+    np.testing.assert_allclose(np.asarray(surface.ice.ice_thickness), np.array([1.0, 0.0]))
+    np.testing.assert_allclose(np.asarray(surface.ice.ice_fraction), np.array([1.0, 0.0]))

@@ -22,10 +22,13 @@ from notus.physics.surface import (
     LandState,
     OceanState,
     PrescribedSST,
+    SeaIceConfig,
+    SeaIceState,
     SlabOceanConfig,
     SurfaceState,
     compute_sst,
     init_land_state,
+    init_sea_ice_state,
 )
 from notus.physics.surface_types import SurfaceProperties, flat_continent_surface
 
@@ -48,6 +51,8 @@ __all__ = [
     "PhysicsSuiteConfig",
     "PrescribedSST",
     "RadiationConfig",
+    "SeaIceConfig",
+    "SeaIceState",
     "SlabOceanConfig",
     "SpeedyRadiation",
     "SurfaceLayerConfig",
@@ -56,4 +61,5 @@ __all__ = [
     "compute_sst",
     "flat_continent_surface",
     "init_land_state",
+    "init_sea_ice_state",
 ]

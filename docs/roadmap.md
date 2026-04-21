@@ -392,11 +392,11 @@ Surveying comparable idealized GCMs (Isca, GFDL idealized moist, PlaSim, SPEEDY/
 - Surface pressure initialization is essential — starting with uniform ps over a 2500 m mountain creates an immediate hydrostatic imbalance that generates spurious gravity waves. The hypsometric adjustment is a simple one-liner but critical for clean integrations.
 - At T21 resolution, a 2500 m Gaussian mountain (half-width 20°) is well-resolved and the model remains stable for 10+ days in both dry and moist configurations with dt=600s.
 
-## Phase 11A — Sea Ice Thermodynamics
+## Phase 11A — Sea Ice Thermodynamics (complete)
 
 Ice fraction, ice temperature, albedo feedback, and freezing/melting coupled to the slab ocean.
 
-**Planned:**
+**What was built:**
 - Zero-layer or single-layer Semtner thermodynamic ice model
 - Ice fraction as a prognostic variable per grid point
 - Freezing criterion: ocean temperature reaches freezing point (−1.8 °C for seawater)
@@ -407,6 +407,12 @@ Ice fraction, ice temperature, albedo feedback, and freezing/melting coupled to 
 - Lead fraction (open water within ice): controls ocean–atmosphere exchange in partially ice-covered cells
 - Implicit ice temperature stepping (consistent with existing slab ocean scheme)
 - Integration into `CoupledStepper` ocean path and `SurfaceState`
+
+**Validation:**
+- Dedicated sea-ice unit + integration tests in `tests/test_sea_ice.py`
+- Coupled 10-day sea-ice-ocean runs remain stable with finite SST / ice thickness / ice fraction
+- SST remains clamped near freezing where ice is present and equatorial band stays ice-free
+- API + xarray I/O surface model wiring updated to carry sea-ice state in `SurfaceState` and dataset conversion
 
 ## Phase 11B — Snow Cover
 

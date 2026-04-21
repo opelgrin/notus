@@ -66,9 +66,11 @@ from notus.physics.physics_suite import PhysicsSuite
 from notus.physics.surface import (
     BucketLandConfig,
     OceanState,
+    SeaIceConfig,
     SlabOceanConfig,
     SurfaceState,
     init_land_state,
+    init_sea_ice_state,
 )
 from notus.physics.surface_types import SurfaceProperties
 from notus.state import PrimitiveEquationState
@@ -542,6 +544,7 @@ def run_coupled_simulation(
     ocean_config: SlabOceanConfig | None = None,
     surface_properties: SurfaceProperties | None = None,
     land_config: BucketLandConfig | None = None,
+    ice_config: SeaIceConfig | None = None,
     spinup_days: int = 100,
     averaging_days: int = 100,
     spectral_filter: jnp.ndarray | None = None,
@@ -551,14 +554,14 @@ def run_coupled_simulation(
     verbose: bool = True,
     log_interval: int = 50,
 ) -> SimulationResult:
-    """Run a coupled atmosphere-ocean(-land) simulation with automatic Q-flux spinup.
+    """Run a coupled atmosphere-ocean(-land-ice) simulation with automatic Q-flux spinup.
 
     This is a convenience wrapper that handles the full coupled simulation
     workflow:
 
     1. Prescribed-SST spinup to diagnose the ocean Q-flux
-    2. Surface state initialization (ocean + optional land)
-    3. Coupled time stepping with slab ocean (and optional bucket land)
+    2. Surface state initialization (ocean + optional land + optional sea ice)
+    3. Coupled time stepping with slab ocean (and optional bucket land/sea ice)
 
     Skipping the prescribed-SST spinup is a common source of instability
     when running coupled simulations.  This function ensures the spinup
@@ -593,6 +596,9 @@ def run_coupled_simulation(
     land_config : BucketLandConfig or None
         Bucket land model parameters.  When provided together with
         ``surface_properties``, enables the land surface model.
+    ice_config : SeaIceConfig or None
+        Sea-ice thermodynamics parameters.  When provided, sea ice is
+        initialized from the spun-up SST and coupled to the slab ocean.
     spinup_days : int
         Days to discard during the prescribed-SST spinup phase.
     averaging_days : int
@@ -657,8 +663,9 @@ def run_coupled_simulation(
     land = None
     if land_config is not None and surface_properties is not None:
         land = init_land_state(surface_properties.land_fraction, sst, land_config)
+    ice = init_sea_ice_state(sst, ice_config) if ice_config is not None else None
 
-    surface = SurfaceState(ocean=ocean, land=land)
+    surface = SurfaceState(ocean=ocean, land=land, ice=ice)
 
     # --- Phase 3: Build coupled stepper and run ---
     init_fn, step_fn = build_coupled_pe_stepper(
@@ -673,6 +680,7 @@ def run_coupled_simulation(
         q_flux=spinup_result.q_flux,
         surface_properties=surface_properties,
         land_config=land_config,
+        ice_config=ice_config,
         spectral_filter=spectral_filter,
     )
 

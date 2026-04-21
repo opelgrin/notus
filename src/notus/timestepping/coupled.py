@@ -21,12 +21,14 @@ from notus.physics.boundary_layer import SurfaceLayerConfig, compute_transfer_co
 from notus.physics.forcing import PhysicsDiagnostics
 from notus.physics.moisture import saturation_specific_humidity
 from notus.physics.physics_suite import PhysicsSuite
+from notus.physics.radiation import STEFAN_BOLTZMANN
 from notus.physics.surface import (
     BucketLandConfig,
     SeaIceConfig,
     SlabOceanConfig,
     SurfaceState,
     beta_function,
+    compute_ice_weighted_flux,
     compute_net_land_flux,
     compute_net_surface_flux,
     diagnose_precipitation,
@@ -464,7 +466,7 @@ class CoupledStepper:
     # Coupled post-step
     # ------------------------------------------------------------------
 
-    def _coupled_post_step(
+    def _coupled_post_step(  # noqa: PLR0915
         self,
         state: PrimitiveEquationState,
         surface: SurfaceState,
@@ -503,7 +505,7 @@ class CoupledStepper:
 
         # --- Ocean SST update ---
         ocean = surface.ocean
-        ocean_net_flux = compute_net_surface_flux(
+        ocean_net_flux_open = compute_net_surface_flux(
             ocean.surface_temperature,
             t_lowest_grid,
             q_lowest,
@@ -517,9 +519,9 @@ class CoupledStepper:
             epsilon=planet.epsilon_moisture,
             latent_heat=planet.latent_heat_vaporization,
             drag_coefficient=c_h,
-            surface_albedo=effective_albedo,
+            surface_albedo=self._planet.surface_albedo,
         )
-        ocean_dflux = surface_flux_derivative(
+        ocean_dflux_open = surface_flux_derivative(
             ocean.surface_temperature,
             wind_speed,
             ps_grid,
@@ -529,10 +531,46 @@ class CoupledStepper:
             latent_heat=planet.latent_heat_vaporization,
             drag_coefficient=c_h,
         )
+
+        ocean_net_flux_1d = jnp.mean(ocean_net_flux_open, axis=-1)
+        ocean_dflux_1d = jnp.mean(ocean_dflux_open, axis=-1)
+
+        atm_flux_at_freeze = ocean_net_flux_1d
+        dflux_at_freeze = ocean_dflux_1d
+
+        if self._has_ice and self._ice_config is not None and surface.ice is not None:
+            # Over sea ice, treat sensible/latent exchange as suppressed
+            # and only retain radiative terms at a fixed freezing surface.
+            sw_down_mean = jnp.mean(sw_down_sfc, axis=-1)
+            lw_down_mean = jnp.mean(lw_down, axis=-1)
+            t_freeze = self._ice_config.t_freeze
+            flux_over_ice = (
+                sw_down_mean * (1.0 - self._ice_config.albedo_ice)
+                + lw_down_mean
+                - STEFAN_BOLTZMANN * t_freeze**4
+            )
+            dflux_over_ice = jnp.zeros_like(flux_over_ice)
+
+            ice_frac = surface.ice.ice_fraction
+            ocean_net_flux_1d = compute_ice_weighted_flux(
+                ice_fraction=ice_frac,
+                flux_over_ice=flux_over_ice,
+                flux_over_ocean=ocean_net_flux_1d,
+            )
+            ocean_dflux_1d = compute_ice_weighted_flux(
+                ice_fraction=ice_frac,
+                flux_over_ice=dflux_over_ice,
+                flux_over_ocean=ocean_dflux_1d,
+            )
+
+            # Ice thermodynamics should use the ice-surface atmospheric flux.
+            atm_flux_at_freeze = flux_over_ice
+            dflux_at_freeze = dflux_over_ice
+
         ocean = step_slab_ocean_implicit(
             ocean,
-            jnp.mean(ocean_net_flux, axis=-1),
-            jnp.mean(ocean_dflux, axis=-1),
+            ocean_net_flux_1d,
+            ocean_dflux_1d,
             self._q_flux,
             self._ocean_heat_capacity,
             dt_implicit,
@@ -541,15 +579,11 @@ class CoupledStepper:
 
         # --- Sea ice update (conditional) ---
         if self._has_ice and self._ice_config is not None and surface.ice is not None:
-            # Use zonally-averaged atmospheric flux at T_freeze and its
-            # derivative (same zonal averaging as the slab ocean path).
-            atm_flux_mean = jnp.mean(ocean_net_flux, axis=-1)
-            dflux_mean = jnp.mean(ocean_dflux, axis=-1)
             ice_new, ocean_new = step_sea_ice(
                 ice=surface.ice,
                 ocean=ocean,
-                atm_flux_at_freeze=atm_flux_mean,
-                dflux_dt=dflux_mean,
+                atm_flux_at_freeze=atm_flux_at_freeze,
+                dflux_dt=dflux_at_freeze,
                 oceanic_heat_flux=self._q_flux,
                 config=self._ice_config,
                 dt=dt_implicit,

@@ -15,7 +15,7 @@ $$
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| $T_\text{min}$ | 271 K | Temperature floor (prevents sea ice) |
+| $T_\text{min}$ | 271 K | Minimum prescribed SST in the analytic profile |
 | $\Delta T$ | 29 K | Equator-to-pole temperature difference |
 | $\varphi_w$ | 26° | Latitude width of the warm pool |
 

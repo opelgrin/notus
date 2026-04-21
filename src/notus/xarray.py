@@ -32,7 +32,7 @@ import xarray as xr
 
 from notus.constants import PlanetaryConstants
 from notus.operators import spectral_curl, spectral_divergence, uv_from_vordiv
-from notus.physics.surface import LandState, OceanState, SurfaceState
+from notus.physics.surface import LandState, OceanState, SeaIceState, SurfaceState
 from notus.physics.surface_types import SurfaceProperties
 from notus.spherical_harmonics import compute_legendre_polynomials
 from notus.state import PrimitiveEquationState
@@ -787,6 +787,17 @@ def _add_surface_vars(
             np.asarray(surface.land.bucket_depth),
             {"units": "m", "long_name": "bucket water depth"},
         )
+    if surface.ice is not None:
+        data_vars["ice_thickness"] = xr.Variable(
+            ["lat"],
+            np.asarray(surface.ice.ice_thickness),
+            {"units": "m", "long_name": "sea ice thickness"},
+        )
+        data_vars["ice_fraction"] = xr.Variable(
+            ["lat"],
+            np.asarray(surface.ice.ice_fraction),
+            {"units": "1", "long_name": "sea ice fraction"},
+        )
 
 
 def _add_surface_vars_spectral(
@@ -829,6 +840,17 @@ def _add_surface_vars_spectral(
                 np.asarray(to_grid(spec)),
                 {"units": units, "long_name": long_name},
             )
+    if surface.ice is not None:
+        data_vars["ice_thickness"] = xr.Variable(
+            ["lat"],
+            np.asarray(surface.ice.ice_thickness),
+            {"units": "m", "long_name": "sea ice thickness"},
+        )
+        data_vars["ice_fraction"] = xr.Variable(
+            ["lat"],
+            np.asarray(surface.ice.ice_fraction),
+            {"units": "1", "long_name": "sea ice fraction"},
+        )
 
 
 def _extract_surface(ds: xr.Dataset) -> SurfaceState | None:
@@ -845,7 +867,13 @@ def _extract_surface(ds: xr.Dataset) -> SurfaceState | None:
             soil_temperature=jnp.array(ds["soil_temperature"].values),
             bucket_depth=jnp.array(ds["bucket_depth"].values),
         )
-    return SurfaceState(ocean=ocean, land=land)
+    ice = None
+    if "ice_thickness" in ds and "ice_fraction" in ds:
+        ice = SeaIceState(
+            ice_thickness=jnp.array(ds["ice_thickness"].values),
+            ice_fraction=jnp.array(ds["ice_fraction"].values),
+        )
+    return SurfaceState(ocean=ocean, land=land, ice=ice)
 
 
 # ---------------------------------------------------------------------------
