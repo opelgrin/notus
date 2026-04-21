@@ -595,17 +595,17 @@ class TestLandOceanIntegration:
             spectral_filter=exponential_filter(s["transform"].arrays, 900.0),
         )
         steps_per_day = 96
-        forcing.day_of_year = jnp.float64(0.0)
+        day_of_year = jnp.float64(0.0)
         forcing.prescribed_sst = surface.ocean.surface_temperature
-        prev, curr, surface, _diags = init_fn(s["result"].state, surface)
+        prev, curr, surface, _diags = init_fn(s["result"].state, surface, day_of_year)
 
         for day in range(1, n_days + 1):
-            forcing.day_of_year = jnp.float64(day)
+            day_of_year = jnp.float64(day)
             forcing.prescribed_sst = surface.ocean.surface_temperature
 
-            def scan_body(carry, _):
+            def scan_body(carry, _, day_of_year=day_of_year):
                 p, c, sfc = carry
-                p, c, sfc, _diags = step_fn(p, c, sfc)
+                p, c, sfc, _diags = step_fn(p, c, sfc, day_of_year)
                 return (p, c, sfc), None
 
             (prev, curr, surface), _ = jax.lax.scan(

@@ -104,17 +104,17 @@ def run_one(
 
     def scan_body(carry, _):
         p, c, sfc = carry
-        p, c, sfc = step_fn(p, c, sfc)
+        p, c, sfc, _ = step_fn(p, c, sfc, day_of_year)
         return (p, c, sfc), None
 
     # Initialize from warm state
-    forcing.day_of_year = jnp.float64(0.0)
+    day_of_year = jnp.float64(0.0)
     forcing.prescribed_sst = surface.ocean.surface_temperature
-    prev, curr, surface = init_fn(warm_state, surface)
+    prev, curr, surface, _ = init_fn(warm_state, surface, day_of_year)
 
     t_start = time.perf_counter()
     for day in range(1, n_days + 1):
-        forcing.day_of_year = jnp.float64(day % days_per_year)
+        day_of_year = jnp.float64(day % days_per_year)
         forcing.prescribed_sst = surface.ocean.surface_temperature
         (prev, curr, surface), _ = jax.lax.scan(
             scan_body,

@@ -123,11 +123,11 @@ _AtmStepFn = Callable[
 _AtmCallback = Callable[[int, PrimitiveEquationState, PhysicsDiagnostics], object]
 
 _CoupledInitFn = Callable[
-    [PrimitiveEquationState, SurfaceState],
+    [PrimitiveEquationState, SurfaceState, jnp.ndarray],
     tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics],
 ]
 _CoupledStepFn = Callable[
-    [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+    [PrimitiveEquationState, PrimitiveEquationState, SurfaceState, jnp.ndarray],
     tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics],
 ]
 _CoupledCallback = Callable[[int, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics], object]
@@ -197,7 +197,7 @@ def _build_coupled_one_day(
 
         def step(carry: _CoupledCarry, _: None) -> tuple[_CoupledCarry, None]:
             p, c, s, pd = carry
-            p, c, s, pd = step_fn(p, c, s)
+            p, c, s, pd = step_fn(p, c, s, day_of_year)
             return (p, c, s, pd), None
 
         carry_out, _ = jax.lax.scan(
@@ -292,8 +292,8 @@ def run_simulation(
         radiation).
     days_per_year : float
         Length of year in days.  When > 0, enables seasonal insolation
-        by setting ``forcing.day_of_year`` each day.  Set to 0 to
-        disable seasonal cycle.
+        by passing dynamic ``day_of_year`` values through the coupled
+        stepper.  Set to 0 to disable seasonal cycle.
     start_day : int
         Starting day number (for continuing from a restart).
     on_day : callable or None
@@ -442,12 +442,10 @@ def _run_coupled(
     diagnostics: list[object] = []
 
     t0 = time.perf_counter()
-    prev, curr, surface, diags = init_fn(initial_state, surface)
-    _check_nan(curr, "after init")
     day_val = jnp.float64(start_day % days_per_year if seasonal else 0.0)
+    prev, curr, surface, diags = init_fn(initial_state, surface, day_val)
+    _check_nan(curr, "after init")
     if forcing is not None:
-        if seasonal:
-            forcing.day_of_year = day_val
         forcing.prescribed_sst = surface.ocean.surface_temperature
     (prev, curr, surface, diags), _ = one_day_jit((prev, curr, surface, diags), day_val)
     _check_nan(curr, f"after day {start_day + 1}")
@@ -461,8 +459,6 @@ def _run_coupled(
         day = start_day + day_idx
         day_val = jnp.float64(day % days_per_year if seasonal else 0.0)
         if forcing is not None:
-            if seasonal:
-                forcing.day_of_year = day_val
             forcing.prescribed_sst = surface.ocean.surface_temperature
         (prev, curr, surface, diags), _ = one_day_jit((prev, curr, surface, diags), day_val)
         _check_nan(curr, f"after day {day}")

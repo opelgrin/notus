@@ -259,6 +259,7 @@ def run_validation(
     print(f"  Q global mean: {qf_global:+.2f} W/m² (should be ~0)\n")
 
     steps_per_day = int(86400 / dt)
+    days_per_year = 365.25
 
     # ==========================================================
     # Phase 2: Coupled slab ocean integration
@@ -296,7 +297,7 @@ def run_validation(
 
         def step(carry, _):
             p, c, s = carry
-            p, c, s = coupled_step_fn(p, c, s)
+            p, c, s, _ = coupled_step_fn(p, c, s, day_of_year)
             return (p, c, s), None
 
         (prev, curr, sfc), _ = jax.lax.scan(
@@ -310,7 +311,8 @@ def run_validation(
     one_day_coupled_jit = jax.jit(one_day_coupled)
 
     t_phase2 = time.perf_counter()
-    prev, curr, surface = coupled_init_fn(warm_state, surface)
+    day_of_year = jnp.float64(0.0)
+    prev, curr, surface, _ = coupled_init_fn(warm_state, surface, day_of_year)
     (prev, curr, surface), _ = one_day_coupled_jit((prev, curr, surface), None)
     print(f"  Day 1 (compile): {time.perf_counter() - t_phase2:.1f}s")
 
@@ -321,6 +323,7 @@ def run_validation(
 
     t_start2 = time.perf_counter()
     for day in range(2, coupled_days + 1):
+        day_of_year = jnp.float64(day % days_per_year)
         forcing.prescribed_sst = surface.ocean.surface_temperature
         (prev, curr, surface), _ = one_day_coupled_jit((prev, curr, surface), None)
 

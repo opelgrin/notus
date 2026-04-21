@@ -469,6 +469,7 @@ class CoupledStepper:
         state: PrimitiveEquationState,
         surface: SurfaceState,
         dt_implicit: float,
+        day_of_year: jnp.ndarray,
     ) -> tuple[PrimitiveEquationState, SurfaceState]:
         """Post-step: update surface + implicit atmospheric decay."""
         planet = self._planet
@@ -490,7 +491,7 @@ class CoupledStepper:
             state,
             ps_grid,
             effective_albedo=effective_albedo,
-            day_of_year=forcing.day_of_year,
+            day_of_year=day_of_year,
             cloud=cloud,
         )
         lw_down = forcing.compute_lw_down_surface(
@@ -634,10 +635,16 @@ class CoupledStepper:
         self,
         state: PrimitiveEquationState,
         surface: SurfaceState,
+        day_of_year: jnp.ndarray,
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics]:
         """Initialize leapfrog integration with a forward Euler half-step."""
         previous, current, diags = self._atm_init_fn(state)
-        current, surface = self._coupled_post_step(current, surface, self._dt / 2.0)
+        current, surface = self._coupled_post_step(
+            current,
+            surface,
+            self._dt / 2.0,
+            day_of_year,
+        )
         return previous, current, surface, diags
 
     @functools.partial(jax.jit, static_argnums=0)
@@ -646,10 +653,16 @@ class CoupledStepper:
         previous: PrimitiveEquationState,
         current: PrimitiveEquationState,
         surface: SurfaceState,
+        day_of_year: jnp.ndarray,
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics]:
         """Advance one leapfrog timestep with coupled surface update."""
         filtered_current, future, diags = self._atm_step_fn(previous, current)
-        future, surface = self._coupled_post_step(future, surface, 2.0 * self._dt)
+        future, surface = self._coupled_post_step(
+            future,
+            surface,
+            2.0 * self._dt,
+            day_of_year,
+        )
         return filtered_current, future, surface, diags
 
 
@@ -673,11 +686,11 @@ def build_coupled_pe_stepper(
     alpha: float = 0.5,
 ) -> tuple[
     Callable[
-        [PrimitiveEquationState, SurfaceState],
+        [PrimitiveEquationState, SurfaceState, jnp.ndarray],
         tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics],
     ],
     Callable[
-        [PrimitiveEquationState, PrimitiveEquationState, SurfaceState],
+        [PrimitiveEquationState, PrimitiveEquationState, SurfaceState, jnp.ndarray],
         tuple[
             PrimitiveEquationState,
             PrimitiveEquationState,
