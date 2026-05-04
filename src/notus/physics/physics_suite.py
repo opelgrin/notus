@@ -1041,13 +1041,43 @@ class PhysicsSuite:
 
         return dt_grid, dq_grid, q_evap, precip_rate
 
+    def _implicit_surface_diags(
+        self,
+        dp: jnp.ndarray,
+        t_corrected: jnp.ndarray,
+        t_lowest_grid: jnp.ndarray,
+        q_corrected: jnp.ndarray | None,
+        q_lowest_grid: jnp.ndarray | None,
+        dt_implicit: float,
+    ) -> PhysicsDiagnostics:
+        """Compute surface flux diagnostics for the implicitly applied fluxes.
+
+        Returns ``PhysicsDiagnostics()`` (all None) when ``implicit_surface``
+        is False, so that explicit diagnostics are preserved by the merger.
+        """
+        if not self.config.implicit_surface:
+            return PhysicsDiagnostics()
+        planet = self.planet
+        mass = dp / planet.gravity
+        sensible = planet.specific_heat_cp * mass * (t_corrected - t_lowest_grid) / dt_implicit
+        evap: jnp.ndarray | None = None
+        latent: jnp.ndarray | None = None
+        if q_corrected is not None and q_lowest_grid is not None:
+            evap = mass * (q_corrected - q_lowest_grid) / dt_implicit
+            latent = planet.latent_heat_vaporization * evap
+        return PhysicsDiagnostics(
+            sensible_heat_flux=sensible,
+            evaporation=evap,
+            latent_heat_flux=latent,
+        )
+
     def apply_implicit(
         self,
         state: PrimitiveEquationState,
         dt_implicit: float,
         *,
         sst: jnp.ndarray | None = None,
-    ) -> PrimitiveEquationState:
+    ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
         """Apply implicit physics corrections after the IMEX step.
 
         Treats stiff boundary-layer terms with exact exponential decay
@@ -1069,8 +1099,11 @@ class PhysicsSuite:
 
         Returns
         -------
-        PrimitiveEquationState
-            State with implicit corrections applied.
+        tuple[PrimitiveEquationState, PhysicsDiagnostics]
+            State with implicit corrections applied, and surface flux
+            diagnostics (sensible heat, evaporation, latent heat).
+            Only populated when ``implicit_surface=True``; otherwise
+            all diagnostic fields are ``None``.
         """
         cfg = self.config
         planet = self.planet
@@ -1131,6 +1164,10 @@ class PhysicsSuite:
         new_temp = state.temperature.at[lowest].set(transform.grid_to_spectral(t_corrected))
 
         # --- Latent heat flux (exact exponential decay at lowest level) ---
+        # Pre-declare as None so _implicit_surface_diags can reference them
+        # without type-narrowing issues from the conditional assignment below.
+        q_lowest_grid: jnp.ndarray | None = None
+        q_corrected: jnp.ndarray | None = None
         new_humidity: jnp.ndarray | None = None
         if state.humidity is not None:
             q_lowest_grid = transform.spectral_to_grid(state.humidity[lowest])
@@ -1142,10 +1179,14 @@ class PhysicsSuite:
             q_corrected = q_sat_sfc + (q_lowest_grid - q_sat_sfc) * decay_sfc
             new_humidity = state.humidity.at[lowest].set(transform.grid_to_spectral(q_corrected))
 
-        return PrimitiveEquationState(
+        new_state = PrimitiveEquationState(
             vorticity=new_vort,
             divergence=new_div,
             temperature=new_temp,
             log_surface_pressure=state.log_surface_pressure,
             humidity=new_humidity if new_humidity is not None else state.humidity,
         )
+        implicit_diags = self._implicit_surface_diags(
+            dp, t_corrected, t_lowest_grid, q_corrected, q_lowest_grid, dt_implicit
+        )
+        return new_state, implicit_diags

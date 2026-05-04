@@ -472,7 +472,7 @@ class CoupledStepper:
         surface: SurfaceState,
         dt_implicit: float,
         day_of_year: jnp.ndarray,
-    ) -> tuple[PrimitiveEquationState, SurfaceState]:
+    ) -> tuple[PrimitiveEquationState, SurfaceState, PhysicsDiagnostics]:
         """Post-step: update surface + implicit atmospheric decay."""
         planet = self._planet
         forcing = self._forcing
@@ -649,6 +649,24 @@ class CoupledStepper:
                 planet.epsilon_moisture,
             )
 
+        # --- Surface flux diagnostics (actual implicit fluxes applied below) ---
+        decay_sfc = jnp.exp(-dt_implicit * k_sfc)
+        mass_lowest = self._forcing.dsigma_lowest * ps_grid / planet.gravity
+        sensible_diag = (
+            planet.specific_heat_cp * mass_lowest * (t_target - t_lowest_grid) * (1.0 - decay_sfc)
+            / dt_implicit
+        )
+        evap_diag: jnp.ndarray | None = None
+        latent_diag: jnp.ndarray | None = None
+        if state.humidity is not None:
+            evap_diag = mass_lowest * (q_target - q_lowest) * (1.0 - decay_sfc) / dt_implicit
+            latent_diag = planet.latent_heat_vaporization * evap_diag
+        surface_flux_diags = PhysicsDiagnostics(
+            sensible_heat_flux=sensible_diag,
+            evaporation=evap_diag,
+            latent_heat_flux=latent_diag,
+        )
+
         state = self._apply_implicit_decay(
             state,
             t_target,
@@ -658,7 +676,7 @@ class CoupledStepper:
             dt_implicit,
         )
 
-        return state, surface
+        return state, surface, surface_flux_diags
 
     # ------------------------------------------------------------------
     # Public init / step
@@ -673,11 +691,20 @@ class CoupledStepper:
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics]:
         """Initialize leapfrog integration with a forward Euler half-step."""
         previous, current, diags = self._atm_init_fn(state)
-        current, surface = self._coupled_post_step(
+        current, surface, surface_flux_diags = self._coupled_post_step(
             current,
             surface,
             self._dt / 2.0,
             day_of_year,
+        )
+        diags = PhysicsDiagnostics(
+            precipitation=diags.precipitation,
+            evaporation=surface_flux_diags.evaporation,
+            olr=diags.olr,
+            sw_down_surface=diags.sw_down_surface,
+            lw_down_surface=diags.lw_down_surface,
+            sensible_heat_flux=surface_flux_diags.sensible_heat_flux,
+            latent_heat_flux=surface_flux_diags.latent_heat_flux,
         )
         return previous, current, surface, diags
 
@@ -691,11 +718,20 @@ class CoupledStepper:
     ) -> tuple[PrimitiveEquationState, PrimitiveEquationState, SurfaceState, PhysicsDiagnostics]:
         """Advance one leapfrog timestep with coupled surface update."""
         filtered_current, future, diags = self._atm_step_fn(previous, current)
-        future, surface = self._coupled_post_step(
+        future, surface, surface_flux_diags = self._coupled_post_step(
             future,
             surface,
             2.0 * self._dt,
             day_of_year,
+        )
+        diags = PhysicsDiagnostics(
+            precipitation=diags.precipitation,
+            evaporation=surface_flux_diags.evaporation,
+            olr=diags.olr,
+            sw_down_surface=diags.sw_down_surface,
+            lw_down_surface=diags.lw_down_surface,
+            sensible_heat_flux=surface_flux_diags.sensible_heat_flux,
+            latent_heat_flux=surface_flux_diags.latent_heat_flux,
         )
         return filtered_current, future, surface, diags
 

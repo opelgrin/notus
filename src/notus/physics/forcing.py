@@ -137,7 +137,7 @@ class ImplicitForcing(Forcing, Protocol):
         self,
         state: PrimitiveEquationState,
         dt_implicit: float,
-    ) -> PrimitiveEquationState:
+    ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
         """Apply implicit physics corrections after the IMEX step.
 
         Parameters
@@ -149,8 +149,10 @@ class ImplicitForcing(Forcing, Protocol):
 
         Returns
         -------
-        PrimitiveEquationState
-            Corrected state with implicit boundary-layer treatment.
+        tuple[PrimitiveEquationState, PhysicsDiagnostics]
+            Corrected state with implicit boundary-layer treatment, and
+            surface flux diagnostics for the fluxes applied implicitly.
+            Diagnostic fields other than surface fluxes are ``None``.
         """
         ...
 

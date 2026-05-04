@@ -185,6 +185,33 @@ def _clip_humidity(
     return state.replace(humidity=q_spec)
 
 
+def _merge_surface_flux_diags(
+    explicit: PhysicsDiagnostics,
+    surface_flux: PhysicsDiagnostics,
+) -> PhysicsDiagnostics:
+    """Replace surface flux fields in explicit diags with implicit values.
+
+    Radiation fields and precipitation come from the explicit step; sensible
+    heat, evaporation, and latent heat are replaced by the implicit values
+    when available (non-None).
+    """
+    return PhysicsDiagnostics(
+        precipitation=explicit.precipitation,
+        evaporation=surface_flux.evaporation
+        if surface_flux.evaporation is not None
+        else explicit.evaporation,
+        olr=explicit.olr,
+        sw_down_surface=explicit.sw_down_surface,
+        lw_down_surface=explicit.lw_down_surface,
+        sensible_heat_flux=surface_flux.sensible_heat_flux
+        if surface_flux.sensible_heat_flux is not None
+        else explicit.sensible_heat_flux,
+        latent_heat_flux=surface_flux.latent_heat_flux
+        if surface_flux.latent_heat_flux is not None
+        else explicit.latent_heat_flux,
+    )
+
+
 def _compose_dynamics_physics(
     dynamics_fn: Callable[[PrimitiveEquationState], PrimitiveEquationState],
     forcing: Forcing | None,
@@ -220,7 +247,10 @@ def _detect_forcing_capabilities(
     forcing: Forcing | None,
     t_ref: np.ndarray,
 ) -> tuple[
-    Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None,
+    Callable[
+        [PrimitiveEquationState, float], tuple[PrimitiveEquationState, PhysicsDiagnostics]
+    ]
+    | None,
     np.ndarray | None,
 ]:
     """Detect implicit physics and reference humidity from forcing.
@@ -229,9 +259,12 @@ def _detect_forcing_capabilities(
     :class:`~notus.physics.forcing.MoistForcing` protocols to check
     for optional capabilities on the forcing object.
     """
-    implicit_physics: Callable[[PrimitiveEquationState, float], PrimitiveEquationState] | None = (
-        None
-    )
+    implicit_physics: (
+        Callable[
+            [PrimitiveEquationState, float], tuple[PrimitiveEquationState, PhysicsDiagnostics]
+        ]
+        | None
+    ) = None
     if isinstance(forcing, ImplicitForcing):
         implicit_physics = forcing.apply_implicit
 
@@ -400,12 +433,12 @@ def build_pe_stepper(
     def _post_step(
         state: PrimitiveEquationState,
         dt_implicit: float,
-    ) -> PrimitiveEquationState:
+    ) -> tuple[PrimitiveEquationState, PhysicsDiagnostics]:
         state = _apply_filter(state)
         state = _clip_humidity(state, transform)
         if implicit_physics is not None:
-            state = implicit_physics(state, dt_implicit)
-        return state
+            return implicit_physics(state, dt_implicit)
+        return state, PhysicsDiagnostics()
 
     # Build init_fn (inlines euler_init to capture diagnostics)
     # Uses dt/2 for the forward Euler bootstrap step to avoid overshoot
@@ -419,7 +452,8 @@ def build_pe_stepper(
         tendency, diags = combined_fn(state)
         intermediate = jax.tree.map(lambda x, f: x + dt_init * f, state, tendency)
         current = inverse_fn(intermediate, dt_init)
-        current = _post_step(current, dt_init)
+        current, surface_flux_diags = _post_step(current, dt_init)
+        diags = _merge_surface_flux_diags(diags, surface_flux_diags)
         return state, current, diags
 
     # Build step_fn (inlines imex_leapfrog_step to capture diagnostics)
@@ -446,7 +480,8 @@ def build_pe_stepper(
             current,
             future,
         )
-        future = _post_step(future, 2.0 * dt)
+        future, surface_flux_diags = _post_step(future, 2.0 * dt)
+        diags = _merge_surface_flux_diags(diags, surface_flux_diags)
         return filtered_current, future, diags
 
     return init_fn, step_fn
