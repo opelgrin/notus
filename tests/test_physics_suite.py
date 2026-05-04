@@ -232,7 +232,7 @@ class TestLongwaveHeating:
             **LW_DEFAULTS,
         )
 
-        q_lw, _lw_down = longwave_heating(
+        q_lw, _lw_down, _olr = longwave_heating(
             temperature,
             surface_temperature,
             tau_half,
@@ -261,7 +261,7 @@ class TestLongwaveHeating:
             **LW_DEFAULTS,
         )
 
-        q_lw, _lw_down = longwave_heating(
+        q_lw, _lw_down, _olr = longwave_heating(
             temperature,
             surface_temperature,
             tau_half,
@@ -287,7 +287,7 @@ class TestLongwaveHeating:
             **LW_DEFAULTS,
         )
 
-        q_lw, _lw_down = longwave_heating(
+        q_lw, _lw_down, _olr = longwave_heating(
             temperature,
             surface_temperature,
             tau_half,
@@ -552,7 +552,7 @@ class TestByrneOpticalDepth:
             surface_pressure,
             1.0e5,
         )
-        q_lw, _lw_down = longwave_heating(
+        q_lw, _lw_down, _olr = longwave_heating(
             temperature,
             surface_temperature,
             tau_half,

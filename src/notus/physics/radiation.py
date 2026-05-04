@@ -207,7 +207,7 @@ def longwave_heating(
     surface_pressure: jnp.ndarray,
     gravity: float,
     specific_heat_cp: float,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Compute longwave radiative heating rate using two-stream model.
 
     Upward and downward fluxes are computed at half-level interfaces via
@@ -236,10 +236,11 @@ def longwave_heating(
 
     Returns
     -------
-    tuple[jnp.ndarray, jnp.ndarray]
-        ``(heating_rate, lw_down_sfc)`` — longwave heating rate [K/s]
-        shape ``(n_levels, n_lat, n_lon)`` and downward LW flux at the
-        surface [W/m²] shape ``(n_lat, n_lon)``.
+    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]
+        ``(heating_rate, lw_down_sfc, olr)`` — longwave heating rate [K/s]
+        shape ``(n_levels, n_lat, n_lon)``, downward LW flux at the surface
+        [W/m²] shape ``(n_lat, n_lon)``, and outgoing longwave radiation at
+        TOA [W/m²] shape ``(n_lat, n_lon)``.
     """
     n_lat, n_lon = surface_pressure.shape
 
@@ -316,8 +317,10 @@ def longwave_heating(
 
     # Downward LW flux at the surface (last half-level interface)
     lw_down_sfc = f_down[-1]  # (n_lat, n_lon)
+    # Upward LW flux at TOA (first half-level interface)
+    olr = f_up[0]  # (n_lat, n_lon)
 
-    return heating_rate, lw_down_sfc
+    return heating_rate, lw_down_sfc, olr
 
 
 def lw_down_surface(

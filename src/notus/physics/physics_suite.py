@@ -505,15 +505,15 @@ class PhysicsSuite:
         *,
         day_of_year: jnp.ndarray | None = None,
         sst: jnp.ndarray | None = None,
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """Compute total radiative heating rate and surface fluxes.
 
         Returns
         -------
-        tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray | None]
+        tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]
             ``(heating_rate, lw_down_surface, sw_down_surface, olr)``
-            where heating is [K/s] and fluxes are [W/m²].  OLR is
-            ``None`` for Frierson/Byrne schemes (not computed).
+            where heating is [K/s] and fluxes are [W/m²].  OLR is the
+            upward LW flux at TOA from the two-stream solution.
         """
         cfg = self.config
         rad = cfg.radiation
@@ -571,7 +571,7 @@ class PhysicsSuite:
                 alpha=fri.alpha,
             )
 
-        q_lw, lw_down_sfc = longwave_heating(
+        q_lw, lw_down_sfc, olr = longwave_heating(
             t_grid,
             sst_val,
             tau_half,
@@ -622,7 +622,7 @@ class PhysicsSuite:
             )
             q_lw += q_sw
 
-        return q_lw, lw_down_sfc, sw_down_sfc, None
+        return q_lw, lw_down_sfc, sw_down_sfc, olr
 
     def _compute_speedy_radiation(
         self,
